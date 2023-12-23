@@ -30,8 +30,12 @@ int main(int argc, const char ** argv) {
 
         struct ggml_cgraph * gf = ggml_new_graph_custom(ctx0, GGML_DEFAULT_GRAPH_SIZE, true);
         ggml_build_forward_expand(gf, f);
+        printf("forward built \n");
         struct ggml_cgraph * gb = ggml_graph_dup(ctx0, gf);
         ggml_build_backward_expand(ctx0, gf, gb, false);
+
+        printf(" forward order is %d \n", gf->order);
+        printf("backward order is %d \n", gb->order);
 
         ggml_set_f32(x, 2.0f);
         ggml_set_f32(a, 3.0f);
@@ -59,11 +63,24 @@ int main(int argc, const char ** argv) {
 
         GGML_ASSERT(ggml_get_f32_1d(f, 0)       == 27.0f);
         GGML_ASSERT(ggml_get_f32_1d(x->grad, 0) == 18.0f);
+        for(int i=0; i < gf->n_nodes; i++){
+            struct ggml_tensor * node = gf->nodes[i];
+            printf(" forward %d, %s, %p \n ", i, node->name, (void *)node);
+        }
+        for(int i=0; i < gb->n_nodes; i++){
+            struct ggml_tensor * node = gb->nodes[i];
+            printf("backward %d, %s, %p, %p \n ", i, node->name, (void *)node, (void*)(node->grad));
+        }
+        for(int i=0; i < gb->n_leafs; i++){
+            struct ggml_tensor * node = gb->leafs[i];
+            printf("backward %d, %s, %p \n ", i, node->name, (void *)node);
+        }
 
         ggml_graph_dump_dot(gf, NULL, "test1-1-forward.dot");
         ggml_graph_dump_dot(gb, gf,   "test1-1-backward.dot");
     }
 
+    /*
     ///////////////////////////////////////////////////////////////
 
     {
@@ -451,7 +468,7 @@ int main(int argc, const char ** argv) {
         ggml_graph_dump_dot(gf, NULL, "test1-8-forward.dot");
         ggml_graph_dump_dot(gb, gf,   "test1-8-backward.dot");
     }
-
+    */
     ggml_free(ctx0);
 
     return 0;

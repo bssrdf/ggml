@@ -3190,6 +3190,8 @@ static struct ggml_tensor * ggml_add_impl(
 
     result->op   = GGML_OP_ADD;
     result->grad = is_node ? ggml_dup_tensor(ctx, result) : NULL;
+    printf(" %s: add a new tensor %p and its grad %p with a(%p) and b(%p) \n",
+          __func__, (void *)result, (void *)(result->grad), (void *)a, (void *)b);
     result->src[0] = a;
     result->src[1] = b;
 
@@ -14642,6 +14644,7 @@ void ggml_build_backward_gradient_checkpointing(
 
 static struct ggml_tensor * ggml_add_or_set(struct ggml_context * ctx, struct ggml_tensor * a, struct ggml_tensor * b, struct ggml_hash_set zero_table) {
     if (ggml_hash_contains(zero_table, a)) {
+        printf("%s: tensor %p already in zerotable, return %p \n ", __func__, (void *)a, (void *)b);
         return b;
     } else {
         return ggml_add_impl(ctx, a, b, false);
@@ -14745,17 +14748,23 @@ static void ggml_compute_backward(struct ggml_context * ctx, struct ggml_tensor 
         case GGML_OP_MUL:
             {
                 if (src0->grad) {
+                    struct ggml_tensor *c = ggml_mul(ctx, src1, tensor->grad);
+                    printf("%s: src0 new tensor c = %p \n ", __func__, (void *)c);
                     src0->grad =
                         ggml_add_or_set(ctx,
                                 src0->grad,
-                                ggml_mul(ctx, src1, tensor->grad),
+                                c,
+                                // ggml_mul(ctx, src1, tensor->grad),
                                 zero_table);
                 }
                 if (src1->grad) {
+                    struct ggml_tensor *c = ggml_mul(ctx, src0, tensor->grad);
+                    printf("%s: src1 new tensor c = %p \n ", __func__, (void *)c);
                     src1->grad =
                         ggml_add_or_set(ctx,
                                 src1->grad,
-                                ggml_mul(ctx, src0, tensor->grad),
+                                c,
+                                // ggml_mul(ctx, src0, tensor->grad),
                                 zero_table);
                 }
             } break;
@@ -15512,6 +15521,7 @@ static void ggml_visit_parents(struct ggml_cgraph * cgraph, struct ggml_tensor *
             (cgraph->order == GGML_CGRAPH_EVAL_ORDER_RIGHT_TO_LEFT) ? (GGML_MAX_SRC-1-i) :
             /* unknown order, just fall back to using i*/ i;
         if (node->src[k]) {
+            printf("about to follow %p -> %p \n ",  (void *)node,  (void *)(node->src[k]));
             ggml_visit_parents(cgraph, node->src[k]);
         }
     }
@@ -15538,6 +15548,7 @@ static void ggml_visit_parents(struct ggml_cgraph * cgraph, struct ggml_tensor *
             cgraph->grads[cgraph->n_nodes] = node->grad;
         }
         cgraph->n_nodes++;
+        printf("added node %s at %d \n", node->name, cgraph->n_nodes-1);
     }
 }
 
@@ -15594,6 +15605,7 @@ void ggml_build_backward_expand(struct ggml_context * ctx, struct ggml_cgraph * 
         // inplace operations to add gradients are not created by ggml_compute_backward
         // use allocator to automatically make inplace operations
         if (node->grad) {
+            printf("compute back from %p to s0: %p s1: %p\n", (void *)node, (void *)(node->src[0]), (void *)(node->src[1]));
             ggml_compute_backward(ctx, node, zero_table);
         }
     }
@@ -15603,6 +15615,7 @@ void ggml_build_backward_expand(struct ggml_context * ctx, struct ggml_cgraph * 
 
         if (node->is_param) {
             GGML_PRINT_DEBUG("%s: found root node %p\n", __func__, (void *) node);
+            printf("%s: found root node %s at %p\n", __func__, node->name, (void *) node);
             ggml_build_forward_expand(gb, node->grad);
         }
     }
