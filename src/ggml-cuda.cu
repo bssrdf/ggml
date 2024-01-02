@@ -9,6 +9,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <vector>
+#include <array>
 
 
 #if defined(GGML_USE_HIPBLAS)
@@ -99,6 +100,7 @@
 #else
 #include <cuda_runtime.h>
 #include <cuda.h>
+#include <cufft.h>
 #include <cublas_v2.h>
 #include <cuda_fp16.h>
 
@@ -115,6 +117,42 @@
 #include "ggml-cuda.h"
 #include "ggml.h"
 #include "ggml-backend-impl.h"
+
+// CUDA API error checking
+#ifndef CUDA_RT_CALL
+#define CUDA_RT_CALL( call )                                                                                           \
+    {                                                                                                                  \
+        auto status = static_cast<cudaError_t>( call );                                                                \
+        if ( status != cudaSuccess )                                                                                   \
+            fprintf( stderr,                                                                                           \
+                     "ERROR: CUDA RT call \"%s\" in line %d of file %s failed "                                        \
+                     "with "                                                                                           \
+                     "%s (%d).\n",                                                                                     \
+                     #call,                                                                                            \
+                     __LINE__,                                                                                         \
+                     __FILE__,                                                                                         \
+                     cudaGetErrorString( status ),                                                                     \
+                     status );                                                                                         \
+    }
+#endif  // CUDA_RT_CALL
+
+// cufft API error chekcing
+#ifndef CUFFT_CALL
+#define CUFFT_CALL( call )                                                                                             \
+    {                                                                                                                  \
+        auto status = static_cast<cufftResult>( call );                                                                \
+        if ( status != CUFFT_SUCCESS )                                                                                 \
+            fprintf( stderr,                                                                                           \
+                     "ERROR: CUFFT call \"%s\" in line %d of file %s failed "                                          \
+                     "with "                                                                                           \
+                     "code (%d).\n",                                                                                   \
+                     #call,                                                                                            \
+                     __LINE__,                                                                                         \
+                     __FILE__,                                                                                         \
+                     status );                                                                                         \
+    }
+#endif  // CUFFT_CALL
+
 
 #define MIN_CC_DP4A   610 // minimum compute capability for __dp4a, an intrinsic for byte-wise dot products
 #define CC_VOLTA      700
@@ -5292,6 +5330,24 @@ static __global__ void clamp_f32(const float * x, float * dst, const float min, 
     dst[i] = x[i] < min ? min : (x[i] > max ? max : x[i]);
 }
 
+static __global__ void form_complex_f32(const float * x,  cufftComplex* dst, const int k) {
+    const int i = blockDim.x*blockIdx.x + threadIdx.x;
+
+    if (i >= k) {
+        return;
+    }
+    dst[i] = make_cuComplex(x[i], 0.f);
+}
+
+static __global__ void get_complex_real_f32(const cufftComplex* x,  float* dst, const int k) {
+    const int i = blockDim.x*blockIdx.x + threadIdx.x;
+
+    if (i >= k) {
+        return;
+    }
+    dst[i] = x[i].x;
+}
+
 static  __global__ void im2col_f32_f16(
         const float * x, half * dst,
         int offset_delta, int IW, int IH, int OW, int KW, int KH, int pelements, int CHW,
@@ -7800,6 +7856,96 @@ static void ggml_cuda_op_im2col(
     (void) src0_dd;
 }
 
+
+#define CUDA_FFT_FILTER_BLOCK_SIZE 256
+
+static __global__ void scale_fft_coeffs_f32(cufftComplex *dst,  int r_thresh, float scale,
+                  const int width, const int height) {
+    const int k = gridDim.z;
+    const int row = blockDim.y*blockIdx.y + threadIdx.y;
+    const int col = blockDim.x*blockIdx.x + threadIdx.x;
+    if (col < width && row < height) {
+        // int offset = j * width + i;
+        if (col < r_thresh && row < r_thresh ||
+            height - row <= r_thresh && col < r_thresh ||
+            height - row <= r_thresh && width - col <= r_thresh ||
+            row < height && width - col <= r_thresh) {
+            dst[k*width*height+row*width+col].x *= scale;
+            dst[k*width*height+row*width+col].y *= scale;
+        }
+    }
+}
+
+using dim_t = std::array<int, 2>;
+
+static void ggml_cuda_op_fft_filter(
+    const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
+    const float * src0_dd, const float * src1_dd, float * dst_dd, cudaStream_t main_stream) {
+
+    GGML_ASSERT(src0->type == GGML_TYPE_F16 ||  src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(src1->type == GGML_TYPE_F32);
+    GGML_ASSERT( dst->type == GGML_TYPE_F32);
+
+    GGML_ASSERT(src0_dd  != nullptr);
+    GGML_ASSERT(dst_dd   != nullptr);
+
+    const int64_t ne00 = src0->ne[0];
+    const int64_t ne01 = src0->ne[1];
+    const int64_t ne02 = src0->ne[2];
+
+    dim_t fft_size = {(int32_t)ne00, (int32_t)ne01};
+    int batch_size = ne02;
+    const int64_t k = batch_size * ne01 * ne00;
+
+    GGML_ASSERT(ggml_is_scalar(src1));
+    float scale = src1_dd[0];
+
+    const int r_thresh = ((int32_t *) dst->op_params)[0];
+
+    cufftHandle plan;
+
+    CUFFT_CALL(cufftCreate(&plan));
+
+    cuda_pool_alloc<float> src0_dd_as_f32;
+    cuda_pool_alloc<cufftComplex> fft_trans;
+
+    CUFFT_CALL(cufftPlanMany(&plan, fft_size.size(), fft_size.data(),
+                             nullptr, 1, 0, // *inembed, istride, idist
+                             nullptr, 1, 0, // *onembed, ostride, odist
+                             CUFFT_C2C, batch_size));
+
+    if (src0->type != GGML_TYPE_F32) {
+        const to_fp32_cuda_t to_fp32_cuda = ggml_get_to_fp32_cuda(src0->type);
+        GGML_ASSERT(to_fp32_cuda != nullptr);
+        src0_dd_as_f32.alloc(ne01*ne00);
+        to_fp32_cuda(src0_dd, src0_dd_as_f32.get(), ne01*ne00, main_stream);
+    }
+
+    fft_trans.alloc(batch_size*ne00*ne01);
+
+    const float * src0_dd_i = src0->type == GGML_TYPE_F32 ? (const float *) src0_dd : src0_dd_as_f32.get();
+
+    const int num_blocks = (k + CUDA_FFT_FILTER_BLOCK_SIZE - 1) / CUDA_FFT_FILTER_BLOCK_SIZE;
+    form_complex_f32<<<num_blocks, CUDA_FFT_FILTER_BLOCK_SIZE, 0, main_stream>>>(src0_dd_i, fft_trans.get(), k);
+
+    CUFFT_CALL(cufftSetStream(plan, main_stream));
+
+    CUFFT_CALL(cufftExecC2C(plan, fft_trans.get(), fft_trans.get(), CUFFT_FORWARD));
+
+    dim3 gridDim(1, 1, batch_size);
+    dim3 blockDim(16, 16, 1);
+    scale_fft_coeffs_f32<<<gridDim, blockDim, 0, main_stream>>>(fft_trans.get(), r_thresh, scale,
+                  ne00, ne01);
+
+    CUFFT_CALL(cufftExecC2C(plan, fft_trans.get(), fft_trans.get(), CUFFT_INVERSE));
+
+    get_complex_real_f32<<<num_blocks, CUDA_FFT_FILTER_BLOCK_SIZE, 0, main_stream>>>(fft_trans.get(), dst_dd, k);
+
+    CUFFT_CALL(cufftDestroy(plan));
+    // (void) src0;
+    // (void) src0_dd;
+}
+
 static void ggml_cuda_op_sum_rows(
     const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
     const float * src0_dd, const float * src1_dd, float * dst_dd, cudaStream_t main_stream) {
@@ -9129,6 +9275,10 @@ static void ggml_cuda_im2col(const ggml_tensor * src0, const ggml_tensor * src1,
     ggml_cuda_op_flatten(src0, src1, dst, ggml_cuda_op_im2col);
 }
 
+static void ggml_cuda_fft_filter(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    ggml_cuda_op_flatten(src0, src1, dst, ggml_cuda_op_fft_filter);
+}
+
 static void ggml_cuda_sum_rows(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     GGML_ASSERT(ggml_is_contiguous(src0));
     ggml_cuda_op_flatten(src0, src1, dst, ggml_cuda_op_sum_rows);
@@ -9490,6 +9640,9 @@ bool ggml_cuda_compute_forward(struct ggml_compute_params * params, struct ggml_
             break;
         case GGML_OP_NORM:
             func = ggml_cuda_norm;
+            break;
+        case GGML_OP_FFT_FILTER:
+            func = ggml_cuda_fft_filter;
             break;
         case GGML_OP_GROUP_NORM:
             func = ggml_cuda_group_norm;
@@ -10028,6 +10181,18 @@ static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, const ggml_ten
                     return true;
                 }
                 if (src0_type == GGML_TYPE_F16 && src1_type == GGML_TYPE_F16) {
+                    return true;
+                }
+                return false;
+            } break;
+        case GGML_OP_FFT_FILTER:
+           {
+                ggml_type src0_type = op->src[0]->type;
+                ggml_type src1_type = op->src[1]->type;
+                if (src0_type == GGML_TYPE_F32 && src1_type == GGML_TYPE_F32) {
+                    return true;
+                }
+                if (src0_type == GGML_TYPE_F16 && src1_type == GGML_TYPE_F32) {
                     return true;
                 }
                 return false;
