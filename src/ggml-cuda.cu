@@ -5339,13 +5339,13 @@ static __global__ void form_complex_f32(const float * x,  cufftComplex* dst, con
     dst[i] = make_cuComplex(x[i], 0.f);
 }
 
-static __global__ void get_complex_real_f32(const cufftComplex* x,  float* dst, const int k) {
+static __global__ void get_complex_real_f32(const cufftComplex* x,  float* dst, float scale, const int k) {
     const int i = blockDim.x*blockIdx.x + threadIdx.x;
 
     if (i >= k) {
         return;
     }
-    dst[i] = x[i].x;
+    dst[i] = x[i].x * scale;
 }
 
 static  __global__ void im2col_f32_f16(
@@ -7859,21 +7859,32 @@ static void ggml_cuda_op_im2col(
 
 #define CUDA_FFT_FILTER_BLOCK_SIZE 256
 
-static __global__ void scale_fft_coeffs_f32(cufftComplex *dst,  int r_thresh, float scale,
+static __global__ void scale_fft_coeffs_f32(cufftComplex *dst,  const int r_thresh, const float* scale,
                   const int width, const int height) {
-    const int k = gridDim.z;
+    const float s = scale[0];
+    const int k =  blockIdx.z;
     const int row = blockDim.y*blockIdx.y + threadIdx.y;
     const int col = blockDim.x*blockIdx.x + threadIdx.x;
-    if (col < width && row < height) {
-        // int offset = j * width + i;
-        if (col < r_thresh && row < r_thresh ||
-            height - row <= r_thresh && col < r_thresh ||
-            height - row <= r_thresh && width - col <= r_thresh ||
-            row < height && width - col <= r_thresh) {
-            dst[k*width*height+row*width+col].x *= scale;
-            dst[k*width*height+row*width+col].y *= scale;
-        }
+    if (col < width && row < height &&
+        (col < r_thresh && row < r_thresh ||
+        height - row <= r_thresh && col < r_thresh ||
+        height - row <= r_thresh && width - col <= r_thresh ||
+        row < height && width - col <= r_thresh) ) {
+        dst[k*width*height+row*width+col].x *= s;
+        dst[k*width*height+row*width+col].y *= s;
     }
+    // }
+}
+
+static __global__ void scale_ifft_f32(cufftComplex *dst, float scale,
+                  const int k) {
+
+    const int i = blockDim.x*blockIdx.x + threadIdx.x;
+    if (i >= k) {
+        return;
+    }
+    dst[i].x *= scale;
+    dst[i].y *= scale;
 }
 
 using dim_t = std::array<int, 2>;
@@ -7893,14 +7904,24 @@ static void ggml_cuda_op_fft_filter(
     const int64_t ne01 = src0->ne[1];
     const int64_t ne02 = src0->ne[2];
 
+    // const int64_t ne10 = src1->ne[0];
+    // const int64_t ne11 = src1->ne[1];
+    // const int64_t ne12 = src1->ne[2];
+
     dim_t fft_size = {(int32_t)ne00, (int32_t)ne01};
     int batch_size = ne02;
     const int64_t k = batch_size * ne01 * ne00;
 
+    // fprintf(stderr, "%s: src0  %d, %d, %d \n", __func__, ne00, ne01, ne02);
+    // fprintf(stderr, "%s: src1  %d, %d, %d \n", __func__, ne10, ne11, ne12);
     GGML_ASSERT(ggml_is_scalar(src1));
-    float scale = src1_dd[0];
+    // float scale = src1_dd[0];
+    // float scale = ggml_get_f32_1d(src1, 0);
+
+    // fprintf(stderr, "%s: %d, %d, %d, %f\n", __func__, ne00, ne01, ne02, scale);
 
     const int r_thresh = ((int32_t *) dst->op_params)[0];
+    // fprintf(stderr, "%s: %d, %d, %d, %d\n", __func__, ne00, ne01, ne02, r_thresh);
 
     cufftHandle plan;
 
@@ -7932,14 +7953,16 @@ static void ggml_cuda_op_fft_filter(
 
     CUFFT_CALL(cufftExecC2C(plan, fft_trans.get(), fft_trans.get(), CUFFT_FORWARD));
 
-    dim3 gridDim(1, 1, batch_size);
+    dim3 gridDim(ceil(ne00/16.f), ceil(ne01/16.f), batch_size);
     dim3 blockDim(16, 16, 1);
-    scale_fft_coeffs_f32<<<gridDim, blockDim, 0, main_stream>>>(fft_trans.get(), r_thresh, scale,
+    scale_fft_coeffs_f32<<<gridDim, blockDim, 0, main_stream>>>(fft_trans.get(), r_thresh, src1_dd,
                   ne00, ne01);
 
     CUFFT_CALL(cufftExecC2C(plan, fft_trans.get(), fft_trans.get(), CUFFT_INVERSE));
 
-    get_complex_real_f32<<<num_blocks, CUDA_FFT_FILTER_BLOCK_SIZE, 0, main_stream>>>(fft_trans.get(), dst_dd, k);
+    // scale_ifft_f32<<<num_blocks, CUDA_FFT_FILTER_BLOCK_SIZE, 0, main_stream>>>(fft_trans.get(), 1./(ne01 * ne00), k);
+
+    get_complex_real_f32<<<num_blocks, CUDA_FFT_FILTER_BLOCK_SIZE, 0, main_stream>>>(fft_trans.get(), dst_dd, 1./(ne01 * ne00), k);
 
     CUFFT_CALL(cufftDestroy(plan));
     // (void) src0;
@@ -10086,6 +10109,7 @@ static void ggml_backend_cuda_graph_compute(ggml_backend_t backend, ggml_cgraph 
         if (!ok) {
             fprintf(stderr, "%s: error: op not supported %s (%s)\n", __func__, node->name, ggml_op_name(node->op));
         }
+
         GGML_ASSERT(ok);
 
 #if 0

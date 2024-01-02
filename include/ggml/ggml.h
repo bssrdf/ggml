@@ -459,9 +459,10 @@ extern "C" {
         GGML_OP_CROSS_ENTROPY_LOSS,
         GGML_OP_CROSS_ENTROPY_LOSS_BACK,
 
+        GGML_OP_FFT_FILTER,
+
         GGML_OP_COUNT,
 
-        GGML_OP_FFT_FILTER,
     };
 
     enum ggml_unary_op {
@@ -1511,6 +1512,14 @@ extern "C" {
             int                   d0,
             int                   d1);
 
+    // kernel size is a->ne[0] x a->ne[1]
+    // stride is equal to kernel size
+    // padding is zero
+    // example:
+    GGML_API struct ggml_tensor * ggml_fft_filter(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b);
 
     // kernel size is a->ne[0] x a->ne[1]
     // stride is equal to kernel size
