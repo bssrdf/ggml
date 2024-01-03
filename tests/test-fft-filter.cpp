@@ -168,8 +168,11 @@ struct ggml_cgraph * build_graph(const test_model& model, struct ggml_allocr * a
     struct ggml_cgraph  * gf = ggml_new_graph(ctx0);
 
     // split conv2d in fundamental methods for test unit
-    struct ggml_tensor* fft2d = ggml_fft_filter(ctx0, model.a, model.b);
+    // struct ggml_tensor* fft2d = ggml_fft_filter(ctx0, model.a, model.b);
+    struct ggml_tensor* fft2d = ggml_fft_filter(ctx0, model.a, nullptr);
     fft2d->op_params[0] = 1;
+    float scale = 0.6;
+    memcpy(fft2d->op_params+1,  &scale, sizeof(float));
     ggml_set_name(fft2d, "fft2d_res");
     ggml_build_forward_expand(gf, fft2d);
     

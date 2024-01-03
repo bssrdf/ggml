@@ -6339,7 +6339,7 @@ struct ggml_tensor * ggml_fft_filter(
         struct ggml_tensor           * b) {
     bool is_node = false;
 
-    if (a->grad || b->grad) {
+    if (a->grad) {
         is_node = true;
     }
 

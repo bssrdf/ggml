@@ -7859,9 +7859,9 @@ static void ggml_cuda_op_im2col(
 
 #define CUDA_FFT_FILTER_BLOCK_SIZE 256
 
-static __global__ void scale_fft_coeffs_f32(cufftComplex *dst,  const int r_thresh, const float* scale,
+static __global__ void scale_fft_coeffs_f32(cufftComplex *dst,  const int r_thresh, const float scale,
                   const int width, const int height) {
-    const float s = scale[0];
+
     const int k =  blockIdx.z;
     const int row = blockDim.y*blockIdx.y + threadIdx.y;
     const int col = blockDim.x*blockIdx.x + threadIdx.x;
@@ -7870,8 +7870,8 @@ static __global__ void scale_fft_coeffs_f32(cufftComplex *dst,  const int r_thre
         height - row <= r_thresh && col < r_thresh ||
         height - row <= r_thresh && width - col <= r_thresh ||
         row < height && width - col <= r_thresh) ) {
-        dst[k*width*height+row*width+col].x *= s;
-        dst[k*width*height+row*width+col].y *= s;
+        dst[k*width*height+row*width+col].x *= scale;
+        dst[k*width*height+row*width+col].y *= scale;
     }
     // }
 }
@@ -7894,7 +7894,7 @@ static void ggml_cuda_op_fft_filter(
     const float * src0_dd, const float * src1_dd, float * dst_dd, cudaStream_t main_stream) {
 
     GGML_ASSERT(src0->type == GGML_TYPE_F16 ||  src0->type == GGML_TYPE_F32);
-    GGML_ASSERT(src1->type == GGML_TYPE_F32);
+    // GGML_ASSERT(src1->type == GGML_TYPE_F32);
     GGML_ASSERT( dst->type == GGML_TYPE_F32);
 
     GGML_ASSERT(src0_dd  != nullptr);
@@ -7914,13 +7914,15 @@ static void ggml_cuda_op_fft_filter(
 
     // fprintf(stderr, "%s: src0  %d, %d, %d \n", __func__, ne00, ne01, ne02);
     // fprintf(stderr, "%s: src1  %d, %d, %d \n", __func__, ne10, ne11, ne12);
-    GGML_ASSERT(ggml_is_scalar(src1));
+    // GGML_ASSERT(ggml_is_scalar(src1));
     // float scale = src1_dd[0];
     // float scale = ggml_get_f32_1d(src1, 0);
 
     // fprintf(stderr, "%s: %d, %d, %d, %f\n", __func__, ne00, ne01, ne02, scale);
 
     const int r_thresh = ((int32_t *) dst->op_params)[0];
+    float scale;
+    memcpy(&scale, (int32_t *) dst->op_params+1, sizeof(float));
     // fprintf(stderr, "%s: %d, %d, %d, %d\n", __func__, ne00, ne01, ne02, r_thresh);
 
     cufftHandle plan;
@@ -7955,7 +7957,8 @@ static void ggml_cuda_op_fft_filter(
 
     dim3 gridDim(ceil(ne00/16.f), ceil(ne01/16.f), batch_size);
     dim3 blockDim(16, 16, 1);
-    scale_fft_coeffs_f32<<<gridDim, blockDim, 0, main_stream>>>(fft_trans.get(), r_thresh, src1_dd,
+    // scale_fft_coeffs_f32<<<gridDim, blockDim, 0, main_stream>>>(fft_trans.get(), r_thresh, src1_dd,
+    scale_fft_coeffs_f32<<<gridDim, blockDim, 0, main_stream>>>(fft_trans.get(), r_thresh, scale,
                   ne00, ne01);
 
     CUFFT_CALL(cufftExecC2C(plan, fft_trans.get(), fft_trans.get(), CUFFT_INVERSE));
@@ -7965,8 +7968,8 @@ static void ggml_cuda_op_fft_filter(
     get_complex_real_f32<<<num_blocks, CUDA_FFT_FILTER_BLOCK_SIZE, 0, main_stream>>>(fft_trans.get(), dst_dd, 1./(ne01 * ne00), k);
 
     CUFFT_CALL(cufftDestroy(plan));
-    // (void) src0;
-    // (void) src0_dd;
+    (void) src1;
+    (void) src1_dd;
 }
 
 static void ggml_cuda_op_sum_rows(
@@ -10212,13 +10215,13 @@ static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, const ggml_ten
         case GGML_OP_FFT_FILTER:
            {
                 ggml_type src0_type = op->src[0]->type;
-                ggml_type src1_type = op->src[1]->type;
-                if (src0_type == GGML_TYPE_F32 && src1_type == GGML_TYPE_F32) {
+                // ggml_type src1_type = op->src[1]->type;
+                if (src0_type == GGML_TYPE_F32 || src0_type == GGML_TYPE_F16) {
                     return true;
                 }
-                if (src0_type == GGML_TYPE_F16 && src1_type == GGML_TYPE_F32) {
-                    return true;
-                }
+                // if (src0_type == GGML_TYPE_F16 && src1_type == GGML_TYPE_F32) {
+                //     return true;
+                // }
                 return false;
             } break;
         case GGML_OP_NONE:
