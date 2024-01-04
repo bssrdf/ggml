@@ -25,6 +25,10 @@
 
 using dim_t = std::array<int, 2>;
 
+
+int nx = 8;
+int ny = 8;
+
 static void ggml_log_callba1ck_default(ggml_log_level level, const char * text, void * user_data) {
     (void) level;
     (void) user_data;
@@ -48,10 +52,9 @@ void load_model(test_model & model, bool use_gpu = false) {
     using scalar_type = float;
     using input_type = scalar_type;    
 
-    int nx = 32;
-    int ny = 32;
+   
     dim_t fft_size = {nx, ny};
-    unsigned int batch_size = 2;
+    unsigned int batch_size = 6;
 
 
 
@@ -59,6 +62,15 @@ void load_model(test_model & model, bool use_gpu = false) {
     float * adata = new float[nx*ny*batch_size];
     for (int i = 0; i < nx*ny*batch_size; i++) {
         adata[i] = (scalar_type)i+1.0f;
+    }
+
+    for(int i = 0; i < nx*ny*batch_size; i++){
+        printf(" %f, ", adata[i]);
+        if((i+1) % nx == 0)
+           printf("\n");
+        if((i+1) % (nx*ny) ==0)
+           printf("==============================\n");
+
     }
 
     std::vector<ggml_fp16_t> hadata(nx*ny*batch_size);
@@ -121,8 +133,8 @@ void load_model(test_model & model, bool use_gpu = false) {
     model.ctx = ggml_init(params);
 
     // create tensors
-    // model.a = ggml_new_tensor_3d(model.ctx, GGML_TYPE_F32,  nx, ny, batch_size);
-    model.a = ggml_new_tensor_3d(model.ctx, GGML_TYPE_F16,  nx, ny, batch_size);
+    model.a = ggml_new_tensor_3d(model.ctx, GGML_TYPE_F32,  nx, ny, batch_size);
+    // model.a = ggml_new_tensor_3d(model.ctx, GGML_TYPE_F16,  nx, ny, batch_size);
     model.b = ggml_new_tensor_1d(model.ctx, GGML_TYPE_F32, 1);
 
     // model.b->op_params[0] = 1;
@@ -137,8 +149,8 @@ void load_model(test_model & model, bool use_gpu = false) {
     if(ggml_backend_is_cpu(model.backend)) {
         memcpy(model.a->data, adata, ggml_nbytes(model.a));
     } else {
-        // ggml_backend_tensor_set(model.a, adata, 0, ggml_nbytes(model.a));
-        ggml_backend_tensor_set(model.a, hadata.data(), 0, ggml_nbytes(model.a));
+        ggml_backend_tensor_set(model.a, adata, 0, ggml_nbytes(model.a));
+        // ggml_backend_tensor_set(model.a, hadata.data(), 0, ggml_nbytes(model.a));
     }
 
     // alloc memory
@@ -174,9 +186,10 @@ struct ggml_cgraph * build_graph(const test_model& model, struct ggml_allocr * a
 
     // split conv2d in fundamental methods for test unit
     // struct ggml_tensor* fft2d = ggml_fft_filter(ctx0, model.a, model.b);
-    struct ggml_tensor* fft2d = ggml_fft_filter(ctx0, model.a, nullptr);
-    fft2d->op_params[0] = 1;
-    float scale = 0.6;
+    struct ggml_tensor* fft2d = ggml_freeu_backbone(ctx0, model.a, nullptr);
+    // struct ggml_tensor* fft2d = ggml_sum_rows(ctx0, model.a);
+    fft2d->op_params[0] = 2;
+    float scale = 1.4;
     memcpy(fft2d->op_params+1,  &scale, sizeof(float));
     ggml_set_name(fft2d, "fft2d_res");
     ggml_build_forward_expand(gf, fft2d);
@@ -256,7 +269,9 @@ int main(void)
     ggml_backend_tensor_get(fft2d_res, fft2d_data, 0, ggml_nbytes(fft2d_res));
 
     for(int i = 0; i < ggml_nelements(fft2d_res); i++){
-        printf(" %d, %f \n", i, fft2d_data[i]);
+        printf(" %f, ", fft2d_data[i]);
+        if((i+1) % nx == 0)
+           printf("\n");
     }
 
     

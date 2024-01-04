@@ -630,6 +630,14 @@ static __device__ __forceinline__ float warp_reduce_max(float x) {
     return x;
 }
 
+static __device__ __forceinline__ float warp_reduce_min(float x) {
+#pragma unroll
+    for (int mask = 16; mask > 0; mask >>= 1) {
+        x = fminf(x, __shfl_xor_sync(0xffffffff, x, mask, 32));
+    }
+    return x;
+}
+
 static __device__ __forceinline__ float op_repeat(const float a, const float b) {
     return b;
     GGML_UNUSED(a);
@@ -7972,6 +7980,237 @@ static void ggml_cuda_op_fft_filter(
     (void) src1_dd;
 }
 
+
+static __global__ void get_channel_sum_f32(float *dst, const float *x, const int width, const int height, const int nc) {
+
+    // const int k =  blockIdx.z;
+    const int row = blockDim.y*blockIdx.y + threadIdx.y;
+    const int col = blockDim.x*blockIdx.x + threadIdx.x;
+    for( int k = 0; k < nc; k++ ){
+        if (col < width && row < height) {
+            dst[row*width+col] += x[k*width*height+row*width+col];        
+        }
+    }
+    if (col < width && row < height) {
+        dst[row*width+col] *= 1.f/(float)nc;
+    }
+}
+
+
+static __global__ void scale_backbone_map_f32(float *dst, const float *x, const float *scale, const int nc, const int width, const int height) {
+
+    // const int k =   blockDim.z*blockIdx.z + threadIdx.z;
+    const int k =   blockIdx.z;
+    const int row = blockDim.y*blockIdx.y + threadIdx.y;
+    const int col = blockDim.x*blockIdx.x + threadIdx.x;
+    if (col < width && row < height ){
+        int j = k*width*height+row*width+col;  
+        if (k < nc) 
+           dst[j] = x[j] * scale[row*width+col];        
+        else
+           dst[j] = x[j];
+    }
+}
+
+static __global__ void zero_out_buffer_f32(float *dst, const int k) {
+
+    const int i = blockDim.x*blockIdx.x + threadIdx.x;
+    if (i >= k) {
+        return;
+    }
+    dst[i] = 0.f;
+}
+
+static __global__ void get_factor_map_f32(float *dst, const float* minmax, float b, const int k) {
+
+    const int i = blockDim.x*blockIdx.x + threadIdx.x;
+    if (i >= k) {
+        return;
+    }
+    dst[i] = (b-1.f)*(dst[i] - minmax[0])/(minmax[1]-minmax[0]+FLT_MIN) + 1.f;
+}
+
+static __global__ void find_min_max_f32(const float *x,  float *minmax, const int k) {
+
+    const int i = blockDim.x*blockIdx.x + threadIdx.x;
+    if (i >= k) {
+        return;
+    }
+    minmax[0] = min(minmax[0], x[i]);
+    minmax[1] = max(minmax[1], x[i]);
+}
+
+
+
+static __global__ void find_max_f32(const float * x, float * dst, const int ncols) {
+    const int row = blockIdx.y;
+    const int col = threadIdx.x;
+
+    float max_var = -FLT_MAX;
+    for (int i = col; i < ncols; i += blockDim.x) {
+         int j = row * ncols + i; 
+        if (max_var < x[j])
+           max_var = x[j];
+    }
+
+    max_var = warp_reduce_max(max_var);
+
+    if (col == 0) {
+        dst[row] = max_var;
+    }
+    
+}
+
+
+static __global__ void find_min_f32(const float * x, float * dst, const int ncols) {
+
+    const int row = blockIdx.y;
+    const int col = threadIdx.x;
+
+    float min_var = FLT_MAX;
+    for (int i = col; i < ncols; i += blockDim.x) {
+         int j = row * ncols + i; 
+        if (min_var > x[j])
+           min_var = x[j];
+    }
+
+    min_var = warp_reduce_min(min_var);
+
+    if (col == 0) {
+        dst[row] = min_var;
+    }
+    
+}
+
+static __global__ void reduce_min_f32(float * x, float * dst){
+    unsigned int i = threadIdx.x;
+    for (unsigned int stride = blockDim.x; stride >= 1; stride /= 2) {
+        if(threadIdx.x < stride){
+            x[i] = min(x[i], x[i+stride]);            
+        }
+        __syncthreads();
+    }
+    if(threadIdx.x == 0)
+       *dst = x[0];
+}
+
+static __global__ void reduce_max_f32(float * x, float * dst){
+    unsigned int i = threadIdx.x;
+    for (unsigned int stride = blockDim.x; stride >= 1; stride /= 2) {
+        if(threadIdx.x < stride){
+            x[i] = max(x[i], x[i+stride]);            
+        }
+        __syncthreads();
+    }
+    if(threadIdx.x == 0)
+       *dst = x[0];
+}
+
+static void ggml_cuda_op_freeu_backbone(
+    const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
+    const float * src0_dd, const float * src1_dd, float * dst_dd, cudaStream_t main_stream) {
+
+    GGML_ASSERT(src0->type == GGML_TYPE_F16 ||  src0->type == GGML_TYPE_F32);
+    // GGML_ASSERT(src1->type == GGML_TYPE_F32);
+    GGML_ASSERT( dst->type == GGML_TYPE_F32);
+
+    GGML_ASSERT(src0_dd  != nullptr);
+    GGML_ASSERT(dst_dd   != nullptr);
+
+    const int64_t ne00 = src0->ne[0];
+    const int64_t ne01 = src0->ne[1];
+    const int64_t ne02 = src0->ne[2];
+    const int64_t ne03 = src0->ne[3];
+
+    GGML_ASSERT( ne03 == 1);
+
+    int channels = ne02;
+    const int64_t k = channels * ne01 * ne00;
+
+    // fprintf(stderr, "%s: src0  %d, %d, %d \n", __func__, ne00, ne01, ne02);
+    // fprintf(stderr, "%s: src1  %d, %d, %d \n", __func__, ne10, ne11, ne12);
+    // GGML_ASSERT(ggml_is_scalar(src1));
+    // float scale = src1_dd[0];
+    // float scale = ggml_get_f32_1d(src1, 0);
+
+    // fprintf(stderr, "%s: %d, %d, %d, %f\n", __func__, ne00, ne01, ne02, scale);
+
+    const int div = ((int32_t *) dst->op_params)[0];
+    float b;
+    memcpy(&b, (int32_t *) dst->op_params+1, sizeof(float));
+    // fprintf(stderr, "%s: %d, %d, %d, %d\n", __func__, ne00, ne01, channels, div);
+
+    cuda_pool_alloc<float> src0_dd_as_f32;
+    cuda_pool_alloc<float> x_l;
+    cuda_pool_alloc<float> minmax;
+    cuda_pool_alloc<float> minmax_res;
+
+    float *minmaxh;
+    
+    if (src0->type != GGML_TYPE_F32) {
+        const to_fp32_cuda_t to_fp32_cuda = ggml_get_to_fp32_cuda(src0->type);
+        GGML_ASSERT(to_fp32_cuda != nullptr);
+        src0_dd_as_f32.alloc(ne01*ne00);
+        to_fp32_cuda(src0_dd, src0_dd_as_f32.get(), ne01*ne00, main_stream);
+    }
+
+    x_l.alloc(ne00*ne01);
+    
+
+    // cudaMemcpyAsync(minmax.get(), minmaxh, sizeof(float) * 2, cudaMemcpyHostToDevice, main_stream);
+
+    const float * src0_dd_i = src0->type == GGML_TYPE_F32 ? (const float *) src0_dd : src0_dd_as_f32.get();
+
+    const int num_blocks = (ne00*ne01 + CUDA_FFT_FILTER_BLOCK_SIZE - 1) / CUDA_FFT_FILTER_BLOCK_SIZE;
+    zero_out_buffer_f32<<<num_blocks, CUDA_FFT_FILTER_BLOCK_SIZE, 0, main_stream>>>(x_l.get(), ne00*ne01);
+
+    dim3 gridDim(ceil(ne00/16.f), ceil(ne01/16.f), 1);
+    dim3 blockDim(16, 16, 1);   
+    
+    get_channel_sum_f32<<<gridDim, blockDim, 0, main_stream>>>(x_l.get(), src0_dd_i, ne00, ne01, channels);
+
+    // find_min_max_f32<<<num_blocks, CUDA_FFT_FILTER_BLOCK_SIZE, 0, main_stream>>>(x_l.get(), minmax.get(), ne00*ne01);
+    int nrows = ne01, ncols = ne00;    
+    minmax.alloc(nrows);
+    minmax_res.alloc(2);
+  
+    const dim3 block_dims(WARP_SIZE, 1, 1);
+    const dim3 block_nums(1, nrows, 1);
+    find_min_f32<<<block_nums, block_dims, 0, main_stream>>>(x_l.get(), minmax.get(), ncols);
+
+    // minmaxh = (float *) malloc( nrows * sizeof(float) );
+    // cudaMemcpyAsync(minmaxh, minmax.get(), sizeof(float) * nrows, cudaMemcpyDeviceToHost, main_stream);
+    // printf("min rows \n");    
+    // for(int i = 0; i < nrows; i++) 
+    //     printf("%f, ", minmaxh[i]);
+    // printf("\n");    
+
+    reduce_min_f32<<< nrows/2, nrows/2, 0, main_stream>>>(minmax.get(), minmax_res.get());
+    // float minmax_resh;
+    // cudaMemcpyAsync(&minmax_resh, minmax_res.get(), sizeof(float), cudaMemcpyDeviceToHost, main_stream);
+    // printf("min = %f \n", minmax_resh);   
+
+    find_max_f32<<<block_nums, block_dims, 0, main_stream>>>(x_l.get(), minmax.get(), ncols);
+    // cudaMemcpyAsync(minmaxh, minmax.get(), sizeof(float) * nrows, cudaMemcpyDeviceToHost, main_stream);
+    // printf("max rows \n");    
+    // for(int i = 0; i < nrows; i++) 
+    //     printf("%f, ", minmaxh[i]);
+    // printf("\n");    
+    reduce_max_f32<<< nrows/2, nrows/2, 0, main_stream>>>(minmax.get(), minmax_res.get()+1);    
+    // cudaMemcpyAsync(&minmax_resh, minmax_res.get()+1, sizeof(float), cudaMemcpyDeviceToHost, main_stream);
+    // printf("max = %f \n", minmax_resh);   
+
+    get_factor_map_f32<<<num_blocks, CUDA_FFT_FILTER_BLOCK_SIZE, 0, main_stream>>>(x_l.get(), minmax_res.get(), b, ne00*ne01);
+
+    dim3 gridDim1(ceil(ne00/16.f), ceil(ne01/16.f), channels); 
+    scale_backbone_map_f32<<<gridDim1, blockDim, 0, main_stream>>>(dst_dd, src0_dd_i, x_l.get(), channels/div, ne00, ne01);
+    
+    // free(minmaxh);
+    (void) src1;
+    (void) src1_dd;
+}
+
+
 static void ggml_cuda_op_sum_rows(
     const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
     const float * src0_dd, const float * src1_dd, float * dst_dd, cudaStream_t main_stream) {
@@ -9305,6 +9544,10 @@ static void ggml_cuda_fft_filter(const ggml_tensor * src0, const ggml_tensor * s
     ggml_cuda_op_flatten(src0, src1, dst, ggml_cuda_op_fft_filter);
 }
 
+static void ggml_cuda_freeu_backbone(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    ggml_cuda_op_flatten(src0, src1, dst, ggml_cuda_op_freeu_backbone);
+}
+
 static void ggml_cuda_sum_rows(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     GGML_ASSERT(ggml_is_contiguous(src0));
     ggml_cuda_op_flatten(src0, src1, dst, ggml_cuda_op_sum_rows);
@@ -9670,6 +9913,9 @@ bool ggml_cuda_compute_forward(struct ggml_compute_params * params, struct ggml_
         case GGML_OP_FFT_FILTER:
             func = ggml_cuda_fft_filter;
             break;
+        case GGML_OP_FREEU_BACKBONE:
+            func = ggml_cuda_freeu_backbone;
+            break;    
         case GGML_OP_GROUP_NORM:
             func = ggml_cuda_group_norm;
             break;
@@ -10213,6 +10459,18 @@ static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, const ggml_ten
                 return false;
             } break;
         case GGML_OP_FFT_FILTER:
+           {
+                ggml_type src0_type = op->src[0]->type;
+                // ggml_type src1_type = op->src[1]->type;
+                if (src0_type == GGML_TYPE_F32 || src0_type == GGML_TYPE_F16) {
+                    return true;
+                }
+                // if (src0_type == GGML_TYPE_F16 && src1_type == GGML_TYPE_F32) {
+                //     return true;
+                // }
+                return false;
+            } break;
+        case GGML_OP_FREEU_BACKBONE:
            {
                 ggml_type src0_type = op->src[0]->type;
                 // ggml_type src1_type = op->src[1]->type;
