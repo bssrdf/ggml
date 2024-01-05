@@ -54,7 +54,7 @@ void load_model(test_model & model, bool use_gpu = false) {
 
    
     dim_t fft_size = {nx, ny};
-    unsigned int batch_size = 6;
+    unsigned int batch_size = 256;
 
 
 

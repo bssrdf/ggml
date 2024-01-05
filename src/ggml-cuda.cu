@@ -5189,6 +5189,21 @@ static __global__ void k_sum_rows_f32(const float * x, float * dst, const int nc
     }
 }
 
+// device only function smallest power of 2 >= n
+__device__ int pow2ceil(int n)
+{
+        int pow2 = 1 << (31 - __clz(n));
+        if(n > pow2) pow2 = (pow2 << 1);
+        return pow2;
+}
+// device only function greatest power of 2 <= n
+__device__ int pow2floor(int n)
+{
+        int pow2 = 1 << (31 - __clz(n));
+        return pow2;
+}
+
+
 template<typename T>
 static inline __device__ void swap(T & a, T & b) {
     T tmp = a;
@@ -7981,19 +7996,46 @@ static void ggml_cuda_op_fft_filter(
 }
 
 
-static __global__ void get_channel_sum_f32(float *dst, const float *x, const int width, const int height, const int nc) {
+#define CUDA_SHARED_BLOCK_SIZE 256
 
+static __global__ void get_channel_sum_f32(float *dst, const float *src, const int width, const int height, const int channels) {
+    
     // const int k =  blockIdx.z;
     const int row = blockDim.y*blockIdx.y + threadIdx.y;
     const int col = blockDim.x*blockIdx.x + threadIdx.x;
-    for( int k = 0; k < nc; k++ ){
+    for( int k = 0; k < channels; k++ ){
         if (col < width && row < height) {
-            dst[row*width+col] += x[k*width*height+row*width+col];        
+            dst[row*width+col] += src[k*width*height+row*width+col];
         }
     }
     if (col < width && row < height) {
-        dst[row*width+col] *= 1.f/(float)nc;
+        dst[row*width+col] *= 1.f/(float)channels;
     }
+}
+
+static __global__ void meanAlongCDimension(const float* src, float* result, int width, int height, int channels, int scaling) {
+
+    extern __shared__ float partialSum[];
+    // __shared__ float partialSum[512];
+
+    int id = threadIdx.z*blockDim.x*blockDim.y+threadIdx.y*blockDim.x + threadIdx.x;
+    int tid = blockDim.z*blockIdx.z+threadIdx.z;
+    int stride = gridDim.z*blockDim.z;
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+    if(x < width && y < height){
+        partialSum[id] = 0.0f;
+        for(int k = tid; k < channels; k += stride)
+            partialSum[id] += src[k*width*height+y*width+x];
+        __syncthreads();
+        for(int k = blockDim.z / 2; k > 0; k /= 2){
+            if(threadIdx.z < k) partialSum[id] += partialSum[(threadIdx.z+k)*blockDim.x*blockDim.y+threadIdx.y*blockDim.x + threadIdx.x];
+            __syncthreads();
+        }
+    }
+    // store one value per thread block
+    if(x < width && y < height && threadIdx.z == 0)
+        result[blockIdx.z*width*height+y*width+x] = partialSum[id]/(scaling > 0 ? (float)scaling:1.f);
 }
 
 
@@ -8106,6 +8148,9 @@ static __global__ void reduce_max_f32(float * x, float * dst){
        *dst = x[0];
 }
 
+#define CUDA_REDUCE_BLOCK_SIZE 64
+#define CUDA_REDUCE_THREAD_SIZE 64
+
 static void ggml_cuda_op_freeu_backbone(
     const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
     const float * src0_dd, const float * src1_dd, float * dst_dd, cudaStream_t main_stream) {
@@ -8121,6 +8166,8 @@ static void ggml_cuda_op_freeu_backbone(
     const int64_t ne01 = src0->ne[1];
     const int64_t ne02 = src0->ne[2];
     const int64_t ne03 = src0->ne[3];
+    int blocks = CUDA_REDUCE_BLOCK_SIZE;
+    int threads = CUDA_REDUCE_THREAD_SIZE;
 
     GGML_ASSERT( ne03 == 1);
 
@@ -8142,10 +8189,13 @@ static void ggml_cuda_op_freeu_backbone(
 
     cuda_pool_alloc<float> src0_dd_as_f32;
     cuda_pool_alloc<float> x_l;
+    cuda_pool_alloc<float> x_l_inter;
     cuda_pool_alloc<float> minmax;
     cuda_pool_alloc<float> minmax_res;
 
     float *minmaxh;
+    // float *x_l_interh = (float *) malloc(blocks*ne00*ne01 * sizeof(float) );
+    // float *x_lh = (float *) malloc(ne00*ne01 * sizeof(float) );
     
     if (src0->type != GGML_TYPE_F32) {
         const to_fp32_cuda_t to_fp32_cuda = ggml_get_to_fp32_cuda(src0->type);
@@ -8155,6 +8205,7 @@ static void ggml_cuda_op_freeu_backbone(
     }
 
     x_l.alloc(ne00*ne01);
+    x_l_inter.alloc(blocks*ne00*ne01);
     
 
     // cudaMemcpyAsync(minmax.get(), minmaxh, sizeof(float) * 2, cudaMemcpyHostToDevice, main_stream);
@@ -8162,12 +8213,40 @@ static void ggml_cuda_op_freeu_backbone(
     const float * src0_dd_i = src0->type == GGML_TYPE_F32 ? (const float *) src0_dd : src0_dd_as_f32.get();
 
     const int num_blocks = (ne00*ne01 + CUDA_FFT_FILTER_BLOCK_SIZE - 1) / CUDA_FFT_FILTER_BLOCK_SIZE;
-    zero_out_buffer_f32<<<num_blocks, CUDA_FFT_FILTER_BLOCK_SIZE, 0, main_stream>>>(x_l.get(), ne00*ne01);
-
-    dim3 gridDim(ceil(ne00/16.f), ceil(ne01/16.f), 1);
-    dim3 blockDim(16, 16, 1);   
     
-    get_channel_sum_f32<<<gridDim, blockDim, 0, main_stream>>>(x_l.get(), src0_dd_i, ne00, ne01, channels);
+    dim3 blockSize1(4, 4, threads);
+    dim3 gridSize1((ne00 + blockSize1.x - 1) / blockSize1.x,
+                   (ne01 + blockSize1.y - 1) / blockSize1.y, blocks);
+    meanAlongCDimension<<<gridSize1, blockSize1, sizeof(float)*blockSize1.x*blockSize1.y*blockSize1.z, main_stream>>>(src0_dd_i, x_l_inter.get(), ne00, ne01, channels, 0);
+    // meanAlongCDimension<<<gridSize1, blockSize1, 0, main_stream>>>(src0_dd_i, x_l_inter.get(), ne00, ne01, channels, 0);
+
+    // cudaMemcpyAsync(x_l_interh, x_l_inter.get(), sizeof(float) * blocks *ne00 *ne01, cudaMemcpyDeviceToHost, main_stream);
+
+    // printf ("Inetrmediate results 1=============================\n"); 
+    // for(int i = 0; i < ne01*ne00*blocks; i++) {
+    //     printf("%f, ", x_l_interh[i]);
+    //     if ((i+1) % ne00 == 0)
+    //        printf ("\n"); 
+    //     if ((i+1) % (ne00*ne01) == 0)
+    //        printf ("=============================\n"); 
+    // }
+    // free(x_l_interh);
+
+    dim3 blockSize2(4, 4, blocks);
+    dim3 gridSize2((ne00 + blockSize2.x - 1) / blockSize2.x,
+                   (ne01 + blockSize2.y - 1) / blockSize2.y, 1);
+    meanAlongCDimension<<<gridSize2, blockSize2, sizeof(float)*blockSize2.x*blockSize2.y*blockSize2.z, main_stream>>>(x_l_inter.get(), x_l.get(), ne00, ne01, blocks, ne00*ne01);
+    // meanAlongCDimension<<<gridSize2, blockSize2, 0, main_stream>>>(x_l_inter.get(), x_l.get(), ne00, ne01, blocks, ne00*ne01);
+    // cudaDeviceSynchronize();
+    // cudaMemcpyAsync(x_lh, x_l.get(), sizeof(float) * ne00 *ne01, cudaMemcpyDeviceToHost, main_stream);
+    // printf ("Inetrmediate results 2=============================\n"); 
+    // for(int i = 0; i < ne01*ne00; i++) {
+    //     printf("%f, ", x_lh[i]);
+    //     if ((i+1) % ne00 == 0)
+    //        printf ("\n");            
+    // }
+    // printf ("=============================\n"); 
+    // free(x_lh);
 
     // find_min_max_f32<<<num_blocks, CUDA_FFT_FILTER_BLOCK_SIZE, 0, main_stream>>>(x_l.get(), minmax.get(), ne00*ne01);
     int nrows = ne01, ncols = ne00;    
@@ -8200,11 +8279,13 @@ static void ggml_cuda_op_freeu_backbone(
     // cudaMemcpyAsync(&minmax_resh, minmax_res.get()+1, sizeof(float), cudaMemcpyDeviceToHost, main_stream);
     // printf("max = %f \n", minmax_resh);   
 
+
+    
     get_factor_map_f32<<<num_blocks, CUDA_FFT_FILTER_BLOCK_SIZE, 0, main_stream>>>(x_l.get(), minmax_res.get(), b, ne00*ne01);
 
     dim3 gridDim1(ceil(ne00/16.f), ceil(ne01/16.f), channels); 
-    scale_backbone_map_f32<<<gridDim1, blockDim, 0, main_stream>>>(dst_dd, src0_dd_i, x_l.get(), channels/div, ne00, ne01);
-    
+    dim3 blockDim1(16, 16, 1);
+    scale_backbone_map_f32<<<gridDim1, blockDim1, 0, main_stream>>>(dst_dd, src0_dd_i, x_l.get(), channels/div, ne00, ne01);
     // free(minmaxh);
     (void) src1;
     (void) src1_dd;
