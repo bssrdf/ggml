@@ -7902,6 +7902,8 @@ static void ggml_cuda_op_fft_filter(
     const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
     const float * src0_dd, const float * src1_dd, float * dst_dd, cudaStream_t main_stream) {
 
+    // printf(" enter fft \n");
+
     GGML_ASSERT(src0->type == GGML_TYPE_F16 ||  src0->type == GGML_TYPE_F32);
     // GGML_ASSERT(src1->type == GGML_TYPE_F32);
     GGML_ASSERT( dst->type == GGML_TYPE_F32);
@@ -7959,7 +7961,7 @@ static void ggml_cuda_op_fft_filter(
 
     const int num_blocks = (k + CUDA_FFT_FILTER_BLOCK_SIZE - 1) / CUDA_FFT_FILTER_BLOCK_SIZE;
     form_complex_f32<<<num_blocks, CUDA_FFT_FILTER_BLOCK_SIZE, 0, main_stream>>>(src0_dd_i, fft_trans.get(), k);
-
+    // fprintf(stderr, "%s: done with  form_complex_f32 \n", __func__);
     CUFFT_CALL(cufftSetStream(plan, main_stream));
 
     CUFFT_CALL(cufftExecC2C(plan, fft_trans.get(), fft_trans.get(), CUFFT_FORWARD));
@@ -7969,6 +7971,7 @@ static void ggml_cuda_op_fft_filter(
     // scale_fft_coeffs_f32<<<gridDim, blockDim, 0, main_stream>>>(fft_trans.get(), r_thresh, src1_dd,
     scale_fft_coeffs_f32<<<gridDim, blockDim, 0, main_stream>>>(fft_trans.get(), r_thresh, scale,
                   ne00, ne01);
+    // fprintf(stderr, "%s: done with  scale_fft_coeffs_f32\n", __func__);        
 
     CUFFT_CALL(cufftExecC2C(plan, fft_trans.get(), fft_trans.get(), CUFFT_INVERSE));
 
@@ -7976,7 +7979,10 @@ static void ggml_cuda_op_fft_filter(
 
     get_complex_real_f32<<<num_blocks, CUDA_FFT_FILTER_BLOCK_SIZE, 0, main_stream>>>(fft_trans.get(), dst_dd, 1./(ne01 * ne00), k);
 
+    // fprintf(stderr, "%s: done with get_complex_real_f32\n", __func__);        
     CUFFT_CALL(cufftDestroy(plan));
+
+    // fprintf(stderr, "%s: done with FFT \n", __func__);
     (void) src1;
     (void) src1_dd;
 }
@@ -8134,8 +8140,8 @@ static __global__ void reduce_max_f32(float * x, float * dst){
        *dst = x[0];
 }
 
-#define CUDA_REDUCE_BLOCK_SIZE 64
-#define CUDA_REDUCE_THREAD_SIZE 64
+#define CUDA_REDUCE_BLOCK_SIZE 32
+#define CUDA_REDUCE_THREAD_SIZE 32
 
 static void ggml_cuda_op_freeu_backbone(
     const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
@@ -8190,13 +8196,21 @@ static void ggml_cuda_op_freeu_backbone(
         to_fp32_cuda(src0_dd, src0_dd_as_f32.get(), ne01*ne00, main_stream);
     }
 
+    const float * src0_dd_i = src0->type == GGML_TYPE_F32 ? (const float *) src0_dd : src0_dd_as_f32.get();
+
+    if(ne00 == 1 && ne01 == 1){
+        cudaMemcpyAsync(dst_dd, src0_dd_i, sizeof(float) * k, cudaMemcpyDeviceToDevice, main_stream);
+        return;
+    }
+
+
     x_l.alloc(ne00*ne01);
     x_l_inter.alloc(blocks*ne00*ne01);
     
 
     // cudaMemcpyAsync(minmax.get(), minmaxh, sizeof(float) * 2, cudaMemcpyHostToDevice, main_stream);
 
-    const float * src0_dd_i = src0->type == GGML_TYPE_F32 ? (const float *) src0_dd : src0_dd_as_f32.get();
+    // const float * src0_dd_i = src0->type == GGML_TYPE_F32 ? (const float *) src0_dd : src0_dd_as_f32.get();
 
     const int num_blocks = (ne00*ne01 + CUDA_FFT_FILTER_BLOCK_SIZE - 1) / CUDA_FFT_FILTER_BLOCK_SIZE;
     
@@ -8204,6 +8218,8 @@ static void ggml_cuda_op_freeu_backbone(
     dim3 gridSize1((ne00 + blockSize1.x - 1) / blockSize1.x,
                    (ne01 + blockSize1.y - 1) / blockSize1.y, blocks);
     meanAlongCDimension<<<gridSize1, blockSize1, sizeof(float)*blockSize1.x*blockSize1.y*blockSize1.z, main_stream>>>(src0_dd_i, x_l_inter.get(), ne00, ne01, channels, 0);
+
+    // fprintf(stderr, "%s: done with  meanAlongCDimension stage 1\n", __func__);
     // meanAlongCDimension<<<gridSize1, blockSize1, 0, main_stream>>>(src0_dd_i, x_l_inter.get(), ne00, ne01, channels, 0);
 
     // cudaMemcpyAsync(x_l_interh, x_l_inter.get(), sizeof(float) * blocks *ne00 *ne01, cudaMemcpyDeviceToHost, main_stream);
@@ -8222,6 +8238,7 @@ static void ggml_cuda_op_freeu_backbone(
     dim3 gridSize2((ne00 + blockSize2.x - 1) / blockSize2.x,
                    (ne01 + blockSize2.y - 1) / blockSize2.y, 1);
     meanAlongCDimension<<<gridSize2, blockSize2, sizeof(float)*blockSize2.x*blockSize2.y*blockSize2.z, main_stream>>>(x_l_inter.get(), x_l.get(), ne00, ne01, blocks, ne00*ne01);
+    // fprintf(stderr, "%s: done with  meanAlongCDimension stage 2\n", __func__);
     // meanAlongCDimension<<<gridSize2, blockSize2, 0, main_stream>>>(x_l_inter.get(), x_l.get(), ne00, ne01, blocks, ne00*ne01);
     // cudaDeviceSynchronize();
     // cudaMemcpyAsync(x_lh, x_l.get(), sizeof(float) * ne00 *ne01, cudaMemcpyDeviceToHost, main_stream);
@@ -8242,6 +8259,7 @@ static void ggml_cuda_op_freeu_backbone(
     const dim3 block_dims(WARP_SIZE, 1, 1);
     const dim3 block_nums(1, nrows, 1);
     find_min_f32<<<block_nums, block_dims, 0, main_stream>>>(x_l.get(), minmax.get(), ncols);
+    // fprintf(stderr, "%s: done find_min_32 \n", __func__);
 
     // minmaxh = (float *) malloc( nrows * sizeof(float) );
     // cudaMemcpyAsync(minmaxh, minmax.get(), sizeof(float) * nrows, cudaMemcpyDeviceToHost, main_stream);
@@ -8249,30 +8267,36 @@ static void ggml_cuda_op_freeu_backbone(
     // for(int i = 0; i < nrows; i++) 
     //     printf("%f, ", minmaxh[i]);
     // printf("\n");    
-
+    // fprintf(stderr, "%s: before reduce_min_32 %d \n", __func__, nrows/2);
     reduce_min_f32<<< nrows/2, nrows/2, 0, main_stream>>>(minmax.get(), minmax_res.get());
+    // fprintf(stderr, "%s: done reduce_min_32 \n", __func__);
     // float minmax_resh;
     // cudaMemcpyAsync(&minmax_resh, minmax_res.get(), sizeof(float), cudaMemcpyDeviceToHost, main_stream);
     // printf("min = %f \n", minmax_resh);   
 
     find_max_f32<<<block_nums, block_dims, 0, main_stream>>>(x_l.get(), minmax.get(), ncols);
+    // fprintf(stderr, "%s: done find_max_32 \n", __func__);
     // cudaMemcpyAsync(minmaxh, minmax.get(), sizeof(float) * nrows, cudaMemcpyDeviceToHost, main_stream);
     // printf("max rows \n");    
     // for(int i = 0; i < nrows; i++) 
     //     printf("%f, ", minmaxh[i]);
     // printf("\n");    
+    // fprintf(stderr, "%s: before reduce_max_32 %d \n", __func__, nrows/2);
     reduce_max_f32<<< nrows/2, nrows/2, 0, main_stream>>>(minmax.get(), minmax_res.get()+1);    
+    // fprintf(stderr, "%s: done reduce_max_32 \n", __func__);
     // cudaMemcpyAsync(&minmax_resh, minmax_res.get()+1, sizeof(float), cudaMemcpyDeviceToHost, main_stream);
     // printf("max = %f \n", minmax_resh);   
 
 
     
     get_factor_map_f32<<<num_blocks, CUDA_FFT_FILTER_BLOCK_SIZE, 0, main_stream>>>(x_l.get(), minmax_res.get(), b, ne00*ne01);
-
+    // fprintf(stderr, "%s: done get_factor_map_f32 \n", __func__);
     dim3 gridDim1(ceil(ne00/16.f), ceil(ne01/16.f), channels); 
     dim3 blockDim1(16, 16, 1);
+    // fprintf(stderr, "%s: before scale_backbone_map_f32 %d, %d, %d \n", __func__, gridDim1.x, gridDim1.y, gridDim1.z);
     scale_backbone_map_f32<<<gridDim1, blockDim1, 0, main_stream>>>(dst_dd, src0_dd_i, x_l.get(), channels/div, ne00, ne01);
     // free(minmaxh);
+    // fprintf(stderr, "%s: done  scale_backbone_map_f32 \n", __func__);
     (void) src1;
     (void) src1_dd;
 }
