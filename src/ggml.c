@@ -1650,9 +1650,11 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
 
     "CROSS_ENTROPY_LOSS",
     "CROSS_ENTROPY_LOSS_BACK",
+    "FFT_FILTER",
+    "FREEU_BACKBONE",
 };
 
-static_assert(GGML_OP_COUNT == 72, "GGML_OP_COUNT != 72");
+static_assert(GGML_OP_COUNT == 74, "GGML_OP_COUNT != 74");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1736,9 +1738,12 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
 
     "cross_entropy_loss(x,y)",
     "cross_entropy_loss_back(x,y)",
+
+    "fft_filter(x)",
+    "freeu_backbone(x)",
 };
 
-static_assert(GGML_OP_COUNT == 72, "GGML_OP_COUNT != 72");
+static_assert(GGML_OP_COUNT == 74, "GGML_OP_COUNT != 74");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -6329,6 +6334,46 @@ struct ggml_tensor * ggml_map_custom3_inplace(
         int                            n_tasks,
         void                         * userdata) {
     return ggml_map_custom3_impl(ctx, a, b, c, fun, n_tasks, userdata, true);
+}
+
+struct ggml_tensor * ggml_fft_filter(
+        struct ggml_context          * ctx,
+        struct ggml_tensor           * a,
+        struct ggml_tensor           * b) {
+    bool is_node = false;
+
+    if (a->grad) {
+        is_node = true;
+    }
+
+    struct ggml_tensor * result = ggml_dup_tensor(ctx, a);
+
+    result->op = GGML_OP_FFT_FILTER;
+    result->grad = is_node ? ggml_dup_tensor(ctx, result) : NULL;
+    result->src[0] = a;
+    result->src[1] = b;
+
+    return result;
+}
+
+struct ggml_tensor * ggml_freeu_backbone(
+        struct ggml_context          * ctx,
+        struct ggml_tensor           * a,
+        struct ggml_tensor           * b) {
+    bool is_node = false;
+
+    if (a->grad) {
+        is_node = true;
+    }
+
+    struct ggml_tensor * result = ggml_dup_tensor(ctx, a);
+
+    result->op = GGML_OP_FREEU_BACKBONE;
+    result->grad = is_node ? ggml_dup_tensor(ctx, result) : NULL;
+    result->src[0] = a;
+    result->src[1] = b;
+
+    return result;
 }
 
 // ggml_cross_entropy_loss
@@ -14748,6 +14793,15 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 // nop
             } break;
+        case GGML_OP_FFT_FILTER:
+            {
+                GGML_ASSERT(false); // not implemented on CPU
+            } break;
+
+        case GGML_OP_FREEU_BACKBONE:
+            {
+                GGML_ASSERT(false); // not implemented on CPU
+            } break;    
         case GGML_OP_COUNT:
             {
                 GGML_ASSERT(false);
@@ -15214,6 +15268,14 @@ static void ggml_compute_backward(struct ggml_context * ctx, struct ggml_tensor 
                 GGML_ASSERT(false); // TODO: not implemented
             } break;
         case GGML_OP_NORM:
+            {
+                GGML_ASSERT(false); // TODO: not implemented
+            } break;
+        case GGML_OP_FFT_FILTER:
+            {
+                GGML_ASSERT(false); // TODO: not implemented
+            } break;
+        case GGML_OP_FREEU_BACKBONE:
             {
                 GGML_ASSERT(false); // TODO: not implemented
             } break;

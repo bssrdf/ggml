@@ -9,7 +9,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <vector>
-
+#include <array>
 
 #if defined(GGML_USE_HIPBLAS)
 #include <hip/hip_runtime.h>
@@ -99,6 +99,7 @@
 #else
 #include <cuda_runtime.h>
 #include <cuda.h>
+#include <cufft.h>
 #include <cublas_v2.h>
 #include <cuda_fp16.h>
 
@@ -115,6 +116,43 @@
 #include "ggml-cuda.h"
 #include "ggml.h"
 #include "ggml-backend-impl.h"
+
+// CUDA API error checking
+#ifndef CUDA_RT_CALL
+#define CUDA_RT_CALL( call )                                                                                           \
+    {                                                                                                                  \
+        auto status = static_cast<cudaError_t>( call );                                                                \
+        if ( status != cudaSuccess )                                                                                   \
+            fprintf( stderr,                                                                                           \
+                     "ERROR: CUDA RT call \"%s\" in line %d of file %s failed "                                        \
+                     "with "                                                                                           \
+                     "%s (%d).\n",                                                                                     \
+                     #call,                                                                                            \
+                     __LINE__,                                                                                         \
+                     __FILE__,                                                                                         \
+                     cudaGetErrorString( status ),                                                                     \
+                     status );                                                                                         \
+    }
+#endif  // CUDA_RT_CALL
+
+// cufft API error chekcing
+#ifndef CUFFT_CALL
+#define CUFFT_CALL( call )                                                                                             \
+    {                                                                                                                  \
+        auto status = static_cast<cufftResult>( call );                                                                \
+        if ( status != CUFFT_SUCCESS )                                                                                 \
+            fprintf( stderr,                                                                                           \
+                     "ERROR: CUFFT call \"%s\" in line %d of file %s failed "                                          \
+                     "with "                                                                                           \
+                     "code (%d).\n",                                                                                   \
+                     #call,                                                                                            \
+                     __LINE__,                                                                                         \
+                     __FILE__,                                                                                         \
+                     status );                                                                                         \
+    }
+#endif  // CUFFT_CALL
+
+
 
 #define MIN_CC_DP4A   610 // minimum compute capability for __dp4a, an intrinsic for byte-wise dot products
 #define CC_VOLTA      700
@@ -589,6 +627,14 @@ static __device__ __forceinline__ float warp_reduce_max(float x) {
 #pragma unroll
     for (int mask = 16; mask > 0; mask >>= 1) {
         x = fmaxf(x, __shfl_xor_sync(0xffffffff, x, mask, 32));
+    }
+    return x;
+}
+
+static __device__ __forceinline__ float warp_reduce_min(float x) {
+#pragma unroll
+    for (int mask = 16; mask > 0; mask >>= 1) {
+        x = fminf(x, __shfl_xor_sync(0xffffffff, x, mask, 32));
     }
     return x;
 }
@@ -5293,6 +5339,25 @@ static __global__ void clamp_f32(const float * x, float * dst, const float min, 
     dst[i] = x[i] < min ? min : (x[i] > max ? max : x[i]);
 }
 
+static __global__ void form_complex_f32(const float * x,  cufftComplex* dst, const int k) {
+    const int i = blockDim.x*blockIdx.x + threadIdx.x;
+
+    if (i >= k) {
+        return;
+    }
+    dst[i] = make_cuComplex(x[i], 0.f);
+}
+
+static __global__ void get_complex_real_f32(const cufftComplex* x,  float* dst, float scale, const int k) {
+    const int i = blockDim.x*blockIdx.x + threadIdx.x;
+
+    if (i >= k) {
+        return;
+    }
+    dst[i] = x[i].x * scale;
+}
+
+
 static  __global__ void im2col_f32_f16(
         const float * x, half * dst,
         int offset_delta, int IW, int IH, int OW, int KW, int KH, int pelements, int CHW,
@@ -7801,6 +7866,417 @@ static void ggml_cuda_op_im2col(
     (void) src0_dd;
 }
 
+#define CUDA_FFT_FILTER_BLOCK_SIZE 256
+
+static __global__ void scale_fft_coeffs_f32(cufftComplex *dst,  const int r_thresh, const float scale,
+                  const int width, const int height) {
+
+    const int k =  blockIdx.z;
+    const int row = blockDim.y*blockIdx.y + threadIdx.y;
+    const int col = blockDim.x*blockIdx.x + threadIdx.x;
+    if (col < width && row < height &&
+        (col < r_thresh && row < r_thresh ||
+        height - row <= r_thresh && col < r_thresh ||
+        height - row <= r_thresh && width - col <= r_thresh ||
+        row < height && width - col <= r_thresh) ) {
+        dst[k*width*height+row*width+col].x *= scale;
+        dst[k*width*height+row*width+col].y *= scale;
+    }
+    // }
+}
+
+static __global__ void scale_ifft_f32(cufftComplex *dst, float scale,
+                  const int k) {
+
+    const int i = blockDim.x*blockIdx.x + threadIdx.x;
+    if (i >= k) {
+        return;
+    }
+    dst[i].x *= scale;
+    dst[i].y *= scale;
+}
+
+using dim_t = std::array<int, 2>;
+
+static void ggml_cuda_op_fft_filter(
+    const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
+    const float * src0_dd, const float * src1_dd, float * dst_dd, cudaStream_t main_stream) {
+
+    GGML_ASSERT(src0->type == GGML_TYPE_F16 ||  src0->type == GGML_TYPE_F32);
+    // GGML_ASSERT(src1->type == GGML_TYPE_F32);
+    GGML_ASSERT( dst->type == GGML_TYPE_F32);
+
+    GGML_ASSERT(src0_dd  != nullptr);
+    GGML_ASSERT(dst_dd   != nullptr);
+
+    const int64_t ne00 = src0->ne[0];
+    const int64_t ne01 = src0->ne[1];
+    const int64_t ne02 = src0->ne[2];
+
+    // const int64_t ne10 = src1->ne[0];
+    // const int64_t ne11 = src1->ne[1];
+    // const int64_t ne12 = src1->ne[2];
+
+    dim_t fft_size = {(int32_t)ne00, (int32_t)ne01};
+    int batch_size = ne02;
+    const int64_t k = batch_size * ne01 * ne00;
+
+    // fprintf(stderr, "%s: src0  %d, %d, %d \n", __func__, ne00, ne01, ne02);
+    // fprintf(stderr, "%s: src1  %d, %d, %d \n", __func__, ne10, ne11, ne12);
+    // GGML_ASSERT(ggml_is_scalar(src1));
+    // float scale = src1_dd[0];
+    // float scale = ggml_get_f32_1d(src1, 0);
+
+    // fprintf(stderr, "%s: %d, %d, %d, %f\n", __func__, ne00, ne01, ne02, scale);
+
+    const int r_thresh = ((int32_t *) dst->op_params)[0];
+    float scale;
+    memcpy(&scale, (int32_t *) dst->op_params+1, sizeof(float));
+    // fprintf(stderr, "%s: %d, %d, %d, %d\n", __func__, ne00, ne01, ne02, r_thresh);
+
+    cufftHandle plan;
+
+    CUFFT_CALL(cufftCreate(&plan));
+
+    cuda_pool_alloc<float> src0_dd_as_f32;
+    cuda_pool_alloc<cufftComplex> fft_trans;
+
+    CUFFT_CALL(cufftPlanMany(&plan, fft_size.size(), fft_size.data(),
+                             nullptr, 1, 0, // *inembed, istride, idist
+                             nullptr, 1, 0, // *onembed, ostride, odist
+                             CUFFT_C2C, batch_size));
+
+    if (src0->type != GGML_TYPE_F32) {
+        const to_fp32_cuda_t to_fp32_cuda = ggml_get_to_fp32_cuda(src0->type);
+        GGML_ASSERT(to_fp32_cuda != nullptr);
+        src0_dd_as_f32.alloc(ne01*ne00);
+        to_fp32_cuda(src0_dd, src0_dd_as_f32.get(), ne01*ne00, main_stream);
+    }
+
+    fft_trans.alloc(batch_size*ne00*ne01);
+
+    const float * src0_dd_i = src0->type == GGML_TYPE_F32 ? (const float *) src0_dd : src0_dd_as_f32.get();
+
+    const int num_blocks = (k + CUDA_FFT_FILTER_BLOCK_SIZE - 1) / CUDA_FFT_FILTER_BLOCK_SIZE;
+    form_complex_f32<<<num_blocks, CUDA_FFT_FILTER_BLOCK_SIZE, 0, main_stream>>>(src0_dd_i, fft_trans.get(), k);
+
+    CUFFT_CALL(cufftSetStream(plan, main_stream));
+
+    CUFFT_CALL(cufftExecC2C(plan, fft_trans.get(), fft_trans.get(), CUFFT_FORWARD));
+
+    dim3 gridDim(ceil(ne00/16.f), ceil(ne01/16.f), batch_size);
+    dim3 blockDim(16, 16, 1);
+    // scale_fft_coeffs_f32<<<gridDim, blockDim, 0, main_stream>>>(fft_trans.get(), r_thresh, src1_dd,
+    scale_fft_coeffs_f32<<<gridDim, blockDim, 0, main_stream>>>(fft_trans.get(), r_thresh, scale,
+                  ne00, ne01);
+
+    CUFFT_CALL(cufftExecC2C(plan, fft_trans.get(), fft_trans.get(), CUFFT_INVERSE));
+
+    // scale_ifft_f32<<<num_blocks, CUDA_FFT_FILTER_BLOCK_SIZE, 0, main_stream>>>(fft_trans.get(), 1./(ne01 * ne00), k);
+
+    get_complex_real_f32<<<num_blocks, CUDA_FFT_FILTER_BLOCK_SIZE, 0, main_stream>>>(fft_trans.get(), dst_dd, 1./(ne01 * ne00), k);
+
+    CUFFT_CALL(cufftDestroy(plan));
+    (void) src1;
+    (void) src1_dd;
+}
+
+
+#define CUDA_SHARED_BLOCK_SIZE 256
+
+static __global__ void get_channel_sum_f32(float *dst, const float *src, const int width, const int height, const int channels) {
+    
+    // const int k =  blockIdx.z;
+    const int row = blockDim.y*blockIdx.y + threadIdx.y;
+    const int col = blockDim.x*blockIdx.x + threadIdx.x;
+    for( int k = 0; k < channels; k++ ){
+        if (col < width && row < height) {
+            dst[row*width+col] += src[k*width*height+row*width+col];
+        }
+    }
+    if (col < width && row < height) {
+        dst[row*width+col] *= 1.f/(float)channels;
+    }
+}
+
+static __global__ void meanAlongCDimension(const float* src, float* result, int width, int height, int channels, int scaling) {
+
+    extern __shared__ float partialSum[];
+    // __shared__ float partialSum[512];
+
+    int id = threadIdx.z*blockDim.x*blockDim.y+threadIdx.y*blockDim.x + threadIdx.x;
+    int tid = blockDim.z*blockIdx.z+threadIdx.z;
+    int stride = gridDim.z*blockDim.z;
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+    if(x < width && y < height){
+        partialSum[id] = 0.0f;
+        for(int k = tid; k < channels; k += stride)
+            partialSum[id] += src[k*width*height+y*width+x];
+        __syncthreads();
+        for(int k = blockDim.z / 2; k > 0; k /= 2){
+            if(threadIdx.z < k) partialSum[id] += partialSum[(threadIdx.z+k)*blockDim.x*blockDim.y+threadIdx.y*blockDim.x + threadIdx.x];
+            __syncthreads();
+        }
+    }
+    // store one value per thread block
+    if(x < width && y < height && threadIdx.z == 0)
+        result[blockIdx.z*width*height+y*width+x] = partialSum[id]/(scaling > 0 ? (float)scaling:1.f);
+}
+
+
+static __global__ void scale_backbone_map_f32(float *dst, const float *x, const float *scale, const int nc, const int width, const int height) {
+
+    // const int k =   blockDim.z*blockIdx.z + threadIdx.z;
+    const int k =   blockIdx.z;
+    const int row = blockDim.y*blockIdx.y + threadIdx.y;
+    const int col = blockDim.x*blockIdx.x + threadIdx.x;
+    if (col < width && row < height ){
+        int j = k*width*height+row*width+col;  
+        if (k < nc) 
+           dst[j] = x[j] * scale[row*width+col];        
+        else
+           dst[j] = x[j];
+    }
+}
+
+static __global__ void zero_out_buffer_f32(float *dst, const int k) {
+
+    const int i = blockDim.x*blockIdx.x + threadIdx.x;
+    if (i >= k) {
+        return;
+    }
+    dst[i] = 0.f;
+}
+
+static __global__ void get_factor_map_f32(float *dst, const float* minmax, float b, const int k) {
+
+    const int i = blockDim.x*blockIdx.x + threadIdx.x;
+    if (i >= k) {
+        return;
+    }
+    dst[i] = (b-1.f)*(dst[i] - minmax[0])/(minmax[1]-minmax[0]+FLT_MIN) + 1.f;
+}
+
+static __global__ void find_min_max_f32(const float *x,  float *minmax, const int k) {
+
+    const int i = blockDim.x*blockIdx.x + threadIdx.x;
+    if (i >= k) {
+        return;
+    }
+    minmax[0] = min(minmax[0], x[i]);
+    minmax[1] = max(minmax[1], x[i]);
+}
+
+
+
+static __global__ void find_max_f32(const float * x, float * dst, const int ncols) {
+    const int row = blockIdx.y;
+    const int col = threadIdx.x;
+
+    float max_var = -FLT_MAX;
+    for (int i = col; i < ncols; i += blockDim.x) {
+         int j = row * ncols + i; 
+        if (max_var < x[j])
+           max_var = x[j];
+    }
+
+    max_var = warp_reduce_max(max_var);
+
+    if (col == 0) {
+        dst[row] = max_var;
+    }
+    
+}
+
+
+static __global__ void find_min_f32(const float * x, float * dst, const int ncols) {
+
+    const int row = blockIdx.y;
+    const int col = threadIdx.x;
+
+    float min_var = FLT_MAX;
+    for (int i = col; i < ncols; i += blockDim.x) {
+         int j = row * ncols + i; 
+        if (min_var > x[j])
+           min_var = x[j];
+    }
+
+    min_var = warp_reduce_min(min_var);
+
+    if (col == 0) {
+        dst[row] = min_var;
+    }
+    
+}
+
+static __global__ void reduce_min_f32(float * x, float * dst){
+    unsigned int i = threadIdx.x;
+    for (unsigned int stride = blockDim.x; stride >= 1; stride /= 2) {
+        if(threadIdx.x < stride){
+            x[i] = min(x[i], x[i+stride]);            
+        }
+        __syncthreads();
+    }
+    if(threadIdx.x == 0)
+       *dst = x[0];
+}
+
+static __global__ void reduce_max_f32(float * x, float * dst){
+    unsigned int i = threadIdx.x;
+    for (unsigned int stride = blockDim.x; stride >= 1; stride /= 2) {
+        if(threadIdx.x < stride){
+            x[i] = max(x[i], x[i+stride]);            
+        }
+        __syncthreads();
+    }
+    if(threadIdx.x == 0)
+       *dst = x[0];
+}
+
+#define CUDA_REDUCE_BLOCK_SIZE 64
+#define CUDA_REDUCE_THREAD_SIZE 64
+
+static void ggml_cuda_op_freeu_backbone(
+    const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
+    const float * src0_dd, const float * src1_dd, float * dst_dd, cudaStream_t main_stream) {
+
+    GGML_ASSERT(src0->type == GGML_TYPE_F16 ||  src0->type == GGML_TYPE_F32);
+    // GGML_ASSERT(src1->type == GGML_TYPE_F32);
+    GGML_ASSERT( dst->type == GGML_TYPE_F32);
+
+    GGML_ASSERT(src0_dd  != nullptr);
+    GGML_ASSERT(dst_dd   != nullptr);
+
+    const int64_t ne00 = src0->ne[0];
+    const int64_t ne01 = src0->ne[1];
+    const int64_t ne02 = src0->ne[2];
+    const int64_t ne03 = src0->ne[3];
+    int blocks = CUDA_REDUCE_BLOCK_SIZE;
+    int threads = CUDA_REDUCE_THREAD_SIZE;
+
+    GGML_ASSERT( ne03 == 1);
+
+    int channels = ne02;
+    const int64_t k = channels * ne01 * ne00;
+
+    // fprintf(stderr, "%s: src0  %d, %d, %d \n", __func__, ne00, ne01, ne02);
+    // fprintf(stderr, "%s: src1  %d, %d, %d \n", __func__, ne10, ne11, ne12);
+    // GGML_ASSERT(ggml_is_scalar(src1));
+    // float scale = src1_dd[0];
+    // float scale = ggml_get_f32_1d(src1, 0);
+
+    // fprintf(stderr, "%s: %d, %d, %d, %f\n", __func__, ne00, ne01, ne02, scale);
+
+    const int div = ((int32_t *) dst->op_params)[0];
+    float b;
+    memcpy(&b, (int32_t *) dst->op_params+1, sizeof(float));
+    // fprintf(stderr, "%s: %d, %d, %d, %d\n", __func__, ne00, ne01, channels, div);
+
+    cuda_pool_alloc<float> src0_dd_as_f32;
+    cuda_pool_alloc<float> x_l;
+    cuda_pool_alloc<float> x_l_inter;
+    cuda_pool_alloc<float> minmax;
+    cuda_pool_alloc<float> minmax_res;
+
+    float *minmaxh;
+    // float *x_l_interh = (float *) malloc(blocks*ne00*ne01 * sizeof(float) );
+    // float *x_lh = (float *) malloc(ne00*ne01 * sizeof(float) );
+    
+    if (src0->type != GGML_TYPE_F32) {
+        const to_fp32_cuda_t to_fp32_cuda = ggml_get_to_fp32_cuda(src0->type);
+        GGML_ASSERT(to_fp32_cuda != nullptr);
+        src0_dd_as_f32.alloc(ne01*ne00);
+        to_fp32_cuda(src0_dd, src0_dd_as_f32.get(), ne01*ne00, main_stream);
+    }
+
+    x_l.alloc(ne00*ne01);
+    x_l_inter.alloc(blocks*ne00*ne01);
+    
+
+    // cudaMemcpyAsync(minmax.get(), minmaxh, sizeof(float) * 2, cudaMemcpyHostToDevice, main_stream);
+
+    const float * src0_dd_i = src0->type == GGML_TYPE_F32 ? (const float *) src0_dd : src0_dd_as_f32.get();
+
+    const int num_blocks = (ne00*ne01 + CUDA_FFT_FILTER_BLOCK_SIZE - 1) / CUDA_FFT_FILTER_BLOCK_SIZE;
+    
+    dim3 blockSize1(4, 4, threads);
+    dim3 gridSize1((ne00 + blockSize1.x - 1) / blockSize1.x,
+                   (ne01 + blockSize1.y - 1) / blockSize1.y, blocks);
+    meanAlongCDimension<<<gridSize1, blockSize1, sizeof(float)*blockSize1.x*blockSize1.y*blockSize1.z, main_stream>>>(src0_dd_i, x_l_inter.get(), ne00, ne01, channels, 0);
+    // meanAlongCDimension<<<gridSize1, blockSize1, 0, main_stream>>>(src0_dd_i, x_l_inter.get(), ne00, ne01, channels, 0);
+
+    // cudaMemcpyAsync(x_l_interh, x_l_inter.get(), sizeof(float) * blocks *ne00 *ne01, cudaMemcpyDeviceToHost, main_stream);
+
+    // printf ("Inetrmediate results 1=============================\n"); 
+    // for(int i = 0; i < ne01*ne00*blocks; i++) {
+    //     printf("%f, ", x_l_interh[i]);
+    //     if ((i+1) % ne00 == 0)
+    //        printf ("\n"); 
+    //     if ((i+1) % (ne00*ne01) == 0)
+    //        printf ("=============================\n"); 
+    // }
+    // free(x_l_interh);
+
+    dim3 blockSize2(4, 4, blocks);
+    dim3 gridSize2((ne00 + blockSize2.x - 1) / blockSize2.x,
+                   (ne01 + blockSize2.y - 1) / blockSize2.y, 1);
+    meanAlongCDimension<<<gridSize2, blockSize2, sizeof(float)*blockSize2.x*blockSize2.y*blockSize2.z, main_stream>>>(x_l_inter.get(), x_l.get(), ne00, ne01, blocks, ne00*ne01);
+    // meanAlongCDimension<<<gridSize2, blockSize2, 0, main_stream>>>(x_l_inter.get(), x_l.get(), ne00, ne01, blocks, ne00*ne01);
+    // cudaDeviceSynchronize();
+    // cudaMemcpyAsync(x_lh, x_l.get(), sizeof(float) * ne00 *ne01, cudaMemcpyDeviceToHost, main_stream);
+    // printf ("Inetrmediate results 2=============================\n"); 
+    // for(int i = 0; i < ne01*ne00; i++) {
+    //     printf("%f, ", x_lh[i]);
+    //     if ((i+1) % ne00 == 0)
+    //        printf ("\n");            
+    // }
+    // printf ("=============================\n"); 
+    // free(x_lh);
+
+    // find_min_max_f32<<<num_blocks, CUDA_FFT_FILTER_BLOCK_SIZE, 0, main_stream>>>(x_l.get(), minmax.get(), ne00*ne01);
+    int nrows = ne01, ncols = ne00;    
+    minmax.alloc(nrows);
+    minmax_res.alloc(2);
+  
+    const dim3 block_dims(WARP_SIZE, 1, 1);
+    const dim3 block_nums(1, nrows, 1);
+    find_min_f32<<<block_nums, block_dims, 0, main_stream>>>(x_l.get(), minmax.get(), ncols);
+
+    // minmaxh = (float *) malloc( nrows * sizeof(float) );
+    // cudaMemcpyAsync(minmaxh, minmax.get(), sizeof(float) * nrows, cudaMemcpyDeviceToHost, main_stream);
+    // printf("min rows \n");    
+    // for(int i = 0; i < nrows; i++) 
+    //     printf("%f, ", minmaxh[i]);
+    // printf("\n");    
+
+    reduce_min_f32<<< nrows/2, nrows/2, 0, main_stream>>>(minmax.get(), minmax_res.get());
+    // float minmax_resh;
+    // cudaMemcpyAsync(&minmax_resh, minmax_res.get(), sizeof(float), cudaMemcpyDeviceToHost, main_stream);
+    // printf("min = %f \n", minmax_resh);   
+
+    find_max_f32<<<block_nums, block_dims, 0, main_stream>>>(x_l.get(), minmax.get(), ncols);
+    // cudaMemcpyAsync(minmaxh, minmax.get(), sizeof(float) * nrows, cudaMemcpyDeviceToHost, main_stream);
+    // printf("max rows \n");    
+    // for(int i = 0; i < nrows; i++) 
+    //     printf("%f, ", minmaxh[i]);
+    // printf("\n");    
+    reduce_max_f32<<< nrows/2, nrows/2, 0, main_stream>>>(minmax.get(), minmax_res.get()+1);    
+    // cudaMemcpyAsync(&minmax_resh, minmax_res.get()+1, sizeof(float), cudaMemcpyDeviceToHost, main_stream);
+    // printf("max = %f \n", minmax_resh);   
+
+
+    
+    get_factor_map_f32<<<num_blocks, CUDA_FFT_FILTER_BLOCK_SIZE, 0, main_stream>>>(x_l.get(), minmax_res.get(), b, ne00*ne01);
+
+    dim3 gridDim1(ceil(ne00/16.f), ceil(ne01/16.f), channels); 
+    dim3 blockDim1(16, 16, 1);
+    scale_backbone_map_f32<<<gridDim1, blockDim1, 0, main_stream>>>(dst_dd, src0_dd_i, x_l.get(), channels/div, ne00, ne01);
+    // free(minmaxh);
+    (void) src1;
+    (void) src1_dd;
+}
+
 static void ggml_cuda_op_sum_rows(
     const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
     const float * src0_dd, const float * src1_dd, float * dst_dd, cudaStream_t main_stream) {
@@ -9132,6 +9608,14 @@ static void ggml_cuda_alibi(const ggml_tensor * src0, const ggml_tensor * src1, 
     ggml_cuda_op_flatten(src0, src1, dst, ggml_cuda_op_alibi);
 }
 
+static void ggml_cuda_fft_filter(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    ggml_cuda_op_flatten(src0, src1, dst, ggml_cuda_op_fft_filter);
+}
+
+static void ggml_cuda_freeu_backbone(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    ggml_cuda_op_flatten(src0, src1, dst, ggml_cuda_op_freeu_backbone);
+}
+
 static void ggml_cuda_im2col(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     ggml_cuda_op_flatten(src0, src1, dst, ggml_cuda_op_im2col);
 }
@@ -9497,6 +9981,12 @@ bool ggml_cuda_compute_forward(struct ggml_compute_params * params, struct ggml_
             break;
         case GGML_OP_NORM:
             func = ggml_cuda_norm;
+            break;
+        case GGML_OP_FFT_FILTER:
+            func = ggml_cuda_fft_filter;
+            break;
+        case GGML_OP_FREEU_BACKBONE:
+            func = ggml_cuda_freeu_backbone;
             break;
         case GGML_OP_GROUP_NORM:
             func = ggml_cuda_group_norm;
@@ -10041,6 +10531,30 @@ static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, const ggml_ten
                 }
                 return false;
             } break;
+        case GGML_OP_FFT_FILTER:
+           {
+                ggml_type src0_type = op->src[0]->type;
+                // ggml_type src1_type = op->src[1]->type;
+                if (src0_type == GGML_TYPE_F32 || src0_type == GGML_TYPE_F16) {
+                    return true;
+                }
+                // if (src0_type == GGML_TYPE_F16 && src1_type == GGML_TYPE_F32) {
+                //     return true;
+                // }
+                return false;
+            } break;
+        case GGML_OP_FREEU_BACKBONE:
+           {
+                ggml_type src0_type = op->src[0]->type;
+                // ggml_type src1_type = op->src[1]->type;
+                if (src0_type == GGML_TYPE_F32 || src0_type == GGML_TYPE_F16) {
+                    return true;
+                }
+                // if (src0_type == GGML_TYPE_F16 && src1_type == GGML_TYPE_F32) {
+                //     return true;
+                // }
+                return false;
+            } break;    
         case GGML_OP_DUP:
         case GGML_OP_REPEAT:
         case GGML_OP_CONCAT:

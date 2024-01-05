@@ -459,6 +459,9 @@ extern "C" {
         GGML_OP_CROSS_ENTROPY_LOSS,
         GGML_OP_CROSS_ENTROPY_LOSS_BACK,
 
+        GGML_OP_FFT_FILTER,
+        GGML_OP_FREEU_BACKBONE,
+
         GGML_OP_COUNT,
     };
 
@@ -1508,6 +1511,26 @@ extern "C" {
             int                   p1,
             int                   d0,
             int                   d1);
+
+    // kernel size is a->ne[0] x a->ne[1]
+    // stride is equal to kernel size
+    // padding is zero
+    // example:
+    // used in FreeU and ??
+    GGML_API struct ggml_tensor * ggml_fft_filter(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b);
+
+    // kernel size is a->ne[0] x a->ne[1]
+    // stride is equal to kernel size
+    // padding is zero
+    // example:
+    // used in FreeU
+    GGML_API struct ggml_tensor * ggml_freeu_backbone(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b);
 
 
     // kernel size is a->ne[0] x a->ne[1]
