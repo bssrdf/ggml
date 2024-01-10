@@ -12,6 +12,12 @@
 
 #define COMMON_SAMPLE_RATE 16000
 
+#define die(msg)          do { fputs("error: " msg "\n", stderr);                exit(1); } while (0)
+#define die_fmt(fmt, ...) do { fprintf(stderr, "error: " fmt "\n", __VA_ARGS__); exit(1); } while (0)
+
+
+void process_escapes(std::string& input);
+
 //
 // GPT CLI argument parsing
 //
