@@ -8194,8 +8194,6 @@ static void ggml_cuda_op_freeu_backbone(
     cuda_pool_alloc<float> minmax_res;
 
     float *minmaxh;
-    // float *x_l_interh = (float *) malloc(blocks*ne00*ne01 * sizeof(float) );
-    // float *x_lh = (float *) malloc(ne00*ne01 * sizeof(float) );
     
     if (src0->type != GGML_TYPE_F32) {
         const to_fp32_cuda_t to_fp32_cuda = ggml_get_to_fp32_cuda(src0->type);
@@ -8204,13 +8202,15 @@ static void ggml_cuda_op_freeu_backbone(
         to_fp32_cuda(src0_dd, src0_dd_as_f32.get(), ne01*ne00, main_stream);
     }
 
+    const float * src0_dd_i = src0->type == GGML_TYPE_F32 ? (const float *) src0_dd : src0_dd_as_f32.get();
+
+     if(ne00 == 1 && ne01 == 1){
+        cudaMemcpyAsync(dst_dd, src0_dd_i, sizeof(float) * k, cudaMemcpyDeviceToDevice, main_stream);
+        return;
+    }
+
     x_l.alloc(ne00*ne01);
     x_l_inter.alloc(blocks*ne00*ne01);
-    
-
-    // cudaMemcpyAsync(minmax.get(), minmaxh, sizeof(float) * 2, cudaMemcpyHostToDevice, main_stream);
-
-    const float * src0_dd_i = src0->type == GGML_TYPE_F32 ? (const float *) src0_dd : src0_dd_as_f32.get();
 
     const int num_blocks = (ne00*ne01 + CUDA_FFT_FILTER_BLOCK_SIZE - 1) / CUDA_FFT_FILTER_BLOCK_SIZE;
     
