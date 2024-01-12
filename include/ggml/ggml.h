@@ -393,6 +393,7 @@ extern "C" {
         GGML_OP_SQR,
         GGML_OP_SQRT,
         GGML_OP_LOG,
+        GGML_OP_EXP,
         GGML_OP_SUM,
         GGML_OP_SUM_ROWS,
         GGML_OP_MEAN,
@@ -888,6 +889,14 @@ extern "C" {
     GGML_API struct ggml_tensor * ggml_log_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
+        
+    GGML_API struct ggml_tensor * ggml_exp(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_exp_inplace(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a); 
 
     // return scalar
     GGML_API struct ggml_tensor * ggml_sum(

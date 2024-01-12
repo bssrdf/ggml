@@ -89,6 +89,9 @@ struct mnist_hparams {
 struct mnist_vae_model {
     mnist_hparams hparams;
 
+    // struct ggml_tensor * input;
+    // struct ggml_tensor * noise;
+
     struct ggml_tensor * encode1_weight;
     struct ggml_tensor * encode1_bias;
     struct ggml_tensor * encode2_weight;
@@ -99,19 +102,9 @@ struct mnist_vae_model {
 
     struct ggml_tensor * logsd_weight;
     struct ggml_tensor * logsd_bias;
-    struct ggml_tensor * sd;
-    struct ggml_tensor * var;
     struct ggml_tensor * mu_weight;
-    struct ggml_tensor * mu_bias;
-    struct ggml_tensor * meansq;
-
-    struct ggml_tensor * kldiv_plus_half;
-    struct ggml_tensor * kldiv;
-
-    
-    struct ggml_tensor * sdnoise;
-    struct ggml_tensor * sample;
-
+    struct ggml_tensor * mu_bias;    
+   
     struct ggml_tensor * decode1_weight;
     struct ggml_tensor * decode1_bias;
     struct ggml_tensor * decode2_weight;
@@ -138,14 +131,7 @@ struct mnist_vae_model {
         mem_size += (hparams.enc1_out * hparams.enc2_out + hparams.enc2_out) * ggml_type_sizef(GGML_TYPE_F32);  // encode2_w+b
         mem_size += (hparams.enc2_out * hparams.enc3_out + hparams.enc3_out) * ggml_type_sizef(GGML_TYPE_F32);  // encode3_w+b
         mem_size += (hparams.enc3_out * hparams.n_latent + hparams.n_latent) * ggml_type_sizef(GGML_TYPE_F32);  // logsd
-        mem_size += (hparams.n_latent) * ggml_type_sizef(GGML_TYPE_F32);  // sd
-        mem_size += (hparams.n_latent) * ggml_type_sizef(GGML_TYPE_F32);  // var
-        mem_size += (hparams.enc3_out  * hparams.n_latent + hparams.n_latent) * ggml_type_sizef(GGML_TYPE_F32);  // mu
-        mem_size += (hparams.n_latent) * ggml_type_sizef(GGML_TYPE_F32);  // meansq
-        mem_size += (hparams.n_latent) * ggml_type_sizef(GGML_TYPE_F32);  // kldiv_plus_half
-        mem_size += (hparams.n_latent) * ggml_type_sizef(GGML_TYPE_F32);  // kldiv
-        mem_size += (hparams.n_latent) * ggml_type_sizef(GGML_TYPE_F32);  // sdnoise
-        mem_size += (hparams.n_latent) * ggml_type_sizef(GGML_TYPE_F32);  // sample
+        mem_size += (hparams.enc3_out * hparams.n_latent + hparams.n_latent) * ggml_type_sizef(GGML_TYPE_F32);  // mu
         mem_size += (hparams.n_latent *  hparams.dec4_out + hparams.dec4_out)* ggml_type_sizef(GGML_TYPE_F32);  // decode4_w+b
         mem_size += (hparams.dec4_out *  hparams.dec3_out + hparams.dec3_out)* ggml_type_sizef(GGML_TYPE_F32);  // decode3_w+b
         mem_size += (hparams.dec3_out *  hparams.dec2_out + hparams.dec2_out)* ggml_type_sizef(GGML_TYPE_F32);  // decode2_w+b
@@ -154,86 +140,49 @@ struct mnist_vae_model {
     }
 
     size_t get_num_tensors() {
-        return 23;
+        return 18;
     }
-
-    struct ggml_cgraph* build_graph(struct ggml_tensor* z, bool decode_graph) {
-        // since we are using ggml-alloc, this buffer only needs enough space to hold the ggml_tensor and ggml_cgraph structs, but not the tensor data
-        static size_t buf_size = ggml_tensor_overhead() * 1024 + ggml_graph_overhead();
-        static std::vector<uint8_t> buf(buf_size);
-
-        struct ggml_init_params params = {
-            /*.mem_size   =*/buf_size,
-            /*.mem_buffer =*/buf.data(),
-            /*.no_alloc   =*/true,  // the tensors will be allocated later by ggml_allocr_alloc_graph()
-        };
-        // LOG_DEBUG("mem_size %u ", params.mem_size);
-
-        struct ggml_context* ctx0 = ggml_init(params);
-
-        struct ggml_cgraph* gf = ggml_new_graph(ctx0);
-
-        struct ggml_tensor* z_ = NULL;
-
-        // it's performing a compute, check if backend isn't cpu
-        if (!ggml_backend_is_cpu(backend)) {
-            // pass input tensors to gpu memory
-            z_ = ggml_dup_tensor(ctx0, z);
-            ggml_allocr_alloc(compute_allocr, z_);
-
-            // pass data to device backend
-            if (!ggml_allocr_is_measure(compute_allocr)) {
-                ggml_backend_tensor_set(z_, z->data, 0, ggml_nbytes(z));
-            }
-        } else {
-            z_ = z;
-        }
-
-        struct ggml_tensor* out =  decode_graph ? decode(ctx0, z_) : encode(ctx0, z_);
-
-        ggml_build_forward_expand(gf, out);
-        ggml_free(ctx0);
-
-        return gf;
-    }
-
+    
 };
 
 
 static void init_model(struct mnist_vae_model * model) {
     const auto & hparams = model->hparams;
 
-    const uint32_t n_embd  = hparams.n_embd;
-    const uint32_t n_layer = hparams.n_layer;
-    const uint32_t n_vocab = hparams.n_vocab;
-
-    const uint32_t n_ff = get_n_ff(&hparams);
+    const int32_t n_input   = hparams.n_input;
+    const int32_t n_latent  = hparams.n_latent;    
+    const int32_t enc1_out  = hparams.enc1_out;
+    const int32_t enc2_out  = hparams.enc2_out;
+    const int32_t enc3_out  = hparams.enc3_out;
+    const int32_t dec2_out  = hparams.dec2_out;
+    const int32_t dec3_out  = hparams.dec3_out;
+    const int32_t dec4_out  = hparams.dec4_out;
 
     struct ggml_context * ctx = model->ctx;
 
-    model->tok_embeddings = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_embd, n_vocab); // ("tok_embeddings.weight", {n_embd, n_vocab});
-    model->norm           = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_embd);          // ("norm.weight",           {n_embd});
-    model->output         = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_embd, n_vocab); // ("output.weight",         {n_embd, n_vocab});
+    model->encode1_weight = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_input, enc1_out); 
+    model->encode1_bias   = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, enc1_out);          
+    model->encode2_weight = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, enc1_out, enc2_out); 
+    model->encode2_bias   = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, enc2_out);          
+    model->encode3_weight = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, enc2_out, enc3_out); 
+    model->encode3_bias   = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, enc3_out);          
 
-    model->layers.resize(n_layer);
-    for (uint32_t i = 0; i < n_layer; ++i) {
-        auto & layer = model->layers[i];
+    model->logsd_weight = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, enc3_out, n_latent); 
+    model->logsd_bias   = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_latent);          
 
-        // std::string layers_i = "layers." + std::to_string(i);
+    model->mu_weight = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, enc3_out, n_latent); 
+    model->mu_bias   = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_latent);          
 
-        layer.attention_norm = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_embd); // (layers_i + ".attention_norm.weight", {n_embd});
+    model->decode4_weight = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_latent, dec4_out); 
+    model->decode4_bias   = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, dec4_out);          
+    model->decode3_weight = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, dec4_out, dec3_out); 
+    model->decode3_bias   = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, dec3_out);          
+    model->decode2_weight = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, dec3_out, dec2_out); 
+    model->decode2_bias   = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, dec2_out);          
 
-        layer.wq = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_embd, n_embd);     // (layers_i + ".attention.wq.weight", {n_embd, n_embd});
-        layer.wk = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_embd, n_embd);     // (layers_i + ".attention.wk.weight", {n_embd, n_embd});
-        layer.wv = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_embd, n_embd);     // (layers_i + ".attention.wv.weight", {n_embd, n_embd});
-        layer.wo = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_embd, n_embd);     // (layers_i + ".attention.wo.weight", {n_embd, n_embd});
-
-        layer.ffn_norm = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_embd);       // (layers_i + ".ffn_norm.weight", {n_embd});
-
-        layer.w1 = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_embd,   n_ff);     // (layers_i + ".feed_forward.w1.weight", {n_embd,   n_ff});
-        layer.w2 = ggml_new_tensor_2d(ctx, GGML_TYPE_F32,   n_ff, n_embd);     // (layers_i + ".feed_forward.w2.weight", {  n_ff,   n_embd});
-        layer.w3 = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_embd,   n_ff);     // (layers_i + ".feed_forward.w3.weight", {n_embd,   n_ff});
-    }
+    model->decode1_weight = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, dec2_out, n_input); 
+    model->decode1_bias   = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_input);          
+    
 }
 
 
@@ -289,304 +238,99 @@ static void randomize_model(struct mnist_vae_model * model, int seed, float mean
 
 
 
-
-
-static struct ggml_tensor * forward_batch(
-    struct llama_model    * model,
-    struct llama_kv_cache * cache,
-    struct ggml_context   * ctx0,
-    struct ggml_cgraph    * gf,
-    struct ggml_tensor    * tokens_input,
-    const  int              n_tokens,
-    const  int              n_past,
-    const  int              n_batch
+static struct ggml_tensor * train_forward_batch(
+    struct mnist_vae_model   * model,
+    struct ggml_context      * ctx0,
+    struct ggml_cgraph       * gf,
+    struct ggml_tensor       * input,
+    struct ggml_tensor       * noise,    
+    const  int32_t             n_batch
 ) {
-    const int N = n_tokens;
+    // const int N = n_input;
 
-    struct llama_kv_cache& kv_self = *cache;
-    const auto & hparams = model->hparams;
-    const int n_ctx   = hparams.n_ctx;
-    const int n_vocab = hparams.n_vocab;
-    const int n_embd  = hparams.n_embd;
-    const int n_layer = hparams.n_layer;
-    const int n_head  = hparams.n_head;
-    const int n_rot   = hparams.n_rot;
-    const int n_ff    = get_n_ff(&hparams);
+    
+    // struct ggml_tensor * tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, N*n_batch);
+    
+    
 
-    struct ggml_tensor * tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, N*n_batch);
-    memcpy(tokens->data, tokens_input->data, ggml_element_size(tokens)*N*n_batch);
+    struct ggml_tensor* h = ggml_add(ctx0, ggml_mul_mat(ctx0, model->encode1_weight, input), 
+                                           model->encode1_bias); 
+    h = ggml_relu_inplace(ctx0, h); 
+    h = ggml_add(ctx0, ggml_mul_mat(ctx0, model->encode2_weight, h), model->encode2_bias);
+    h = ggml_relu_inplace(ctx0, h); 
+    h = ggml_add(ctx0, ggml_mul_mat(ctx0, model->encode3_weight, h), model->encode3_bias);
+    h = ggml_relu_inplace(ctx0, h); 
+    struct ggml_tensor* h1 = ggml_add(ctx0, ggml_mul_mat(ctx0, model->mu_weight, h), model->mu_bias);
+    struct ggml_tensor* logsd = ggml_add(ctx0, ggml_mul_mat(ctx0, model->logsd_weight, h), model->logsd_bias);
 
-    struct ggml_tensor * kc = kv_self.k;
-    struct ggml_tensor * vc = kv_self.v;
+    h1 = ggml_sqr_inplace(ctx0, h1);
 
-    struct ggml_tensor * KQ_pos = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, N);
-    {
-        int * data = (int *) KQ_pos->data;
-        for (int i = 0; i < N; ++i) {
-            data[i] = n_past + i;
-        }
-    }
+    struct ggml_tensor* sd = ggml_elu() 
 
-    // inpL shape [n_embd,N*n_batch,1]
-    struct ggml_tensor * inpL = ggml_get_rows(ctx0, model->tok_embeddings, tokens);
-    assert_shape_2d(inpL, n_embd, N*n_batch);
 
-    for (int il = 0; il < n_layer; ++il) {
-        struct ggml_tensor * inpSA = inpL;
 
-        struct ggml_tensor * cur;
-
-        // lctx.use_buf(ctx0, 0);
-
-        // norm
-        {
-            // cur shape [n_embd,N*n_batch,1,1]
-            cur = ggml_rms_norm(ctx0, inpL, rms_norm_eps);
-            assert_shape_2d(cur, n_embd, N*n_batch);
-
-            // cur = attention_norm*cur
-            cur = ggml_mul(ctx0,
-                        ggml_repeat(ctx0, model->layers[il].attention_norm, cur),
-                        cur);
-            assert_shape_2d(cur, n_embd, N*n_batch);
-        }
-
-        // self-attention
-        {
-            // compute Q and K and RoPE them
-            // wq   shape [n_embd, n_embd, 1, 1]
-            // wk   shape [n_embd, n_embd, 1, 1]
-            // Qcur shape [n_embd/n_head, n_head, N, n_batch]
-            // Kcur shape [n_embd/n_head, n_head, N, n_batch]
-            struct ggml_tensor * Qcur = ggml_rope(ctx0, ggml_reshape_4d(ctx0, ggml_mul_mat(ctx0, model->layers[il].wq, cur), n_embd/n_head, n_head, N, n_batch), KQ_pos, n_rot, 0, 0);
-            struct ggml_tensor * Kcur = ggml_rope(ctx0, ggml_reshape_4d(ctx0, ggml_mul_mat(ctx0, model->layers[il].wk, cur), n_embd/n_head, n_head, N, n_batch), KQ_pos, n_rot, 0, 0);
-            assert_shape_4d(Qcur, n_embd/n_head, n_head, N, n_batch);
-            assert_shape_4d(Kcur, n_embd/n_head, n_head, N, n_batch);
-
-            // store key and value to memory
-            {
-                // compute the transposed [N, n_embd] V matrix
-                // wv   shape [n_embd, n_embd, 1, 1]
-                // Vcur shape [N, n_embd, n_batch, 1]
-                struct ggml_tensor * Vcur = ggml_cont(ctx0,
-                    ggml_permute(ctx0,
-                        ggml_reshape_3d(ctx0,
-                            ggml_mul_mat(ctx0,
-                                model->layers[il].wv,
-                                cur),
-                        n_embd, N, n_batch),
-                        1, 0, 2, 3));
-
-                assert_shape_3d(Vcur, N, n_embd, n_batch);
-
-                // kv_self.k shape [n_embd * n_ctx * n_batch * n_layer]
-                // kv_self.v shape [n_ctx * n_embd * n_batch * n_layer]
-                // k         shape [n_embd * N, n_batch]   == kv_self.k[:,n_past:n_past+N,:,il]
-                // v         shape [N, n_embd, n_batch, 1] == kv_self.v[:,n_past:n_past+N,:,il]
-
-                /* {
-                    struct ggml_tensor * k = ggml_view_1d(ctx0, kv_self.k, N*n_embd, (ggml_element_size(kv_self.k)*n_embd)*(il*n_ctx + n_past));
-                    struct ggml_tensor * v = ggml_view_2d(ctx0, kv_self.v, N, n_embd,
-                            (   n_ctx)*ggml_element_size(kv_self.v),
-                            (il*n_ctx)*ggml_element_size(kv_self.v)*n_embd + n_past*ggml_element_size(kv_self.v));
-
-                    // important: storing RoPE-ed version of K in the KV cache!
-                    ggml_build_forward_expand(gf, ggml_cpy(ctx0, Kcur, k));
-                    ggml_build_forward_expand(gf, ggml_cpy(ctx0, Vcur, v));
-                } //*/
-
-                kc = ggml_set_2d(ctx0, kc,
-                        ggml_reshape_2d(ctx0, Kcur, n_embd*N, n_batch),
-                        ggml_element_size(kc)*n_embd*n_ctx,
-                        (ggml_element_size(kc)*n_embd)*(il*n_batch*n_ctx + n_past));
-                vc = ggml_set_2d(ctx0, vc,
-                        ggml_reshape_2d(ctx0, Vcur, N*n_embd, n_batch),
-                        ggml_element_size(vc)*n_ctx*n_embd,
-                        ggml_element_size(vc)*(n_past + il*n_embd*n_batch*n_ctx));
-
-                assert_shape_1d(kc, n_embd * n_ctx * n_batch * n_layer);
-                assert_shape_1d(vc, n_embd * n_ctx * n_batch * n_layer);
-            }
-
-            // Qcur shape [n_embd/n_head, n_head, N, n_batch]
-            // Q shape    [n_embd/n_head, N, n_head, n_batch]
-            struct ggml_tensor * Q =
-                ggml_permute(ctx0,
-                        Qcur,
-                        0, 2, 1, 3);
-            assert_shape_4d(Q, n_embd/n_head, N, n_head, n_batch);
-
-            // kv_self.k shape [n_embd * n_ctx * n_batch * n_layer]
-            // K shape [n_embd/n_head, n_past + N, n_head, n_batch]
-            struct ggml_tensor * K =
-                ggml_permute(ctx0,
-                        ggml_reshape_4d(ctx0,
-                            ggml_view_3d(ctx0,
-                                kc,
-                                n_embd,
-                                (n_past + N),
-                                n_batch,
-                                n_embd*ggml_element_size(kc),
-                                n_ctx*n_embd*ggml_element_size(kc),
-                                il*n_batch*n_ctx*n_embd*ggml_element_size(kc)),
-                            n_embd/n_head, n_head, n_past + N, n_batch),
-                        0, 2, 1, 3);
-            assert_shape_4d(K, n_embd/n_head, n_past + N, n_head, n_batch);
-
-            // K * Q
-            // KQ shape [n_past + N, N, n_head, n_batch]
-            struct ggml_tensor * KQ = ggml_mul_mat(ctx0, K, Q);
-            assert_shape_4d(KQ, n_past + N, N, n_head, n_batch);
-
-            // KQ_scaled = KQ / sqrt(n_embd/n_head)
-            // KQ_scaled shape [n_past + N, N, n_head, n_batch]
-            struct ggml_tensor * KQ_scaled = ggml_scale(ctx0, KQ, 1.0f/sqrtf(float(n_embd)/n_head));
-            assert_shape_4d(KQ_scaled, n_past + N, N, n_head, n_batch);
-
-            // KQ_masked = mask_past(KQ_scaled)
-            // KQ_masked shape [n_past + N, N, n_head, n_batch]
-            struct ggml_tensor * KQ_masked = ggml_diag_mask_inf(ctx0, KQ_scaled, n_past);
-            assert_shape_4d(KQ_masked, n_past + N, N, n_head, n_batch);
-
-            // KQ = soft_max(KQ_masked)
-            // KQ_soft_max shape [n_past + N, N, n_head, n_batch]
-            struct ggml_tensor * KQ_soft_max = ggml_soft_max(ctx0, KQ_masked);
-            assert_shape_4d(KQ_soft_max, n_past + N, N, n_head, n_batch);
-
-            // split cached V into n_head heads
-            // kv_self.v shape [n_ctx * n_embd * n_batch * n_layer]
-            // V shape [n_past + N, n_embd/n_head, n_head, n_batch] == kv_self.v[:(n_past+N),:,:,il]
-            struct ggml_tensor * V =
-                ggml_view_4d(ctx0, vc,
-                        n_past + N, n_embd/n_head, n_head, n_batch,
-                        ggml_element_size(vc)*n_ctx,
-                        ggml_element_size(vc)*n_ctx*n_embd/n_head,
-                        ggml_element_size(vc)*n_ctx*n_embd,
-                        il*n_batch*n_ctx*n_embd*ggml_element_size(vc));
-            assert_shape_4d(V, n_past + N, n_embd/n_head, n_head, n_batch);
-
-            // KQV shape [n_embd/n_head, N, n_head, n_batch]
-            struct ggml_tensor * KQV = ggml_mul_mat(ctx0, V, KQ_soft_max);
-            assert_shape_4d(KQV, n_embd/n_head, N, n_head, n_batch);
-
-            // KQV_merged = KQV.permute(0, 2, 1, 3)
-            // KQV_merged shape [n_embd/n_head, n_head, N, n_batch]
-            struct ggml_tensor * KQV_merged = ggml_permute(ctx0, KQV, 0, 2, 1, 3);
-            assert_shape_4d(KQV_merged, n_embd/n_head, n_head, N, n_batch);
-            // KQV_merged shape
-
-            // cur = KQV_merged.contiguous().view(n_embd, N)
-            // cur shape [n_embd,N*n_batch,1,1]
-            cur = ggml_reshape_2d(ctx0, ggml_cont(ctx0, KQV_merged), n_embd, N*n_batch);
-            assert_shape_2d(cur, n_embd, N*n_batch);
-            // cur = ggml_cpy(ctx0,
-            //         KQV_merged,
-            //         ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd, N));
-
-            // projection (no bias)
-            // cur shape [n_embd,N*n_batch,1,1]
-            cur = ggml_mul_mat(ctx0,
-                    model->layers[il].wo,
-                    cur);
-            assert_shape_2d(cur, n_embd, N*n_batch);
-        }
-
-        // lctx.use_buf(ctx0, 1);
-
-        // inpFF shape [n_embd,N*n_batch,1,1]
-        struct ggml_tensor * inpFF = ggml_add(ctx0, cur, inpSA);
-        assert_shape_2d(inpFF, n_embd, N*n_batch);
-
-        // feed-forward network
-        {
-            // norm
-            {
-                // cur shape [n_embd,N*n_batch,1,1]
-                cur = ggml_rms_norm(ctx0, inpFF, rms_norm_eps);
-                assert_shape_2d(cur, n_embd, N*n_batch);
-
-                // cur = ffn_norm*cur
-                // cur shape [n_embd,N*n_batch,1,1]
-                cur = ggml_mul(ctx0,
-                        ggml_repeat(ctx0, model->layers[il].ffn_norm, cur),
-                        cur);
-                assert_shape_2d(cur, n_embd, N*n_batch);
-            }
-
-            // tmp shape [n_ff,N*n_batch,1,1]
-            struct ggml_tensor * tmp = ggml_mul_mat(ctx0,
-                    model->layers[il].w3,
-                    cur);
-            assert_shape_2d(tmp, n_ff, N*n_batch);
-
-            // cur shape [n_ff,N*n_batch,1,1]
-            cur = ggml_mul_mat(ctx0,
-                    model->layers[il].w1,
-                    cur);
-            assert_shape_2d(cur, n_ff, N*n_batch);
-
-            // SILU activation
-            // cur shape [n_ff,N*n_batch,1,1]
-            cur = ggml_silu(ctx0, cur);
-            assert_shape_2d(cur, n_ff, N*n_batch);
-
-            // cur shape [n_ff,N*n_batch,1,1]
-            cur = ggml_mul(ctx0, cur, tmp);
-            assert_shape_2d(cur, n_ff, N*n_batch);
-
-            // cur shape [n_embd,N*n_batch,1,1]
-            cur = ggml_mul_mat(ctx0,
-                    model->layers[il].w2,
-                    cur);
-            assert_shape_2d(cur, n_embd, N*n_batch);
-        }
-
-        // cur shape [n_embd,N*n_batch,1,1]
-        cur = ggml_add(ctx0, cur, inpFF);
-        assert_shape_2d(cur, n_embd, N*n_batch);
-
-        // input for next layer
-        // inpL shape [n_embd,N*n_batch,1,1]
-        inpL = cur;
-        assert_shape_2d(inpL, n_embd, N*n_batch);
-    }
-
-    // norm
-    {
-
-        // inpL shape [n_embd,N*n_batch,1,1]
-        inpL = ggml_rms_norm(ctx0, inpL, rms_norm_eps);
-        assert_shape_2d(inpL, n_embd, N*n_batch);
-
-        // inpL = norm*inpL
-        // inpL shape [n_embd,N*n_batch,1,1]
-        inpL = ggml_mul(ctx0,
-                    ggml_repeat(ctx0, model->norm, inpL),
-                    inpL);
-
-        assert_shape_2d(inpL, n_embd, N*n_batch);
-
-        //embeddings = inpL;
-    }
-
-    // lm_head
-    // inpL shape [n_vocab,N*n_batch,1,1]
-    inpL = ggml_mul_mat(ctx0, model->output, inpL);
-    assert_shape_2d(inpL, n_vocab, N*n_batch);
-
-    {
-        // inpL shape [n_vocab,N,n_batch,1]
-        inpL = ggml_reshape_3d(ctx0,
-                        inpL,
-                        n_vocab, N, n_batch);
-        assert_shape_3d(inpL, n_vocab, N, n_batch);
-    }
+    
 
     // run the computation
     ggml_build_forward_expand(gf, inpL);
 
     return inpL;
 }
+
+struct ggml_cgraph* build_train_graph_batch(struct mnist_vae_model * model, 
+                                            struct ggml_tensor* z, 
+                                            struct ggml_tensor* z0,
+                                            int32_t n_batch) {
+        // since we are using ggml-alloc, this buffer only needs enough space to hold the ggml_tensor and ggml_cgraph structs, but not the tensor data
+        static size_t buf_size = ggml_tensor_overhead() * 1024 + ggml_graph_overhead();
+        static std::vector<uint8_t> buf(buf_size);
+
+        const auto & hparams = model->hparams;
+
+
+        struct ggml_init_params params = {
+            /*.mem_size   =*/buf_size,
+            /*.mem_buffer =*/buf.data(),
+            /*.no_alloc   =*/true,  // the tensors will be allocated later by ggml_allocr_alloc_graph()
+        };
+        // LOG_DEBUG("mem_size %u ", params.mem_size);
+
+        struct ggml_context* ctx0 = ggml_init(params);
+
+        struct ggml_cgraph* gf = ggml_new_graph(ctx0);
+
+        struct ggml_tensor* z_ = NULL;
+        struct ggml_tensor* z0_ = NULL;
+
+
+        // it's performing a compute, check if backend isn't cpu
+        if (!ggml_backend_is_cpu(model->backend)) {
+            // pass input tensors to gpu memory
+            z_ = ggml_dup_tensor(ctx0, z);
+            ggml_allocr_alloc(model->compute_allocr, z_);
+
+            z0_ = ggml_dup_tensor(ctx0, z0);
+            ggml_allocr_alloc(model->compute_allocr, z0_);
+
+            // pass data to device backend
+            if (!ggml_allocr_is_measure(model->compute_allocr)) {
+                ggml_backend_tensor_set(z_, z->data, 0, ggml_nbytes(z));
+                ggml_backend_tensor_set(z0_, z0->data, 0, ggml_nbytes(z0));
+            }
+        } else {
+            z_ = z;
+            z0_ = z0;
+        }
+
+        struct ggml_tensor* out =  train_forward_batch(model, ctx0, gf, z_, z0_, n_batch);
+
+        ggml_build_forward_expand(gf, out);
+        ggml_free(ctx0);
+
+        return gf;
+    }
+
+
 
 
 
