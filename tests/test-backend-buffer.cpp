@@ -41,6 +41,9 @@ static void test_buffer(ggml_backend_t backend, ggml_backend_buffer_type_t buft)
     GGML_ASSERT(ggml_backend_buffer_get_alloc_size(buffer, tensor) >= n * sizeof(float));
 
     ggml_tallocr_t allocr = ggml_tallocr_new_from_buffer(buffer);
+
+    GGML_ASSERT(tensor->data == NULL);
+
     ggml_tallocr_alloc(allocr, tensor);
 
     GGML_ASSERT(tensor->data != NULL);

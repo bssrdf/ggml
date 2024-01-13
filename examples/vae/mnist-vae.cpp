@@ -10,9 +10,20 @@
 #include <random>
 #include <vector>
 
+#include <stdlib.h>
+
+
 #if defined(_MSC_VER)
 #pragma warning(disable: 4244 4267) // possible loss of data
 #endif
+
+
+#ifdef GGML_USE_CUBLAS
+#include "ggml-cuda.h"
+#endif
+
+typedef unsigned char uint8;
+typedef uint8 image[28][28];
 
 constexpr float rms_norm_eps = 5e-6f;
 
@@ -23,7 +34,6 @@ static void ggml_graph_compute_helper(std::vector<uint8_t> & buf, ggml_cgraph * 
         buf.resize(plan.work_size);
         plan.work_data = buf.data();
     }
-
     ggml_graph_compute(graph, &plan);
 }
 
@@ -73,15 +83,23 @@ static struct ggml_tensor * randomize_tensor(
 // default hparams
 struct mnist_hparams {
     int32_t n_input   = 784;
-    int32_t n_hidden  = 500;
-    int32_t n_latent  = 30;
+    // int32_t n_latent  = 30;
+    // int32_t n_batch   = 100;
+    // int32_t enc1_out  = 1000;
+    // int32_t enc2_out  = 500;
+    // int32_t enc3_out  = 250;
+    // int32_t dec4_out  = 250;
+    // int32_t dec3_out  = 500;
+    // int32_t dec2_out  = 1000;
+
+    int32_t n_latent  = 5;
     int32_t n_batch   = 100;
-    int32_t enc1_out  = 1000;
-    int32_t enc2_out  = 500;
-    int32_t enc3_out  = 250;
-    int32_t dec4_out  = 250;
-    int32_t dec3_out  = 500;
-    int32_t dec2_out  = 1000;
+    int32_t enc1_out  = 100;
+    int32_t enc2_out  = 50;
+    int32_t enc3_out  = 25;
+    int32_t dec4_out  = 25;
+    int32_t dec3_out  = 50;
+    int32_t dec2_out  = 100;
      
 
 };
@@ -185,7 +203,6 @@ static void init_model(struct mnist_vae_model * model) {
     
 }
 
-
 static void set_param_model(struct mnist_vae_model * model) {
     const auto& hparams = model->hparams;
 
@@ -216,130 +233,64 @@ static void set_param_model(struct mnist_vae_model * model) {
     
 }
 
-
-
-static void randomize_model(struct mnist_vae_model * model, int seed, float mean, float std, float min, float max) {
-    const auto & hparams = model->hparams;
-    
-
-    struct random_normal_distribution * rnd = init_random_normal_distribution(seed, mean, std, min, max);
-
-    randomize_tensor_normal(model->encode1_weight, rnd);
-    randomize_tensor_normal(model->encode2_weight, rnd);
-    randomize_tensor_normal(model->encode3_weight, rnd);
-    randomize_tensor_normal(model->decode1_weight, rnd);
-    randomize_tensor_normal(model->decode2_weight, rnd);
-    randomize_tensor_normal(model->decode3_weight, rnd);
-    randomize_tensor_normal(model->decode4_weight, rnd);
-    randomize_tensor_normal(model->logsd_weight, rnd);
-    randomize_tensor_normal(model->mu_weight, rnd);
-    free_random_normal_distribution(rnd);
-}
-
-
-
-static struct ggml_tensor * train_forward_batch(
-    struct mnist_vae_model   * model,
-    struct ggml_context      * ctx0,
-    struct ggml_cgraph       * gf,
-    struct ggml_tensor       * input,
-    struct ggml_tensor       * noise,    
-    const  int32_t             n_batch
-) {
-    // const int N = n_input;
-
-    
-    // struct ggml_tensor * tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, N*n_batch);
-    
-    
-
-    struct ggml_tensor* h = ggml_add(ctx0, ggml_mul_mat(ctx0, model->encode1_weight, input), 
-                                           model->encode1_bias); 
-    h = ggml_relu_inplace(ctx0, h); 
-    h = ggml_add(ctx0, ggml_mul_mat(ctx0, model->encode2_weight, h), model->encode2_bias);
-    h = ggml_relu_inplace(ctx0, h); 
-    h = ggml_add(ctx0, ggml_mul_mat(ctx0, model->encode3_weight, h), model->encode3_bias);
-    h = ggml_relu_inplace(ctx0, h); 
-    struct ggml_tensor* h1 = ggml_add(ctx0, ggml_mul_mat(ctx0, model->mu_weight, h), model->mu_bias);
-    struct ggml_tensor* logsd = ggml_add(ctx0, ggml_mul_mat(ctx0, model->logsd_weight, h), model->logsd_bias);
-
-    h1 = ggml_sqr_inplace(ctx0, h1);
-
-    struct ggml_tensor* sd = ggml_elu() 
-
-
-
-    
-
-    // run the computation
-    ggml_build_forward_expand(gf, inpL);
-
-    return inpL;
-}
-
-struct ggml_cgraph* build_train_graph_batch(struct mnist_vae_model * model, 
-                                            struct ggml_tensor* z, 
-                                            struct ggml_tensor* z0,
-                                            int32_t n_batch) {
-        // since we are using ggml-alloc, this buffer only needs enough space to hold the ggml_tensor and ggml_cgraph structs, but not the tensor data
-        static size_t buf_size = ggml_tensor_overhead() * 1024 + ggml_graph_overhead();
-        static std::vector<uint8_t> buf(buf_size);
-
-        const auto & hparams = model->hparams;
-
-
+static void zero_bias_model(struct mnist_vae_model * model){
+    if(ggml_backend_is_cpu(model->backend)) {
+        ggml_set_zero(model->decode1_bias);
+        ggml_set_zero(model->decode2_bias);
+        ggml_set_zero(model->decode3_bias);
+        ggml_set_zero(model->decode4_bias);
+        ggml_set_zero(model->encode1_bias);
+        ggml_set_zero(model->encode2_bias);
+        ggml_set_zero(model->encode3_bias);
+        ggml_set_zero(model->mu_bias);
+        ggml_set_zero(model->logsd_bias);
+    }
+    else{
         struct ggml_init_params params = {
-            /*.mem_size   =*/buf_size,
-            /*.mem_buffer =*/buf.data(),
-            /*.no_alloc   =*/true,  // the tensors will be allocated later by ggml_allocr_alloc_graph()
-        };
-        // LOG_DEBUG("mem_size %u ", params.mem_size);
+                    .mem_size   = 128*1024*1024,
+                    .mem_buffer = NULL,
+                    .no_alloc   = false,
+                    };
 
-        struct ggml_context* ctx0 = ggml_init(params);
-
-        struct ggml_cgraph* gf = ggml_new_graph(ctx0);
-
-        struct ggml_tensor* z_ = NULL;
-        struct ggml_tensor* z0_ = NULL;
-
-
-        // it's performing a compute, check if backend isn't cpu
-        if (!ggml_backend_is_cpu(model->backend)) {
-            // pass input tensors to gpu memory
-            z_ = ggml_dup_tensor(ctx0, z);
-            ggml_allocr_alloc(model->compute_allocr, z_);
-
-            z0_ = ggml_dup_tensor(ctx0, z0);
-            ggml_allocr_alloc(model->compute_allocr, z0_);
-
-            // pass data to device backend
-            if (!ggml_allocr_is_measure(model->compute_allocr)) {
-                ggml_backend_tensor_set(z_, z->data, 0, ggml_nbytes(z));
-                ggml_backend_tensor_set(z0_, z0->data, 0, ggml_nbytes(z0));
-            }
-        } else {
-            z_ = z;
-            z0_ = z0;
-        }
-
-        struct ggml_tensor* out =  train_forward_batch(model, ctx0, gf, z_, z0_, n_batch);
-
-        ggml_build_forward_expand(gf, out);
+        struct ggml_context * ctx0 = ggml_init(params);
+        struct ggml_tensor * rn = NULL;
+        // fprintf(stderr, "%s: before dup model tensor \n", __func__); 
+        rn = ggml_dup_tensor(ctx0, model->encode1_bias);
+        rn = ggml_set_zero(rn);
+        ggml_backend_tensor_set(model->encode1_bias, rn->data, 0, ggml_nbytes(model->encode1_bias));
+        rn = ggml_dup_tensor(ctx0, model->encode2_bias);
+        rn = ggml_set_zero(rn);
+        ggml_backend_tensor_set(model->encode2_bias, rn->data, 0, ggml_nbytes(model->encode2_bias));
+        rn = ggml_dup_tensor(ctx0, model->encode3_bias);
+        rn = ggml_set_zero(rn);
+        ggml_backend_tensor_set(model->encode3_bias, rn->data, 0, ggml_nbytes(model->encode3_bias));
+        rn = ggml_dup_tensor(ctx0, model->decode1_bias);
+        rn = ggml_set_zero(rn);
+        ggml_backend_tensor_set(model->decode1_bias, rn->data, 0, ggml_nbytes(model->decode1_bias));
+        rn = ggml_dup_tensor(ctx0, model->decode2_bias);
+        rn = ggml_set_zero(rn);
+        ggml_backend_tensor_set(model->decode2_bias, rn->data, 0, ggml_nbytes(model->decode2_bias));
+        rn = ggml_dup_tensor(ctx0, model->decode3_bias);
+        rn = ggml_set_zero(rn);
+        ggml_backend_tensor_set(model->decode3_bias, rn->data, 0, ggml_nbytes(model->decode3_bias));
+        rn = ggml_dup_tensor(ctx0, model->decode4_bias);
+        rn = ggml_set_zero(rn);
+        ggml_backend_tensor_set(model->decode4_bias, rn->data, 0, ggml_nbytes(model->decode4_bias));
+        rn = ggml_dup_tensor(ctx0, model->mu_bias);
+        rn = ggml_set_zero(rn);
+        ggml_backend_tensor_set(model->mu_bias, rn->data, 0, ggml_nbytes(model->mu_bias));
+        rn = ggml_dup_tensor(ctx0, model->logsd_bias);
+        rn = ggml_set_zero(rn);
+        ggml_backend_tensor_set(model->logsd_bias, rn->data, 0, ggml_nbytes(model->logsd_bias));
         ggml_free(ctx0);
-
-        return gf;
     }
 
-
-
-
-
-
+}
 
 static void print_row(struct ggml_tensor * probs, int i) {
     for (int k = 0; k < probs->ne[0]; ++k) {
         float p = ggml_get_f32_1d(probs, i*probs->ne[0] + k);
-        printf(" %.2f", p);
+        printf(" %.6f", p);
     }
     printf("\n");
 }
@@ -349,56 +300,253 @@ static void print_matrix(struct ggml_tensor * probs) {
     for (int i = 0; i < probs->ne[1]; ++i) {
         for (int k = 0; k < probs->ne[0]; ++k) {
             float p = ggml_get_f32_1d(probs, i*probs->ne[0] + k);
-            printf(" %.2f", p);
+            printf(" %.6f", p);
         }
         printf("\n");
     }
 }
 
-static void print_token(int token, int n_vocab) {
-    for (int k = 0; k < token; ++k) {
-        printf(" ");
+static void load_data(ggml_backend_t backend, struct ggml_tensor * dst, struct ggml_tensor * src){
+    if(ggml_backend_is_cpu(backend)) {
+        memcpy(dst->data, src->data, ggml_nbytes(dst));
+    } else {
+        ggml_backend_tensor_set(dst, src->data, 0, ggml_nbytes(dst));
     }
-    printf("X");
-    for (int k = token+1; k < n_vocab; ++k) {
-        printf(" ");
-    }
-    printf("\n");
+
 }
 
-static void print_tokens(struct ggml_tensor * tokens, int n_vocab) {
-    for (int i=0; i<tokens->ne[0]; ++i) {
-        int token = ggml_get_i32_1d(tokens, i);
-        print_token(token, n_vocab);
+static void randomize_model(struct mnist_vae_model * model, int seed, float mean, float std, float min, float max) {
+    const auto & hparams = model->hparams;
+    
+    struct ggml_init_params params = {
+        .mem_size   = 128*1024*1024,
+        .mem_buffer = NULL,
+        .no_alloc   = false,
+    };
+
+    struct ggml_context * ctx0 = ggml_init(params);
+
+    struct random_normal_distribution * rnd = init_random_normal_distribution(seed, mean, std, min, max);
+
+    struct ggml_tensor * rn = NULL;
+    fprintf(stderr, "%s: before dup model tensor \n", __func__); 
+    rn = ggml_dup_tensor(ctx0, model->encode1_weight);
+    fprintf(stderr, "%s: after dup model tensor \n", __func__); 
+    int ndim = ggml_n_dims(rn);
+    if (rn->backend == GGML_BACKEND_GPU) 
+        fprintf(stderr, "%s: rn is  on GPU \n", __func__); 
+    else
+        fprintf(stderr, "%s: rn is  on CPU with %d dims\n", __func__, ndim); 
+    ndim = ggml_n_dims(model->encode1_weight);
+    if (model->encode1_weight->backend == GGML_BACKEND_GPU) 
+        fprintf(stderr, "%s: model weight is  on GPU \n", __func__); 
+    else{
+        int64_t *ne = model->encode1_weight->ne;
+        fprintf(stderr, "%s: model weight is  on CPU with (%d, %d, %d, %d) dims \n", 
+             __func__, ne[0], ne[1], ne[2], ne[3]);     
     }
+    rn = randomize_tensor_normal(rn, rnd);
+    // print_matrix(rn);
+    fprintf(stderr, "%s: after randmize tensor \n", __func__); 
+    load_data(model->backend, model->encode1_weight, rn);
+    fprintf(stderr, "%s: after load into model \n", __func__); 
+
+    rn = ggml_dup_tensor(ctx0, model->encode2_weight);
+    randomize_tensor_normal(rn, rnd);
+    load_data(model->backend, model->encode2_weight, rn);
+
+    rn = ggml_dup_tensor(ctx0, model->encode3_weight);
+    randomize_tensor_normal(rn, rnd);
+    load_data(model->backend, model->encode3_weight, rn);
+
+    rn = ggml_dup_tensor(ctx0, model->decode1_weight);
+    randomize_tensor_normal(rn, rnd);
+    load_data(model->backend, model->decode1_weight, rn);
+
+    rn = ggml_dup_tensor(ctx0, model->decode2_weight);
+    randomize_tensor_normal(rn, rnd);
+    load_data(model->backend, model->decode2_weight, rn);
+
+    rn = ggml_dup_tensor(ctx0, model->decode3_weight);
+    randomize_tensor_normal(rn, rnd);
+    load_data(model->backend, model->decode3_weight, rn);
+
+    rn = ggml_dup_tensor(ctx0, model->decode4_weight);
+    randomize_tensor_normal(rn, rnd);
+    load_data(model->backend, model->decode4_weight, rn);
+
+    rn = ggml_dup_tensor(ctx0, model->logsd_weight);
+    randomize_tensor_normal(rn, rnd);
+    load_data(model->backend, model->logsd_weight, rn);
+
+    rn = ggml_dup_tensor(ctx0, model->mu_weight);
+    randomize_tensor_normal(rn, rnd);
+    load_data(model->backend, model->mu_weight, rn);
+
+
+
+    // randomize_tensor_normal(model->encode1_weight, rnd);
+
+
+    // randomize_tensor_normal(model->encode2_weight, rnd);
+    // randomize_tensor_normal(model->encode3_weight, rnd);
+    // randomize_tensor_normal(model->decode1_weight, rnd);
+    // randomize_tensor_normal(model->decode2_weight, rnd);
+    // randomize_tensor_normal(model->decode3_weight, rnd);
+    // randomize_tensor_normal(model->decode4_weight, rnd);
+    // randomize_tensor_normal(model->logsd_weight, rnd);
+    // randomize_tensor_normal(model->mu_weight, rnd);
+    free_random_normal_distribution(rnd);
+
+    // ggml_print_objects(ctx0);
+
+    ggml_free(ctx0);
 }
 
 
 
-static void get_example_targets_batch(
-    struct ggml_context * ctx, int example_id, struct ggml_tensor * tokens_input, struct ggml_tensor * targets
+static void train_forward_batch(
+    struct mnist_vae_model   * model,
+    struct ggml_context      * ctx0,
+    struct ggml_cgraph       * gf,
+    struct ggml_tensor       * input,
+    struct ggml_tensor       * noise,    
+    const  int32_t             n_batch
 ) {
-    GGML_ASSERT(ggml_is_matrix(tokens_input));
-    GGML_ASSERT(ggml_is_3d(targets));
-    int n_tokens = tokens_input->ne[0];
-    int n_batch  = tokens_input->ne[1];
-    GGML_ASSERT(n_tokens == targets->ne[1]);
-    GGML_ASSERT(n_batch  == targets->ne[2]);
 
-    for (int k=0; k<n_batch; ++k) {
-        struct ggml_tensor * tokens_input_k = ggml_view_1d(ctx,
-                                                tokens_input,
-                                                tokens_input->ne[0],
-                                                k*tokens_input->nb[1]);
-        struct ggml_tensor * targets_k    = ggml_view_2d(ctx,
-                                                targets,
-                                                targets->ne[0],
-                                                targets->ne[1],
-                                                targets->nb[1],
-                                                k*targets->nb[2]);
+    ggml_set_name(input, "input");
+    struct ggml_tensor* h = ggml_mul_mat(ctx0, model->encode1_weight, ggml_cont(ctx0, input)); 
+    ggml_set_name(h, "encode1_w");
+
+    h = ggml_add(ctx0, h, ggml_repeat(ctx0, model->encode1_bias, h)); 
+    ggml_set_name(h, "encode1_b");
+    
+    h = ggml_relu_inplace(ctx0, h); 
+    ggml_set_name(h, "encode1_relu");
+    // fprintf(stderr, "%s: done with first build\n", __func__);       
+
+    // fprintf(stderr, "%s: build 2 %d\n", __func__, __LINE__);       
+    h = ggml_mul_mat(ctx0, model->encode2_weight, h); 
+    h = ggml_add(ctx0, h, ggml_repeat(ctx0, model->encode2_bias, h)); 
+    ggml_set_name(h, "encode2_b");
+    // h = ggml_add(ctx0, ggml_mul_mat(ctx0, model->encode2_weight, h), ggml_repeat(ctx0, model->encode2_bias, );
+    h = ggml_relu_inplace(ctx0, h); 
+    // fprintf(stderr, "%s: build 3 %d\n", __func__, __LINE__);       
+    h = ggml_mul_mat(ctx0, model->encode3_weight, h); 
+    h = ggml_add(ctx0, h, ggml_repeat(ctx0, model->encode3_bias, h)); 
+    ggml_set_name(h, "encode3_b");
+    // h = ggml_add(ctx0, ggml_mul_mat(ctx0, model->encode3_weight, h), model->encode3_bias);
+    h = ggml_relu_inplace(ctx0, h); 
         
-    }
+
+    struct ggml_tensor* h1 = ggml_mul_mat(ctx0, model->mu_weight, h);
+    h1 = ggml_add(ctx0, h1, ggml_repeat(ctx0, model->mu_bias, h1)); 
+    struct ggml_tensor* mu = h1;
+
+    struct ggml_tensor* logsd =  ggml_mul_mat(ctx0, model->logsd_weight, h);
+    logsd = ggml_add(ctx0, logsd, ggml_repeat(ctx0, model->logsd_bias, logsd)); 
+    ggml_set_name(logsd, "logsd");
+
+    h1 = ggml_sqr_inplace(ctx0, h1);
+    ggml_set_name(h1, "meansq");
+    struct ggml_tensor* sd = ggml_exp(ctx0, logsd);
+    ggml_set_name(sd, "sd");
+    struct ggml_tensor* var = ggml_sqr(ctx0, sd);
+    ggml_set_name(var, "var");
+    struct ggml_tensor* h3 = ggml_add(ctx0, ggml_scale_inplace(ctx0, h1, 0.5f), 
+                                            ggml_scale_inplace(ctx0, var, 0.5f));
+    h3 = ggml_sub(ctx0, h3, logsd);
+    ggml_set_name(h3, "kldiv_plus_half");
+    h3 = ggml_add1_inplace(ctx0, h3, ggml_new_f32(ctx0, -0.5f));
+    ggml_set_name(h3, "kldiv");    
+
+    h3 = ggml_mul(ctx0, noise, sd);
+    ggml_set_name(h3, "sdnoise");
+    h3 = ggml_add(ctx0, h3, mu);
+    ggml_set_name(h3, "sample");
+
+    h = ggml_mul_mat(ctx0, model->decode4_weight, h3); 
+    h = ggml_add(ctx0, h, ggml_repeat(ctx0, model->decode4_bias, h)); 
+    h = ggml_relu_inplace(ctx0, h);
+    h = ggml_mul_mat(ctx0, model->decode3_weight, h); 
+    h = ggml_add(ctx0, h, ggml_repeat(ctx0, model->decode3_bias, h)); 
+    // h = ggml_add(ctx0, ggml_mul_mat(ctx0, model->decode3_weight, h), model->decode3_bias);
+    h = ggml_relu_inplace(ctx0, h);
+    h = ggml_mul_mat(ctx0, model->decode2_weight, h); 
+    h = ggml_add(ctx0, h, ggml_repeat(ctx0, model->decode2_bias, h)); 
+    // h = ggml_add(ctx0, ggml_mul_mat(ctx0, model->decode2_weight, h), model->decode2_bias);
+    h = ggml_relu_inplace(ctx0, h);
+    h = ggml_mul_mat(ctx0, model->decode1_weight, h); 
+    h = ggml_add(ctx0, h, ggml_repeat(ctx0, model->decode1_bias, h)); 
+    // h = ggml_add(ctx0, ggml_mul_mat(ctx0, model->decode1_weight, h), model->decode1_bias);
+       
+
+    // run the computation
+    // ggml_build_forward_expand(gf, inpL);
+    // *l2 = h; // 2nd loss is sigmoid cross entropy
+    ggml_set_name(h, "for_cren");
+    return;
 }
+
+struct ggml_cgraph* build_train_graph_batch(struct mnist_vae_model * model, 
+                                            struct ggml_tensor* z, 
+                                            struct ggml_tensor* z0,
+                                            int32_t n_batch
+                                           ) {
+    // since we are using ggml-alloc, this buffer only needs enough space to hold the ggml_tensor and ggml_cgraph structs, but not the tensor data
+    static size_t buf_size = ggml_tensor_overhead() * 1024 + ggml_graph_overhead();
+    static std::vector<uint8_t> buf(buf_size);
+
+    const auto & hparams = model->hparams;
+
+
+    struct ggml_init_params params = {
+        /*.mem_size   =*/buf_size,
+        /*.mem_buffer =*/buf.data(),
+        /*.no_alloc   =*/true,  // the tensors will be allocated later by ggml_allocr_alloc_graph()
+    };
+    // LOG_DEBUG("mem_size %u ", params.mem_size);
+
+    // struct ggml_context* ctx0 = ggml_init(params);
+
+    struct ggml_context* ctx0 = model->ctx;
+
+    struct ggml_cgraph* gf = ggml_new_graph(ctx0);
+
+    struct ggml_tensor* z_ = NULL;
+    struct ggml_tensor* z0_ = NULL;
+
+
+    // it's performing a compute, check if backend isn't cpu
+    if (!ggml_backend_is_cpu(model->backend)) {
+        // pass input tensors to gpu memory
+        z_ = ggml_dup_tensor(ctx0, z);
+        ggml_allocr_alloc(model->compute_allocr, z_);
+
+        z0_ = ggml_dup_tensor(ctx0, z0);
+        ggml_allocr_alloc(model->compute_allocr, z0_);
+
+        // pass data to device backend
+        if (!ggml_allocr_is_measure(model->compute_allocr)) {
+            ggml_backend_tensor_set(z_, z->data, 0, ggml_nbytes(z));
+            ggml_backend_tensor_set(z0_, z0->data, 0, ggml_nbytes(z0));
+        }
+    } else {
+        z_ = z;
+        z0_ = z0;
+    }
+
+    train_forward_batch(model, ctx0, gf, z_, z0_, n_batch);
+
+    // ggml_build_forward_expand(gf, l1);
+    // ggml_build_forward_expand(gf, l2);
+
+
+    // ggml_free(ctx0);
+
+    return gf;
+}
+
 
 static void lshift_examples(struct ggml_tensor * tokens_input, struct ggml_tensor * targets, int n_shift) {
     int n_tokens = tokens_input->ne[0];
@@ -434,16 +582,30 @@ static struct ggml_tensor * cross_entropy_loss(
                                 ggml_new_f32(ctx, eps)))))));
 }
 
-int main(int argc, char ** argv) {
-    if (argc < 1) {
-        fprintf(stderr, "usage: %s\n", argv[0]);
+#define COUNT_TRAIN 60000ll
 
+int read_data(uint8 *data, const unsigned long count)
+{
+    FILE *fp_image = fopen("models/mnist/train-images-idx3-ubyte", "rb");
+    if (!fp_image) return 1;
+    if(fseek(fp_image, 16, SEEK_SET) != 0)
+       return 1;
+    size_t r = fread(data, 1, 28ll*28ll*count, fp_image);     
+    if (ferror(fp_image)){
+        fprintf(stderr, "%s: error afetr read \n", __func__);       
         return 1;
     }
+    fclose(fp_image);
+    return 0;
+}
+
+
+int main(int argc, char ** argv) {
+    
 
     struct mnist_vae_model model;    
 
-    bool use_gpu = true;
+    bool use_gpu = false;
     
     // initialize the backend
 #ifdef GGML_USE_CUBLAS
@@ -473,167 +635,217 @@ int main(int argc, char ** argv) {
     model.ctx = ggml_init(lcparams);
     if (!model.ctx) {
         fprintf(stderr, "ggml_init() failed");
-        exit(0);
+        exit(1);
     }
     printf("init model\n");
 
     model.params_buffer = ggml_backend_alloc_buffer(model.backend, model.params_buffer_size);
-
-
     
-
-    
-    
+    printf("alloc params_buffer\n");
     
     init_model(&model);
-    
 
-    int n_batch = 8;
+    printf(" model inited\n");
     
-    // struct ggml_allocr * compute_allocr = NULL;
-    if(model.compute_buffer_size == 0)
+    // if(model.compute_buffer_size == 0)
+
+    // {
+    //     model.compute_allocr = ggml_allocr_new_measure_from_backend(model.backend);
+
+    //     // create the worst case graph for memory usage estimation
+    //     struct ggml_tensor * z = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, model.hparams.n_input);
+    //     struct ggml_cgraph * gf = build_graph(model, z);
+
+    //     // compute the required memory
+    //     model.compute_buffer_size = ggml_allocr_alloc_graph(model.compute_allocr, gf) + 1024 * 1024;
+    //     // recreate the allocator with the required memory
+    //     ggml_allocr_free(model.compute_allocr);
+
+    //     model.compute_buffer = ggml_backend_alloc_buffer(model.backend, model.compute_buffer_size);
+    //     model.compute_allocr = ggml_allocr_new_from_buffer(model.compute_buffer);
+
+    //     fprintf(stderr, "%s: compute buffer size: %.2f MB\n", __func__, model.compute_buffer_size/1024.0/1024.0);
+    // }
+
     // allocate the compute buffer
-    {
-        model.compute_allocr = ggml_allocr_new_measure_from_backend(model.backend);
-
-        // create the worst case graph for memory usage estimation
-        struct ggml_tensor * z = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, model.hparams.n_input);
-        struct ggml_cgraph * gf = build_graph(model, z);
-
-        // compute the required memory
-        model.compute_buffer_size = ggml_allocr_alloc_graph(model.compute_allocr, gf) + 1024 * 1024;
-        // recreate the allocator with the required memory
-        ggml_allocr_free(model.compute_allocr);
-
-        model.compute_buffer = ggml_backend_alloc_buffer(model.backend, model.compute_buffer_size);
-        model.compute_allocr = ggml_allocr_new_from_buffer(model.compute_buffer);
-
-        fprintf(stderr, "%s: compute buffer size: %.2f MB\n", __func__, model.compute_buffer_size/1024.0/1024.0);
-    }
-
-    
+    model.compute_buffer_size = 2*1024ll*1024ll*1024ll; // 2 GB
+    model.compute_buffer = ggml_backend_alloc_buffer(model.backend, model.compute_buffer_size);
+    model.compute_allocr = ggml_allocr_new_from_buffer(model.compute_buffer);
 
     set_param_model(&model);
+    printf(" mdoel params set \n");
 
-    randomize_model(&model, 1337, 0.0f, 1.0f, -1.0f, +1.0f);
+    
 
 
-    int n_examples = 256;
+    int n_batch = 100;
    
+    uint8 *train_data = (uint8 *)malloc(COUNT_TRAIN * 28 * 28 * sizeof(uint8));
+
+    if(read_data(train_data, COUNT_TRAIN) > 0){
+        fprintf(stderr, "Error in read in Mnist training data! \n");
+        exit(1);
+    }
+
+    uint8_t *buf = train_data;
+    std::vector<float> digit;
+
+    digit.resize(n_batch*28*28);
+
+    struct ggml_init_params tmparms = {
+        .mem_size   = 128*1024*1024,
+        .mem_buffer = NULL,
+        .no_alloc   = false,
+    };
+
+    struct ggml_context * ctx0 = ggml_init(tmparms);
+
+    int32_t num_batches = COUNT_TRAIN / n_batch;
+    for (int ib = 0; ib < n_batch; ib++) 
+        for (int row = 0; row < 28; row++) 
+            for (int col = 0; col < 28; col++) 
+                digit[ib*28*28 + row*28 + col] = ((float)buf[ib*28*28 + row*28 + col])/255.f;
+    struct ggml_tensor * input_batch = ggml_new_tensor_2d(model.ctx, GGML_TYPE_F32, model.hparams.n_input, n_batch);
+    struct ggml_tensor * noise_batch = ggml_new_tensor_2d(model.ctx, GGML_TYPE_F32, model.hparams.n_latent, n_batch);
+    
+
+    
+    
+    // ggml_allocr_reset(model.compute_allocr);
+    fprintf(stderr, "%s: to build first graph \n", __func__);   
+    struct ggml_cgraph* gf = build_train_graph_batch(&model, input_batch, noise_batch, n_batch);
+    // ggml_allocr_alloc_graph(model.compute_allocr, gf); 
+    model.compute_buffer = ggml_backend_alloc_ctx_tensors(model.ctx, model.backend);
+    memcpy(input_batch->data, digit.data(), ggml_nbytes(input_batch)); 
+    noise_batch = ggml_set_f32(noise_batch, 0.f);
+    model.compute_allocr = ggml_allocr_new_from_buffer(model.compute_buffer);
+
+    // ggml_print_objects(model.ctx);
+
+    randomize_model(&model, 1337, 0.0f, 1.f, -1.0f, +1.0f);
+    // struct ggml_tensor * h = model.encode1_weight;
+    // int64_t *ne = h->ne;
+    // printf("h is %s \n", h->name);
+    // printf("(%ld, %ld, %ld, %ld) \n", ne[0], ne[1], ne[2], ne[3]);
+    
+    printf("modle initialzed with random numbers \n");
+    zero_bias_model(&model);
+    // h = model.encode1_weight;
+    // ne = h->ne;
+    // printf("h is %s \n", h->name);
+    // printf("(%ld, %ld, %ld, %ld) \n", ne[0], ne[1], ne[2], ne[3]);
+    // printf("after zero bias \n"); 
+
 
     std::vector<uint8_t> work_buffer;
 
-    for (int ex=0; ex<n_examples; ++ex) {
-        struct ggml_init_params params = {
-            /*.mem_size   =*/ compute_size,
-            /*.mem_buffer =*/ compute_addr,
-            /*.no_alloc   =*/ false,
-        };
+    
+    
+    struct ggml_tensor * loss_kl = ggml_get_tensor(model.ctx, "kldiv");
 
-        struct ggml_context * ctx0 = ggml_init(params);
+    ggml_build_forward_expand(gf, loss_kl);
+    // h = model.encode1_weight;
+    // ne = h->ne;
+    // printf("h is %s \n", h->name);
+    // printf("(%ld, %ld, %ld, %ld) \n", ne[0], ne[1], ne[2], ne[3]);
 
-        struct ggml_tensor * after_opt_best_samples  = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, n_tokens, n_batch);
-        struct ggml_tensor * after_opt_probs         = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, n_vocab, n_tokens, n_batch);
-        struct ggml_tensor * tokens_input            = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, n_tokens, n_batch);
-        struct ggml_tensor * targets                 = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, n_vocab, n_tokens, n_batch);
+    // h = ggml_get_tensor(model.ctx, "input");
+    // ne = h->ne;
+    // printf("h is %s \n", h->name);
+    // printf("(%ld, %ld, %ld, %ld) \n", ne[0], ne[1], ne[2], ne[3]);
+    // printf("after forward expand \n");   
 
-        int n_past = 0;
+    // for(int i = 0; i < gf->n_nodes; i++){
+    //     h = gf->nodes[i];
+    //     ne = h->ne;
+    //     printf("%s: (%ld, %ld, %ld, %ld) \n", h->name, ne[0], ne[1], ne[2], ne[3]);
+    // }
+    // for(int i = 0; i < gf->n_leafs; i++){
+    //     h = gf->leafs[i];
+    //     ne = h->ne;
+    //     printf("%s: (%ld, %ld, %ld, %ld) \n", h->name, ne[0], ne[1], ne[2], ne[3]);
+    // }  
 
-        ggml_cgraph gf = {};
+    // ggml_graph_compute_helper(work_buffer, gf, /*n_threads*/ 1);
+    ggml_backend_graph_compute(model.backend, gf);
 
-        get_example_targets_batch(ctx0, 64*ex+0,  tokens_input, targets);
+    ggml_free(ctx0);
 
-        struct ggml_tensor * logits = forward_batch(&model, &kv_self, ctx0, &gf, tokens_input, n_tokens, n_past, n_batch);
-        // struct ggml_tensor * e = cross_entropy_loss(ctx0, targets, logits);
-        struct ggml_tensor * e = square_error_loss(ctx0, targets, logits);
 
-        ggml_build_forward_expand(&gf, e);
-        ggml_graph_compute_helper(work_buffer, &gf, /*n_threads*/ 1);
+    for (int ex=0; ex<num_batches; ++ex) {
+        printf(" enter loop %d \n", ex);
+
+        for (int ib = 0; ib < n_batch; ib++) 
+            for (int row = 0; row < 28; row++) 
+                for (int col = 0; col < 28; col++) 
+                    digit[ib*28*28 + row*28 + col] = ((float)buf[ib*28*28 + row*28 + col])/255.f;
+
+        buf += n_batch*28*28;  
+        
+        struct ggml_context * ctx0 = ggml_init(tmparms);
+        
+        memcpy(input_batch->data, digit.data(), ggml_nbytes(input_batch)); 
+        printf("copy to input \n", ex);
+        
+        struct ggml_cgraph* gf = build_train_graph_batch(&model, input_batch, noise_batch, n_batch);
+        printf(" after gf build \n");
+        loss_kl = ggml_get_tensor(model.ctx, "kldiv");
+        if (!loss_kl){
+            fprintf(stderr, "%s: kl losss not returned properly \n", __func__);
+            exit(1);
+        }           
+      
+        struct ggml_tensor * e = ggml_sum(model.ctx, loss_kl);
+        struct ggml_tensor * err_kl = ggml_scale(model.ctx, e, 1.f/(float)n_batch);
+        // ggml_allocr_alloc(model.compute_allocr, err_kl); 
+        printf(" after err_kl build \n");
+        ggml_build_forward_expand(gf, err_kl);
+        ggml_allocr_alloc_graph(model.compute_allocr, gf); 
+        ggml_graph_dump_dot(gf, NULL, "vae-1-forward.dot");
+        // ggml_build_forward_expand(gf, loss_sigmoid);
+        // ggml_allocr_alloc_graph(model.compute_allocr, gf); 
+        // ggml_graph_dump_dot(gf, NULL, "vae-2-forward.dot");
+        printf(" compute buffer alloced \n");
+        // ggml_graph_compute_helper(work_buffer, gf, /*n_threads*/ 1);
+        ggml_backend_graph_compute(model.backend, gf);
+        printf(" after compute \n");
+        // struct ggml_tensor * t = ggml_get_tensor(model.ctx, "meansq");
+        // print_matrix(t);
+        // printf("===============================================\n");
+        // t = ggml_get_tensor(model.ctx, "var");
+        // print_matrix(t);
+        // printf("===============================================\n");
+        // t = model.encode1_weight;
+        // print_matrix(t);
+        // printf("===============================================\n");
+        // t = ggml_get_tensor(model.ctx, "encode2_b");
+        // print_matrix(t);
+        // printf("===============================================\n");
+        // t = ggml_get_tensor(model.ctx, "encode3_b");
+        // print_matrix(t);
+
+
 
         float error_before_opt = ggml_get_f32_1d(e, 0);
 
-        struct ggml_opt_params opt_params_lbfgs = ggml_opt_default_params(GGML_OPT_LBFGS);
-        opt_params_lbfgs.print_forward_graph = false;
-        opt_params_lbfgs.print_backward_graph = false;
-        opt_params_lbfgs.lbfgs.n_iter = 16;
-        ggml_opt(ctx0, opt_params_lbfgs, e);
+        printf(" after compute error is  %f \n", error_before_opt);
+
+        struct ggml_opt_params opt_params = ggml_opt_default_params(GGML_OPT_ADAM);
+        opt_params.print_backward_graph = false;
+        opt_params.print_forward_graph = false;
+        opt_params.adam.n_iter = 16;
+
+        ggml_opt(model.ctx, opt_params, err_kl);
+
+
         //
-        ggml_build_forward_expand(&gf, e);
-        ggml_graph_compute_helper(work_buffer, &gf, /*n_threads*/ 1);
+        // ggml_build_forward_expand(gf, e);        
 
-        float error_after_opt = ggml_get_f32_1d(e, 0);
-
-        if (ex % 8 == 0) {
-            printf("Example %d\n", (ex+1));
-            printf("error_before_opt: %.2f\n", error_before_opt);
-            printf("error_after_opt:  %.2f\n", error_after_opt);
-        }
-
-        if (ex % 64 == 0) {
-            sample_softmax_batch(ctx0, logits, after_opt_probs, after_opt_best_samples);
-            // printf("probabilities after optimization:\n");
-            // print_matrix(after_opt_probs);
-            printf("best samples after optimization:\n");
-            print_tokens(after_opt_best_samples, n_vocab);
-        }
+        // float error_after_opt = ggml_get_f32_1d(e, 0);
 
         ggml_free(ctx0);
     }
 
-    {
-        int n_gen = 128;
-        int sample_ctx = n_tokens-n_tokens/8;
-
-        printf("Generating %d tokens.\n", n_gen);
-
-        struct ggml_tensor * tokens_input = ggml_new_tensor_1d(model.ctx, GGML_TYPE_I32, n_tokens);
-        struct ggml_tensor * targets      = ggml_new_tensor_2d(model.ctx, GGML_TYPE_F32, n_vocab, n_tokens);
-
-        get_example_targets(137, tokens_input, targets);
-        for (int i=sample_ctx; i<n_tokens; ++i) {
-            ggml_set_i32_1d(tokens_input, i, n_vocab/2);
-        }
-
-        for (int i=0; i<sample_ctx-1; ++i) {
-            print_token(ggml_get_i32_1d(tokens_input, i), n_vocab);
-        }
-        printf("---\n");
-        for (int i=0; i<n_gen; ++i) {
-            struct ggml_init_params params = {
-                /*.mem_size   =*/ compute_size,
-                /*.mem_buffer =*/ compute_addr,
-                /*.no_alloc   =*/ false,
-            };
-            struct ggml_context * ctx0 = ggml_init(params);
-
-            ggml_cgraph gf = {};
-
-            int n_past = 0;
-            struct ggml_tensor * logits = forward(&model, &kv_self, ctx0, &gf, tokens_input, sample_ctx, n_past);
-
-            ggml_build_forward_expand(&gf, logits);
-            ggml_graph_compute_helper(work_buffer, &gf, /*n_threads*/ 1);
-
-            struct ggml_tensor * best_samples = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, sample_ctx);
-            struct ggml_tensor * probs        = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_vocab, sample_ctx);
-
-            sample_softmax(logits, probs, best_samples);
-
-            // int sample_at = n_tokens-1;
-            int token = ggml_get_i32_1d(best_samples, sample_ctx-1);
-
-            // print_row(probs, sample_at);
-            print_token(token, n_vocab);
-
-            lshift_examples(tokens_input, targets, 1);
-            ggml_set_i32_1d(tokens_input, 0, 0);
-            ggml_set_i32_1d(tokens_input, sample_ctx-1, token);
-
-            ggml_free(ctx0);
-        }
-    }
-
-    print_matrix(model.tok_embeddings);
     printf("done\n");
 
     // ggml_free(kv_self.ctx);

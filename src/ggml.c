@@ -1664,7 +1664,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "CROSS_ENTROPY_LOSS_BACK",
 };
 
-static_assert(GGML_OP_COUNT == 72, "GGML_OP_COUNT != 72");
+static_assert(GGML_OP_COUNT == 73, "GGML_OP_COUNT != 73");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1679,6 +1679,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "x^2",
     "√x",
     "log(x)",
+    "exp(x)",
     "Σx",
     "Σx_k",
     "Σx/n",
@@ -1750,7 +1751,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "cross_entropy_loss_back(x,y)",
 };
 
-static_assert(GGML_OP_COUNT == 72, "GGML_OP_COUNT != 72");
+static_assert(GGML_OP_COUNT == 73, "GGML_OP_COUNT != 73");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -16612,8 +16613,10 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
             // distribute new work or execute it direct if 1T
             while (++node_n < cgraph->n_nodes) {
                 GGML_PRINT_DEBUG_5("%s: %d/%d\n", __func__, node_n, cgraph->n_nodes);
-
+                
                 struct ggml_tensor * node = cgraph->nodes[node_n];
+                // fprintf(stderr, "%s: %d/%d name: %s \n", __func__, node_n, cgraph->n_nodes, node->name);
+
                 const int n_tasks = ggml_get_n_tasks(node, n_threads);
 
                 state->shared->perf_node_start_cycles  = ggml_perf_cycles();
@@ -16631,7 +16634,38 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
                     // TODO: maybe push node_n to the atomic but if other threads see n_tasks is 1,
                     // they do something more efficient than spinning (?)
                     params.type = GGML_TASK_COMPUTE;
+                    // fprintf(stderr, "%s: AA %d/%d name: %s \n", __func__, node_n, cgraph->n_nodes, node->name);
+
+                    // int64_t *ne = node->ne;
+                    // printf("node is %s \n", node->name);
+                    // printf("(%ld, %ld, %ld, %ld) \n", ne[0], ne[1], ne[2], ne[3]);
+                    // if(node->src[0]){
+                    //     int64_t *ne = node->src[0]->ne;
+                    //     printf("src[0] is %s \n", node->src[0]->name);
+                    //     printf("(%ld, %ld, %ld, %ld) \n", ne[0], ne[1], ne[2], ne[3]);
+                    // for (int i = 0; i < node->src[0]->ne[1]; ++i) {
+                    //     for (int k = 0; k < node->src[0]->ne[0]; ++k) {
+                    //         float p = ggml_get_f32_1d(node->src[0], i*node->src[0]->ne[0] + k);
+                    //         printf(" %.6f", p);
+                    //     }
+                    //     printf("\n");
+                    // }
+                    //}
+                    // if(node->src[1]){
+                    //     int64_t *ne = node->src[1]->ne;
+                    //     printf("src[1] is %s \n", node->src[1]->name);
+                    //     printf("(%ld, %ld, %ld, %ld) \n", ne[0], ne[1], ne[2], ne[3]);
+                        // for (int i = 0; i < node->src[1]->ne[1]; ++i) {
+                        //     for (int k = 0; k < node->src[1]->ne[0]; ++k) {
+                        //         float p = ggml_get_f32_1d(node->src[1], i*node->src[1]->ne[0] + k);
+                        //         printf(" %.6f", p);
+                        //     }
+                        //     printf("\n");
+                        // }
+                    // }
                     ggml_compute_forward(&params, node);
+                    // fprintf(stderr, "%s: CC %d/%d name: %s \n", __func__, node_n, cgraph->n_nodes, node->name);
+
 
                     if (GGML_OP_HAS_FINALIZE[node->op]) {
                         params.type = GGML_TASK_FINALIZE;
@@ -16676,6 +16710,7 @@ static thread_ret_t ggml_graph_compute_thread(void * data) {
 
         /* COMPUTE */
         struct ggml_tensor * node = cgraph->nodes[node_n];
+        // fprintf(stderr, "%s: BB %d/%d name: %s \n", __func__, node_n, cgraph->n_nodes, node->name);
         const int n_tasks = ggml_get_n_tasks(node, n_threads);
 
         struct ggml_compute_params params = {

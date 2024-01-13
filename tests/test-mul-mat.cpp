@@ -143,6 +143,25 @@ struct ggml_cgraph * build_graph(const test_model& model, struct ggml_allocr * a
     // zT = x @ yT
     struct ggml_tensor * result = ggml_mul_mat(ctx0, model.a, ggml_cont(ctx0, model.b));
 
+    struct ggml_tensor * h = model.a;
+    int64_t *ne = h->ne;
+    printf("(%ld, %ld, %ld, %ld) \n", ne[0], ne[1], ne[2], ne[3]);
+    h = model.b;
+    ne = h->ne;
+    printf("(%ld, %ld, %ld, %ld) \n", ne[0], ne[1], ne[2], ne[3]);
+    h = result;
+    ne = h->ne;
+    printf("(%ld, %ld, %ld, %ld) \n", ne[0], ne[1], ne[2], ne[3]);
+
+    h = ggml_cont(ctx0, ggml_transpose(ctx0, result));
+    ne = h->ne;
+    printf("(%ld, %ld, %ld, %ld) \n", ne[0], ne[1], ne[2], ne[3]);
+
+    h = ggml_cont(ctx0, model.b);
+    ne = h->ne;
+    printf("(%ld, %ld, %ld, %ld) \n", ne[0], ne[1], ne[2], ne[3]);
+
+
     // z = (zT)T
     ggml_build_forward_expand(gf, ggml_cont(ctx0, ggml_transpose(ctx0, result)));
 
