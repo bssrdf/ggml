@@ -5477,6 +5477,16 @@ static __global__ void scale_f32(const float * x, float * dst, const float scale
     dst[i] = scale * x[i];
 }
 
+static __global__ void add1_f32(const float * x, const float *y, float * dst, const int k) {
+    const int i = blockDim.x*blockIdx.x + threadIdx.x;
+
+    if (i >= k) {
+        return;
+    }
+
+    dst[i] = y[0] * x[i];
+}
+
 static __global__ void clamp_f32(const float * x, float * dst, const float min, const float max, const int k) {
     const int i = blockDim.x*blockIdx.x + threadIdx.x;
 
@@ -6668,6 +6678,11 @@ static void scale_f32_cuda(const float * x, float * dst, const float scale, cons
     scale_f32<<<num_blocks, CUDA_SCALE_BLOCK_SIZE, 0, stream>>>(x, dst, scale, k);
 }
 
+static void add1_f32_cuda(const float * x, const float * y, float * dst, const int k, cudaStream_t stream) {
+    const int num_blocks = (k + CUDA_SCALE_BLOCK_SIZE - 1) / CUDA_SCALE_BLOCK_SIZE;
+    add1_f32<<<num_blocks, CUDA_SCALE_BLOCK_SIZE, 0, stream>>>(x, y, dst, k);
+}
+
 static void clamp_f32_cuda(const float * x, float * dst, const float min, const float max, const int k, cudaStream_t stream) {
     const int num_blocks = (k + CUDA_CLAMP_BLOCK_SIZE - 1) / CUDA_CLAMP_BLOCK_SIZE;
     clamp_f32<<<num_blocks, CUDA_CLAMP_BLOCK_SIZE, 0, stream>>>(x, dst, min, max, k);
@@ -7285,6 +7300,7 @@ static void ggml_cuda_op_add(
 
     ggml_cuda_op_bin_bcast<bin_bcast_cuda<op_add>>(src0, src1, dst, src0_dd, src1_dd, dst_dd, main_stream);
 }
+
 
 static void ggml_cuda_op_acc(
     const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
@@ -8139,6 +8155,23 @@ static void ggml_cuda_op_scale(
     (void) src1_dd;
 }
 
+static void ggml_cuda_op_add1(
+    const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
+    const float * src0_dd, const float * src1_dd, float * dst_dd, cudaStream_t main_stream) {
+
+    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT( dst->type == GGML_TYPE_F32);
+
+    
+
+    add1_f32_cuda(src0_dd, src1_dd, dst_dd, ggml_nelements(src0), main_stream);
+    CUDA_CHECK(cudaGetLastError());
+
+    (void) src1;
+    (void) dst;
+    // (void) src1_dd;
+}
+
 static void ggml_cuda_op_clamp(
     const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
     const float * src0_dd, const float * src1_dd, float * dst_dd, cudaStream_t main_stream) {
@@ -8573,6 +8606,10 @@ static void ggml_cuda_get_rows(const ggml_tensor * src0, const ggml_tensor * src
 
 static void ggml_cuda_add(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     ggml_cuda_op_flatten(src0, src1, dst, ggml_cuda_op_add);
+}
+
+static void ggml_cuda_add1(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    ggml_cuda_op_flatten(src0, src1, dst, ggml_cuda_op_add1);
 }
 
 static void ggml_cuda_acc(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
@@ -9714,6 +9751,9 @@ bool ggml_cuda_compute_forward(struct ggml_compute_params * params, struct ggml_
         case GGML_OP_ADD:
             func = ggml_cuda_add;
             break;
+        case GGML_OP_ADD1:
+            func = ggml_cuda_add1;
+            break;    
         case GGML_OP_ACC:
             func = ggml_cuda_acc;
             break;

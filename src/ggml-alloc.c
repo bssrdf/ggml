@@ -111,8 +111,8 @@ void ggml_tallocr_alloc(ggml_tallocr_t alloc, struct ggml_tensor * tensor) {
         if (block->size >= size) {
             best_fit_block = alloc->n_free_blocks - 1;
         } else {
-            fprintf(stderr, "%s: not enough space in the buffer (needed %zu, largest block available %zu)\n",
-                    __func__, size, max_avail);
+            fprintf(stderr, "%s: not enough space in the buffer (needed %zu, largest block available %zu) for tensor %s\n",
+                    __func__, size, max_avail, tensor->name);
             GGML_ASSERT(!"not enough space in the buffer");
             return;
         }

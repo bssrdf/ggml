@@ -79,7 +79,8 @@ struct ggml_tensor * randomize_tensor_normal(struct ggml_tensor * tensor, struct
             }
             break;
         case 2:
-            scale /= sqrtf((float) tensor->ne[0]+tensor->ne[1]);
+            // scale /= sqrtf((float) tensor->ne[0]+tensor->ne[1]);
+            scale /= sqrtf((float) tensor->ne[0]);
             for (int i1 = 0; i1 < tensor->ne[1]; i1++) {
                 for (int i0 = 0; i0 < tensor->ne[0]; i0++) {
                     float * dst = (float *) ((char *) tensor->data + i0*tensor->nb[0] + i1*tensor->nb[1]);

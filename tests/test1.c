@@ -452,6 +452,55 @@ int main(int argc, const char ** argv) {
         ggml_graph_dump_dot(gb, gf,   "test1-8-backward.dot");
     }
 
+
+    ///////////////////////////////////////////////////////////////
+
+    {
+        struct ggml_tensor * x = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, 7);
+        struct ggml_tensor * z = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, 7);
+        struct ggml_tensor * sig = ggml_sub(ctx0, ggml_relu(ctx0, x), ggml_mul(ctx0, x, z));
+        sig = ggml_add(ctx0, sig, 
+                                ggml_log(ctx0, 
+                                    ggml_add1(ctx0, 
+                                          ggml_exp(ctx0, ggml_neg(ctx0, ggml_abs(ctx0, x))), 
+                                          ggml_new_f32(ctx0, 1.f))));
+        
+        ggml_set_name(sig, "sigloss");
+
+        struct ggml_cgraph * gf = ggml_new_graph_custom(ctx0, GGML_DEFAULT_GRAPH_SIZE, true);
+        ggml_build_forward_expand(gf, sig);
+
+        float x_1[] = {1., -1., 0., 1., -1., 0., 0.};
+        float z_1[] = {0., 0., 0., 1., 1., 1., 0.5};
+
+        for (int i= 0; i < 7; i++){
+            ggml_set_f32_1d(x, i, x_1[i]);
+            ggml_set_f32_1d(z, i, z_1[i]);
+        }
+        
+
+        ggml_graph_reset(gf);
+        
+        ggml_graph_compute_with_ctx(ctx0, gf, n_threads);
+        for (int i= 0; i < 7; i++){
+            printf("%f, ", ggml_get_f32_1d(sig, i));            
+        }
+        printf("\n");
+        for (int i= 0; i < 7; i++){
+            printf("%f, ", ggml_get_f32_1d(x, i));            
+        }
+        printf("\n");
+
+        for (int i= 0; i < 7; i++){
+            printf("%f, ", ggml_get_f32_1d(z, i));            
+        }
+        printf("\n");
+        
+      
+        
+        ggml_graph_dump_dot(gf, NULL, "test1-9-forward.dot");
+    }
+
     ggml_free(ctx0);
 
     return 0;
