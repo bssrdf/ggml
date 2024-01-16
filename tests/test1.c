@@ -43,6 +43,7 @@ int main(int argc, const char ** argv) {
 
         printf("f     = %f\n", ggml_get_f32_1d(f, 0));
         printf("df/dx = %f\n", ggml_get_f32_1d(x->grad, 0));
+        printf("df/dy = %f\n", ggml_get_f32_1d(b->grad, 0));
 
         GGML_ASSERT(ggml_get_f32_1d(f, 0)       == 12.0f);
         GGML_ASSERT(ggml_get_f32_1d(x->grad, 0) == 12.0f);
@@ -64,8 +65,40 @@ int main(int argc, const char ** argv) {
         ggml_graph_dump_dot(gb, gf,   "test1-1-backward.dot");
     }
 
-    ///////////////////////////////////////////////////////////////
+    {
+        struct ggml_tensor * x = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, 1);
 
+        ggml_set_param(ctx0, x);
+
+        struct ggml_tensor * a = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, 1);
+        struct ggml_tensor * b = ggml_mul(ctx0, x, ggml_exp(ctx0, x));
+        struct ggml_tensor * f = ggml_mul(ctx0, b, a);
+
+        // a*x*exp(x)
+        // 2*a*x
+
+        ggml_print_objects(ctx0);
+
+        struct ggml_cgraph * gf = ggml_new_graph_custom(ctx0, GGML_DEFAULT_GRAPH_SIZE, true);
+        ggml_build_forward_expand(gf, f);
+        struct ggml_cgraph * gb = ggml_graph_dup(ctx0, gf);
+        ggml_build_backward_expand(ctx0, gf, gb, false);
+
+        ggml_set_f32(x, 2.0f);
+        ggml_set_f32(a, 3.0f);
+
+        ggml_graph_reset(gf);
+        ggml_set_f32(f->grad, 1.0f);
+
+        ggml_graph_compute_with_ctx(ctx0, gb, n_threads);
+
+        printf("f     = %f\n", ggml_get_f32_1d(f, 0));
+        printf("df/dx = %f\n", ggml_get_f32_1d(x->grad, 0));
+        printf("df/dy = %f\n", ggml_get_f32_1d(b->grad, 0));
+
+    }
+    ///////////////////////////////////////////////////////////////
+//#if 0
     {
         struct ggml_tensor * x1 = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, 1);
         struct ggml_tensor * x2 = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, 1);
@@ -500,6 +533,43 @@ int main(int argc, const char ** argv) {
         
         ggml_graph_dump_dot(gf, NULL, "test1-9-forward.dot");
     }
+
+    {
+
+
+        struct ggml_tensor * x = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, 7);
+        struct ggml_tensor * y = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, 7, 10);
+        
+        struct ggml_tensor * xr = ggml_repeat(ctx0, x, y);
+        
+
+        struct ggml_cgraph * gf = ggml_new_graph_custom(ctx0, GGML_DEFAULT_GRAPH_SIZE, true);
+        ggml_build_forward_expand(gf, xr);
+
+        float x_1[] = {1., -1., 0., 1., -1., 0., 0.};
+        float z_1[] = {0., 0., 0., 1., 1., 1., 0.5};
+
+        for (int i= 0; i < 7; i++){
+            ggml_set_f32_1d(x, i, x_1[i]);
+        }
+        
+
+        ggml_graph_reset(gf);
+        
+        ggml_graph_compute_with_ctx(ctx0, gf, n_threads);
+        for (int j = 0; j < 10; j++){
+            for (int i = 0; i < 7; i++){
+                printf("%f, ", ggml_get_f32_nd(xr, i, j, 0, 0));            
+            }
+            printf("\n");
+        }
+        
+        for (int i= 0; i < 7; i++){
+            printf("%f, ", ggml_get_f32_1d(x, i));            
+        }
+        printf("\n");
+    }
+//#endif    
 
     ggml_free(ctx0);
 

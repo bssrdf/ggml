@@ -4,6 +4,7 @@
 #include <random>
 #include <sstream>
 #include <functional>
+#include <float.h>
 
 struct random_normal_distribution {
     std::mt19937 gen;
@@ -70,23 +71,34 @@ void free_random_uniform_distribution(struct random_uniform_distribution * rnd) 
 
 struct ggml_tensor * randomize_tensor_normal(struct ggml_tensor * tensor, struct random_normal_distribution * rnd) {
     float scale = 1.0f; // xavier
+    float mi = FLT_MAX, mx = -FLT_MAX;
     switch (ggml_n_dims(tensor)) {
         case 1:
             scale /= sqrtf((float) tensor->ne[0]);
             for (int i0 = 0; i0 < tensor->ne[0]; i0++) {
                 float * dst = (float *) ((char *) tensor->data + i0*tensor->nb[0]);
                 *dst = scale * frand_normal(rnd);
+                if (*dst < mi)
+                   mi = *dst;
+                if (*dst > mx)
+                   mx = *dst;
             }
+            printf("min,max = %f, %f \n", mi, mx);
             break;
         case 2:
-            // scale /= sqrtf((float) tensor->ne[0]+tensor->ne[1]);
-            scale /= sqrtf((float) tensor->ne[0]);
+            scale /= sqrtf((float) tensor->ne[0]+tensor->ne[1]);
+            // scale /= sqrtf((float) tensor->ne[0]);
             for (int i1 = 0; i1 < tensor->ne[1]; i1++) {
                 for (int i0 = 0; i0 < tensor->ne[0]; i0++) {
                     float * dst = (float *) ((char *) tensor->data + i0*tensor->nb[0] + i1*tensor->nb[1]);
                     *dst = scale * frand_normal(rnd);
+                    if (*dst < mi)
+                        mi = *dst;
+                    if (*dst > mx)
+                        mx = *dst;
                 }
             }
+            printf("min,max = %f, %f \n", mi, mx);
             break;
         case 3:
             scale /= sqrtf((float) tensor->ne[0]+tensor->ne[1]);
@@ -119,12 +131,18 @@ struct ggml_tensor * randomize_tensor_normal(struct ggml_tensor * tensor, struct
 }
 
 struct ggml_tensor * randomize_tensor_uniform(struct ggml_tensor * tensor, struct random_uniform_distribution * rnd) {
+    float mi = FLT_MAX, mx = -FLT_MAX;
     switch (ggml_n_dims(tensor)) {
         case 1:
             for (int i0 = 0; i0 < tensor->ne[0]; i0++) {
                 float * dst = (float *) ((char *) tensor->data + i0*tensor->nb[0]);
                 *dst = frand_uniform(rnd);
+                if (*dst < mi)
+                   mi = *dst;
+                if (*dst > mx)
+                   mx = *dst;
             }
+            printf("min,max = %f, %f \n", mi, mx);
             break;
         case 2:
             for (int i1 = 0; i1 < tensor->ne[1]; i1++) {

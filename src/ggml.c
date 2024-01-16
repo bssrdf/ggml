@@ -16048,7 +16048,16 @@ void ggml_build_backward_expand(struct ggml_context * ctx, struct ggml_cgraph * 
         // inplace operations to add gradients are not created by ggml_compute_backward
         // use allocator to automatically make inplace operations
         if (node->grad) {
+            // fprintf(stderr, " %s: about to backprop from %s\n ", __func__, node->name); 
+            // if (node->src[0] != NULL)
+            //     fprintf(stderr, " %s: about to backprop from %s -> %s \n ",
+            //     __func__, node->name, node->src[0]->name);
+            // if(node->src[1] != NULL)
+            //      fprintf(stderr, " %s: also backprop from %s -> %s \n ",
+            //          __func__, node->name, node->src[1]->name);                     
             ggml_compute_backward(ctx, node, zero_table);
+            // fprintf(stderr, " %s: finished backprop from %s -> %s \n ",
+            //     __func__, node->name, node->src[0]->name);
         }
     }
 
@@ -17743,6 +17752,42 @@ static void ggml_opt_acc_grad(int np, struct ggml_tensor * const ps[], float * g
         for (int64_t j = 0; j < ne; ++j) {
             g[i++] += ggml_get_f32_1d(ps[p]->grad, j) * scale;
         }
+        // if(strcmp(ggml_get_name(ps[p]), "mu_weight") == 0) {
+        //     printf("mu_weight ============================================\n");    
+        //     for (int64_t j = 0; j < ne; ++j){
+        //         printf(" %f, ", ggml_get_f32_1d(ps[p]->grad, j));                
+        //         if((j+1) % (ps[p]->ne[0]) == 0)
+        //             printf("\n");    
+        //     }
+        //     printf("============================================\n");    
+        // }
+        // if(strcmp(ggml_get_name(ps[p]), "mu_bias") == 0) {
+        //     printf("mu_bias ============================================\n");    
+        //     for (int64_t j = 0; j < ne; ++j){
+        //         printf(" %f, ", ggml_get_f32_1d(ps[p]->grad, j));                
+        //         if((j+1) % (ps[p]->ne[0]) == 0)
+        //             printf("\n");    
+        //     }
+        //     printf("============================================\n");    
+        // }
+        // if(strcmp(ggml_get_name(ps[p]), "logsd_bias") == 0) {
+        //     printf("logsd_bias ============================================\n");    
+        //     for (int64_t j = 0; j < ne; ++j){
+        //         printf(" %f, ", ggml_get_f32_1d(ps[p]->grad, j));                
+        //         if((j+1) % (ps[p]->ne[0]) == 0)
+        //             printf("\n");    
+        //     }
+        //     printf("============================================\n");    
+        // }
+        // if(strcmp(ggml_get_name(ps[p]), "logsd_weight") == 0) {
+        //     printf("logsd_weight ============================================\n");    
+        //     for (int64_t j = 0; j < ne; ++j){
+        //         printf(" %f, ", ggml_get_f32_1d(ps[p]->grad, j));                
+        //         if((j+1) % (ps[p]->ne[0]) == 0)
+        //             printf("\n");    
+        //     }
+        //     printf("============================================\n");    
+        // }
     }
 }
 
@@ -17770,7 +17815,8 @@ static enum ggml_opt_result ggml_opt_adam(
     int64_t nx = 0;
     for (int i = 0; i < gf->n_nodes; ++i) {
         if (gf->nodes[i]->is_param) {
-            GGML_PRINT_DEBUG("found param %d: grad->op = %d\n", np, gf->nodes[i]->grad->op);
+            GGML_PRINT_DEBUG("found param %d: grad->op = %d, name (%s) \n", 
+                 np, gf->nodes[i]->grad->op, gf->nodes[i]->name);
 
             GGML_ASSERT(np < GGML_MAX_PARAMS);
 
@@ -18059,7 +18105,7 @@ static enum ggml_opt_result linesearch_backtracking(
                 *fx += ggml_get_f32_1d(f, 0);
             }
             *fx *= accum_norm;
-
+            fprintf(stderr, "%s: *fx = %f, %f, %f, %f \n", __func__, *fx, finit, *step, finit+(*step)*dgtest); 
         }
 
         ++count;
@@ -18270,7 +18316,7 @@ static enum ggml_opt_result ggml_opt_lbfgs(
             // linesearch failed - go back to the previous point and return
             ggml_vec_cpy_f32(nx, x, xp);
             ggml_vec_cpy_f32(nx, g, gp);
-
+            fprintf(stderr, "%s: lbfgs linear search failed with error code %d(%d) \n ", __func__, ls, GGML_LINESEARCH_MAXIMUM_ITERATIONS);
             return ls;
         }
 
@@ -18286,6 +18332,7 @@ static enum ggml_opt_result ggml_opt_lbfgs(
         }
         if (gnorm/xnorm <= params.lbfgs.eps) {
             // converged
+            fprintf(stderr, "%s: lbfgs converged \n ", __func__);
             return GGML_OPT_OK;
         }
 
@@ -18296,6 +18343,7 @@ static enum ggml_opt_result ggml_opt_lbfgs(
                 const float rate = (pf[k[0]%params.past] - fx)/fx;
 
                 if (fabsf(rate) < params.delta) {
+                    fprintf(stderr, "%s: lbfgs converged delta-based\n ", __func__);
                     return GGML_OPT_OK;
                 }
             }
@@ -18312,6 +18360,8 @@ static enum ggml_opt_result ggml_opt_lbfgs(
                 n_no_improvement[0]++;
 
                 if (n_no_improvement[0] >= params.max_no_improvement) {
+                    fprintf(stderr, "%s: lbfgs no more improvement %d, %d\n ", __func__,
+                        n_no_improvement[0], params.max_no_improvement);
                     return GGML_OPT_OK;
                 }
             }
@@ -18319,6 +18369,7 @@ static enum ggml_opt_result ggml_opt_lbfgs(
 
         if (params.lbfgs.n_iter != 0 && params.lbfgs.n_iter < it + 1) {
             // reached the maximum number of iterations
+            fprintf(stderr, "%s: lbfgs did not converge\n ", __func__);
             return GGML_OPT_DID_NOT_CONVERGE;
         }
 
@@ -18562,9 +18613,19 @@ enum ggml_opt_result ggml_opt_resume(
     // build forward + backward compute graphs
     struct ggml_cgraph * gf = ggml_new_graph_custom(ctx, opt->params.graph_size, true);
     ggml_build_forward_expand(gf, f);
-
+    // fprintf(stderr, "%s: gf has %d nodes and %d leafs \n", __func__, gf->n_nodes, gf->n_leafs);
     struct ggml_cgraph * gb = ggml_graph_dup(ctx, gf);
     ggml_build_backward_expand(ctx, gf, gb, true);
+    // fprintf(stderr, "%s: gb has %d nodes and %d leafs \n", __func__, gb->n_nodes, gb->n_leafs);
+
+    // for (int i= 0; i < gb->n_nodes; i++){
+    //     if(strcmp(ggml_get_name(gb->nodes[i]), "node_112") == 0) {
+    //         struct ggml_tensor *node = gb->nodes[i];
+    //         if(node->src[0]){
+    //             fprintf(stderr, "%s: src[0] is %s\n", __func__, node->src[0]->name);
+    //         } 
+    //     }
+    // }
 
     return ggml_opt_resume_g(ctx, opt, f, gf, gb, NULL, NULL);
 }
