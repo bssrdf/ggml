@@ -1,7 +1,7 @@
 #include "ggml.h"
 #include "ggml/ggml-alloc.h"
 #include "ggml/ggml-backend.h"
-#include "train.h"
+
 
 //#define GGML_USE_CUBLAS // uncomment this to use cuda backend, make sure build ggml lib with GGML_CUBLAS=ON
 
@@ -331,7 +331,7 @@ int main(void)
         rnds[i] = -(float)1/2.f + i*0.01;
     }
 
-    load_model(model, digit.data(), rnds, n_input, n_latent, n_batch, n_feature, true);
+    load_model(model, digit.data(), rnds, n_input, n_latent, n_batch, n_feature, false);
 
     ggml_backend_buffer_t buf_compute; // for compute
     struct ggml_allocr * allocr = NULL;
