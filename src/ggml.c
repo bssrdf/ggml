@@ -1593,6 +1593,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "SQR",
     "SQRT",
     "LOG",
+    "EXP",
     "SUM",
     "SUM_ROWS",
     "MEAN",

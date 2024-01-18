@@ -526,7 +526,12 @@ static void train_forward_batch(
     ggml_set_name(h, "src1_sigloss");
     struct ggml_tensor* x = h;
     struct ggml_tensor* z = model->input;
-    h = ggml_sub(ctx0, ggml_relu(ctx0, x), ggml_mul(ctx0, x, z));
+    if(ggml_backend_is_cpu(model->backend)){ 
+        h = ggml_sub(ctx0, ggml_relu(ctx0, x), ggml_mul(ctx0, x, z));
+    }
+    else{
+        h = ggml_add(ctx0, ggml_relu(ctx0, x), ggml_neg(ctx0, ggml_mul(ctx0, x, z)));
+    }
     h = ggml_add(ctx0, h, ggml_log(ctx0, 
                              ggml_add1(ctx0,  
                                   ggml_exp(ctx0, ggml_neg(ctx0, ggml_abs(ctx0, x))),
@@ -716,7 +721,7 @@ int main(int argc, char ** argv) {
 
     struct mnist_vae_model model;    
 
-    bool use_gpu = false;
+    bool use_gpu = true;
     int n_batch = 100;
     int n_threads = 1;
     
@@ -834,6 +839,7 @@ int main(int argc, char ** argv) {
 
         if(ex == 0){            
             gf = build_train_graph_batch(&model, n_batch);
+            ggml_graph_dump_dot(gf, NULL, "mnist-vae-forward.dot");
             model.compute_buffer = ggml_backend_alloc_ctx_tensors(model.ctx, model.backend);
             check_data_buffer(gf);
             randomize_model(&model, 1337, 0.0f, 0.1f, -1.0f, +1.0f);
@@ -917,7 +923,9 @@ int main(int argc, char ** argv) {
             ggml_backend_cpu_set_n_threads(model.backend, n_threads);
         }
         GGML_ASSERT(gf != NULL);
+        fprintf(stderr, "begin normal forward compute \n");
         ggml_backend_graph_compute(model.backend, gf);
+        fprintf(stderr, "done with normal forward compute \n");
 
         // ggml_graph_compute_helper(work_buffer, gf_res, /*n_threads*/ 1);
 
@@ -960,7 +968,9 @@ int main(int argc, char ** argv) {
         // printf(" before opt  \n");
         // int ret = ggml_opt(ctx0, opt_params, err_kl);        
         // ggml_opt(ctx0, opt_params, err_kl);
+        fprintf(stderr, "begin optimize \n");
         int ret = ggml_opt(ctx0, opt_params, err_tot);
+        fprintf(stderr, "done optimize \n");
         // if (ret == GGML_OPT_DID_NOT_CONVERGE)
         //     printf(" klloss did not  converge  \n");
 

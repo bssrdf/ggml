@@ -491,9 +491,12 @@ static_assert(sizeof(block_iq2_xxs) == sizeof(ggml_fp16_t) + QK_K/8*sizeof(uint1
 #define CUDA_GELU_BLOCK_SIZE 256
 #define CUDA_SILU_BLOCK_SIZE 256
 #define CUDA_TANH_BLOCK_SIZE 256
+#define CUDA_ABS_BLOCK_SIZE  256
+#define CUDA_NEG_BLOCK_SIZE  256
 #define CUDA_RELU_BLOCK_SIZE 256
 #define CUDA_SQR_BLOCK_SIZE 256
 #define CUDA_EXP_BLOCK_SIZE 256
+#define CUDA_LOG_BLOCK_SIZE 256
 #define CUDA_CPY_BLOCK_SIZE 32
 #define CUDA_SCALE_BLOCK_SIZE 256
 #define CUDA_CLAMP_BLOCK_SIZE 256
@@ -743,6 +746,22 @@ static __global__ void tanh_f32(const float * x, float * dst, int k) {
     dst[i] = tanhf(x[i]);
 }
 
+static __global__ void abs_f32(const float * x, float * dst, int k) {
+    const int i  = blockDim.x*blockIdx.x + threadIdx.x;
+    if (i >= k) {
+        return;
+    }
+    dst[i] = fabsf(x[i]);
+}
+
+static __global__ void neg_f32(const float * x, float * dst, int k) {
+    const int i  = blockDim.x*blockIdx.x + threadIdx.x;
+    if (i >= k) {
+        return;
+    }
+    dst[i] = -x[i];
+}
+
 static __global__ void relu_f32(const float * x, float * dst, const int k) {
     const int i = blockDim.x*blockIdx.x + threadIdx.x;
 
@@ -776,6 +795,15 @@ static __global__ void exp_f32(const float * x, float * dst, const int k) {
         return;
     }
     dst[i] = expf(x[i]);
+}
+
+static __global__ void log_f32(const float * x, float * dst, const int k) {
+    const int i = blockDim.x*blockIdx.x + threadIdx.x;
+
+    if (i >= k) {
+        return;
+    }
+    dst[i] = logf(x[i]);
 }
 
 template <int block_size>
@@ -5735,6 +5763,16 @@ static void tanh_f32_cuda(const float * x, float * dst, const int k, cudaStream_
     tanh_f32<<<num_blocks, CUDA_TANH_BLOCK_SIZE, 0, stream>>>(x, dst, k);
 }
 
+static void abs_f32_cuda(const float * x, float * dst, const int k, cudaStream_t stream) {
+    const int num_blocks = (k + CUDA_ABS_BLOCK_SIZE - 1) / CUDA_ABS_BLOCK_SIZE;
+    abs_f32<<<num_blocks, CUDA_ABS_BLOCK_SIZE, 0, stream>>>(x, dst, k);
+}
+
+static void neg_f32_cuda(const float * x, float * dst, const int k, cudaStream_t stream) {
+    const int num_blocks = (k + CUDA_NEG_BLOCK_SIZE - 1) / CUDA_NEG_BLOCK_SIZE;
+    neg_f32<<<num_blocks, CUDA_NEG_BLOCK_SIZE, 0, stream>>>(x, dst, k);
+}
+
 static void relu_f32_cuda(const float * x, float * dst, const int k, cudaStream_t stream) {
     const int num_blocks = (k + CUDA_RELU_BLOCK_SIZE - 1) / CUDA_RELU_BLOCK_SIZE;
     relu_f32<<<num_blocks, CUDA_RELU_BLOCK_SIZE, 0, stream>>>(x, dst, k);
@@ -5753,6 +5791,11 @@ static void sqr_f32_cuda(const float * x, float * dst, const int k, cudaStream_t
 static void exp_f32_cuda(const float * x, float * dst, const int k, cudaStream_t stream) {
     const int num_blocks = (k + CUDA_EXP_BLOCK_SIZE - 1) / CUDA_EXP_BLOCK_SIZE;
     exp_f32<<<num_blocks, CUDA_EXP_BLOCK_SIZE, 0, stream>>>(x, dst, k);
+}
+
+static void log_f32_cuda(const float * x, float * dst, const int k, cudaStream_t stream) {
+    const int num_blocks = (k + CUDA_LOG_BLOCK_SIZE - 1) / CUDA_LOG_BLOCK_SIZE;
+    log_f32<<<num_blocks, CUDA_LOG_BLOCK_SIZE, 0, stream>>>(x, dst, k);
 }
 
 static void norm_f32_cuda(const float * x, float * dst, const int ncols, const int nrows, const float eps, cudaStream_t stream) {
@@ -7391,6 +7434,34 @@ static void ggml_cuda_op_tanh(
     (void) src1_dd;
 }
 
+static void ggml_cuda_op_abs(
+    const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
+    const float * src0_dd, const float * src1_dd, float * dst_dd, cudaStream_t main_stream) {
+
+    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT( dst->type == GGML_TYPE_F32);
+
+    abs_f32_cuda(src0_dd, dst_dd, ggml_nelements(src0), main_stream);
+
+    (void) src1;
+    (void) dst;
+    (void) src1_dd;
+}
+
+static void ggml_cuda_op_neg(
+    const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
+    const float * src0_dd, const float * src1_dd, float * dst_dd, cudaStream_t main_stream) {
+
+    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT( dst->type == GGML_TYPE_F32);
+
+    neg_f32_cuda(src0_dd, dst_dd, ggml_nelements(src0), main_stream);
+
+    (void) src1;
+    (void) dst;
+    (void) src1_dd;
+}
+
 static void ggml_cuda_op_relu(
     const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
     const float * src0_dd, const float * src1_dd, float * dst_dd, cudaStream_t main_stream) {
@@ -7444,6 +7515,20 @@ static void ggml_cuda_op_exp(
     GGML_ASSERT( dst->type == GGML_TYPE_F32);
 
     exp_f32_cuda(src0_dd, dst_dd, ggml_nelements(src0), main_stream);
+
+    (void) src1;
+    (void) dst;
+    (void) src1_dd;
+}
+
+static void ggml_cuda_op_log(
+    const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
+    const float * src0_dd, const float * src1_dd, float * dst_dd, cudaStream_t main_stream) {
+
+    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT( dst->type == GGML_TYPE_F32);
+
+    log_f32_cuda(src0_dd, dst_dd, ggml_nelements(src0), main_stream);
 
     (void) src1;
     (void) dst;
@@ -8077,6 +8162,72 @@ static void ggml_cuda_op_sum_rows(
     (void) src1_dd;
 }
 
+
+
+__global__ void reduce_sum_f32(float * y, float * x, const int64_t N)
+{
+	extern __shared__ float tsum[];
+	int id = threadIdx.x;
+	int tid = blockDim.x*blockIdx.x+threadIdx.x;
+	int stride = gridDim.x*blockDim.x;
+	tsum[id] = 0.0f;
+	for(int k=tid;k<N;k+=stride) tsum[id] += x[k];
+	__syncthreads();
+	if(id<256 && id+256 < blockDim.x) tsum[id] += tsum[id+256]; __syncthreads();
+	if(id<128) tsum[id] += tsum[id+128]; __syncthreads();
+	if(id< 64) tsum[id] += tsum[id+ 64]; __syncthreads();
+	if(id< 32) tsum[id] += tsum[id+ 32]; __syncthreads();
+	// warp 0 only from here
+	if(id< 16) tsum[id] += tsum[id+16]; __syncwarp();
+	if(id< 8)  tsum[id] += tsum[id+ 8]; __syncwarp();
+	if(id< 4)  tsum[id] += tsum[id+ 4]; __syncwarp();
+	if(id< 2)  tsum[id] += tsum[id+ 2]; __syncwarp();
+	if(id==0)  y[blockIdx.x] = tsum[0]+tsum[1];
+}
+
+
+static void ggml_cuda_op_sum(
+    const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
+    const float * src0_dd, const float * src1_dd, float * dst_dd, cudaStream_t main_stream) {
+
+    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT( dst->type == GGML_TYPE_F32);
+
+    const int64_t ncols = src0->ne[0];
+    const int64_t nrows = ggml_nrows(src0);
+    const int64_t blocks = 256;
+    const int64_t threads = 256;
+
+    cuda_pool_alloc<float> sum_rows;    
+    cuda_pool_alloc<float> dy;
+    
+    
+
+    if(nrows > 1){
+        sum_rows.alloc(nrows);
+        sum_rows_f32_cuda(src0_dd, sum_rows.get(), ncols, nrows, main_stream);    }
+    else{        
+        sum_rows.alloc(ncols);
+        CUDA_CHECK(cudaMemcpyAsync(sum_rows.get(), src0_dd, sizeof(float)*ncols, cudaMemcpyDeviceToDevice, main_stream));
+        CUDA_CHECK(cudaStreamSynchronize(main_stream));
+        // to_fp32_cuda(src0_dd, sum_rows.get(), ncols, main_stream);
+    }
+    dy.alloc(blocks);   
+    float * src0_dd_i = sum_rows.get();
+    const int64_t N = nrows > 1 ? nrows: ncols; 
+    // reduce_sum_f32<<<1, nols/2, 0, main_stream>>>(src0_dd_i, dst_dd);
+
+    reduce_sum_f32<<<blocks,threads,threads*sizeof(float), main_stream>>>(dy.get(), src0_dd_i, N);
+	reduce_sum_f32<<<     1,blocks,blocks*sizeof(float),   main_stream>>>(src0_dd_i, dy.get(), blocks);
+
+    CUDA_CHECK(cudaMemcpyAsync(dst_dd, src0_dd_i, sizeof(float), cudaMemcpyDeviceToDevice, main_stream));
+    CUDA_CHECK(cudaStreamSynchronize(main_stream));
+
+    (void) src1;
+    (void) dst;
+    (void) src1_dd;
+}
+
 static void ggml_cuda_op_argsort(
     const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
     const float * src0_dd, const float * src1_dd, float * dst_dd, cudaStream_t main_stream) {
@@ -8640,6 +8791,15 @@ static void ggml_cuda_tanh(const ggml_tensor * src0, const ggml_tensor * src1, g
     ggml_cuda_op_flatten(src0, src1, dst, ggml_cuda_op_tanh);
 }
 
+static void ggml_cuda_abs(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    ggml_cuda_op_flatten(src0, src1, dst, ggml_cuda_op_abs);
+}
+
+static void ggml_cuda_neg(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    ggml_cuda_op_flatten(src0, src1, dst, ggml_cuda_op_neg);
+}
+
+
 static void ggml_cuda_relu(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     ggml_cuda_op_flatten(src0, src1, dst, ggml_cuda_op_relu);
 }
@@ -8654,6 +8814,10 @@ static void ggml_cuda_sqr(const ggml_tensor * src0, const ggml_tensor * src1, gg
 
 static void ggml_cuda_exp(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     ggml_cuda_op_flatten(src0, src1, dst, ggml_cuda_op_exp);
+}
+
+static void ggml_cuda_log(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    ggml_cuda_op_flatten(src0, src1, dst, ggml_cuda_op_log);
 }
 
 static void ggml_cuda_norm(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
@@ -9427,6 +9591,11 @@ static void ggml_cuda_sum_rows(const ggml_tensor * src0, const ggml_tensor * src
     ggml_cuda_op_flatten(src0, src1, dst, ggml_cuda_op_sum_rows);
 }
 
+static void ggml_cuda_sum(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    GGML_ASSERT(ggml_is_contiguous(src0));
+    ggml_cuda_op_flatten(src0, src1, dst, ggml_cuda_op_sum);
+}
+
 static void ggml_cuda_argsort(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     GGML_ASSERT(ggml_is_contiguous(src0));
     ggml_cuda_op_flatten(src0, src1, dst, ggml_cuda_op_argsort);
@@ -9780,6 +9949,12 @@ bool ggml_cuda_compute_forward(struct ggml_compute_params * params, struct ggml_
                 case GGML_UNARY_OP_RELU:
                     func = ggml_cuda_relu;
                     break;
+                case GGML_UNARY_OP_ABS:
+                    func = ggml_cuda_abs;                    
+                    break;    
+                case GGML_UNARY_OP_NEG:
+                    func = ggml_cuda_neg;                    
+                    break;    
                 default:
                     return false;
             }
@@ -9823,6 +9998,9 @@ bool ggml_cuda_compute_forward(struct ggml_compute_params * params, struct ggml_
         case GGML_OP_SQR:
             func = ggml_cuda_sqr;
             break;
+        case GGML_OP_LOG:
+            func = ggml_cuda_log;
+            break;        
         case GGML_OP_EXP:
             func = ggml_cuda_exp;
             break;    
@@ -9860,6 +10038,14 @@ bool ggml_cuda_compute_forward(struct ggml_compute_params * params, struct ggml_
         case GGML_OP_SUM_ROWS:
             func = ggml_cuda_sum_rows;
             break;
+        case GGML_OP_SUM:
+            // only support 1D and 2D tensors for now
+            if (tensor->src[0]->ne[3] != 1 || tensor->src[0]->ne[2] != 1)
+                return false;
+            if (tensor->src[1] != NULL)         
+                return false;
+            func = ggml_cuda_sum;
+            break;    
         case GGML_OP_ARGSORT:
             func = ggml_cuda_argsort;
             break;
@@ -10232,6 +10418,9 @@ static bool ggml_backend_cuda_graph_compute(ggml_backend_t backend, ggml_cgraph 
         if (!ok) {
             fprintf(stderr, "%s: error: op not supported %s (%s)\n", __func__, node->name, ggml_op_name(node->op));
         }
+        // else{
+        //     fprintf(stderr, "%s: success: op %s (%s)\n", __func__, node->name, ggml_op_name(node->op));
+        // }
         GGML_ASSERT(ok);
 
 #if 0
@@ -10272,6 +10461,8 @@ static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, const ggml_ten
                 case GGML_UNARY_OP_RELU:
                 case GGML_UNARY_OP_GELU_QUICK:
                 case GGML_UNARY_OP_TANH:
+                case GGML_UNARY_OP_ABS:
+                case GGML_UNARY_OP_NEG:
                     return true;
                 default:
                     return false;
@@ -10359,6 +10550,9 @@ static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, const ggml_ten
         case GGML_OP_ROPE:
         case GGML_OP_ALIBI:
         case GGML_OP_IM2COL:
+        case GGML_OP_EXP:
+        case GGML_OP_LOG:
+        case GGML_OP_SUM:
         case GGML_OP_SUM_ROWS:
         case GGML_OP_ARGSORT:
         case GGML_OP_ACC:
