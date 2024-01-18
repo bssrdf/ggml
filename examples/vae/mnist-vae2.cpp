@@ -491,6 +491,7 @@ static void train_forward_batch(
     //    h3 = ggml_sub(ctx0, h3, logsd);
        h3 = ggml_add(ctx0, h3, ggml_scale(ctx0, logsd, -0.5f));
     }else{
+        // h3 = ggml_sub(ctx0, h3, logsd);
         h3 = ggml_add(ctx0, h3, ggml_scale(ctx0, logsd, -0.5f));
     }
     ggml_set_name(h3, "kldiv_plus_half");
@@ -923,9 +924,7 @@ int main(int argc, char ** argv) {
             ggml_backend_cpu_set_n_threads(model.backend, n_threads);
         }
         GGML_ASSERT(gf != NULL);
-        fprintf(stderr, "begin normal forward compute \n");
         ggml_backend_graph_compute(model.backend, gf);
-        fprintf(stderr, "done with normal forward compute \n");
 
         // ggml_graph_compute_helper(work_buffer, gf_res, /*n_threads*/ 1);
 
@@ -947,13 +946,23 @@ int main(int argc, char ** argv) {
 
         // int64_t *ne = err_kl->ne;
         // printf(" loss ne = (%d, %d, %d, %d)\n", ne[0], ne[1], ne[2], ne[3]);
-
-        float error_before_opt0 = ggml_get_f32_1d(err_kl, 0);
-        float error_before_opt1 = ggml_get_f32_1d(err_sig, 0);
-        float error_before_optt = ggml_get_f32_1d(err_tot, 0);
-        printf(" after compute KLD and BCE is  %f(%p), %f(%p) \n", 
-        error_before_opt0, (void *)err_kl, error_before_opt1, (void *)err_sig);
-        printf(" after compute total error is  %f(%p)\n", error_before_optt, (void *)err_tot->data);
+        float error_before_opt0,  error_before_opt1,  error_before_optt;
+        if (ggml_backend_is_cpu(model.backend)) {
+            error_before_opt0 = ggml_get_f32_1d(err_kl, 0);
+            error_before_opt1 = ggml_get_f32_1d(err_sig, 0);
+            error_before_optt = ggml_get_f32_1d(err_tot, 0);
+        }
+        else{        
+            ggml_backend_tensor_get(err_kl, &error_before_opt0, 0, ggml_nbytes(err_kl));
+            ggml_backend_tensor_get(err_sig, &error_before_opt1, 0, ggml_nbytes(err_sig));
+            ggml_backend_tensor_get(err_tot, &error_before_optt, 0, ggml_nbytes(err_tot));
+        }
+        // printf(" after compute KLD and BCE is  %f(%p), %f(%p) \n", 
+        //     error_before_opt0, (void *)err_kl, error_before_opt1, (void *)err_sig);
+        // printf(" after compute total error is  %f(%p)\n", error_before_optt, (void *)err_tot->data);
+         printf(" after compute KLD and BCE is  %f, %f \n", 
+            error_before_opt0, error_before_opt1);
+        printf(" after compute total error is  %f\n", error_before_optt);
 
         // struct ggml_opt_params opt_params = ggml_opt_default_params(GGML_OPT_ADAM);
         struct ggml_opt_params opt_params = ggml_opt_default_params(GGML_OPT_LBFGS);

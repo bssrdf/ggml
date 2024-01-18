@@ -5512,7 +5512,7 @@ static __global__ void add1_f32(const float * x, const float *y, float * dst, co
         return;
     }
 
-    dst[i] = y[0] * x[i];
+    dst[i] = y[0] + x[i];
 }
 
 static __global__ void clamp_f32(const float * x, float * dst, const float min, const float max, const int k) {
