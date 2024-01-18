@@ -14,7 +14,7 @@
 
 //#define GGML_ALLOCATOR_DEBUG
 
-//#define AT_PRINTF(...) fprintf(stderr, __VA_ARGS__)
+// #define AT_PRINTF(...) fprintf(stderr, __VA_ARGS__)
 #define AT_PRINTF(...)
 
 // TODO: GGML_PAD ?
@@ -87,6 +87,7 @@ void ggml_tallocr_alloc(ggml_tallocr_t alloc, struct ggml_tensor * tensor) {
     size = aligned_offset(NULL, size, alloc->alignment);
 
     AT_PRINTF("%s: allocating %s (%zu bytes) - ", __func__, tensor->name, size);
+    // fprintf(stderr, "%s: allocating %s (%zu bytes) - \n", __func__, tensor->name, size);
 
     size_t max_avail = 0;
 
@@ -131,6 +132,15 @@ void ggml_tallocr_alloc(ggml_tallocr_t alloc, struct ggml_tensor * tensor) {
 
     tensor->data = addr;
     tensor->buffer = alloc->buffer;
+    // fprintf(stderr, "%s: %s ( %p, %p) %ld, %p, %d, %d\n ", __func__, tensor->name, 
+    //            (void *)tensor->data, (void *)tensor->buffer, block->size, block->addr,
+    //             best_fit_block, alloc->n_free_blocks);
+    // if(strcmp(ggml_get_name(tensor), "decode2_relu") == 0) {
+    //     fprintf(stderr, "%s: %s ( %p, %p)\n ", __func__, tensor->name, (void *)tensor->data, (void *)tensor->buffer);
+    // }
+    // if(strcmp(ggml_get_name(tensor), "totloss") == 0) {
+    //     fprintf(stderr, "%s: %s ( %p, %p)\n ", __func__, tensor->name, (void *)tensor->data, (void *)tensor->buffer);
+    // }
     if (!alloc->measure) {
         ggml_backend_buffer_init_tensor(alloc->buffer, tensor);
     }
@@ -412,23 +422,23 @@ static bool ggml_are_same_layout(const struct ggml_tensor * a, const struct ggml
 
 static bool ggml_op_can_inplace(enum ggml_op op) {
     switch (op) {
-        case GGML_OP_SCALE:
-        case GGML_OP_DIAG_MASK_ZERO:
-        case GGML_OP_DIAG_MASK_INF:
-        case GGML_OP_ADD:
-        case GGML_OP_ADD1:
-        case GGML_OP_SUB:
-        case GGML_OP_MUL:
-        case GGML_OP_DIV:
-        case GGML_OP_SQR:
-        case GGML_OP_SQRT:
-        case GGML_OP_LOG:
-        case GGML_OP_EXP:
-        case GGML_OP_UNARY:
-        case GGML_OP_ROPE:
-        case GGML_OP_RMS_NORM:
-        case GGML_OP_SOFT_MAX:
-            return true;
+        // case GGML_OP_SCALE:
+        // case GGML_OP_DIAG_MASK_ZERO:
+        // case GGML_OP_DIAG_MASK_INF:
+        // case GGML_OP_ADD:
+        // case GGML_OP_ADD1:
+        // case GGML_OP_SUB:
+        // case GGML_OP_MUL:
+        // case GGML_OP_DIV:
+        // case GGML_OP_SQR:
+        // case GGML_OP_SQRT:
+        // case GGML_OP_LOG:
+        // case GGML_OP_EXP:
+        // case GGML_OP_UNARY:
+        // case GGML_OP_ROPE:
+        // case GGML_OP_RMS_NORM:
+        // case GGML_OP_SOFT_MAX:
+        //     return true;
 
         default:
             return false;
@@ -524,6 +534,8 @@ static void ggml_tallocr_alloc_graph_impl(ggml_gallocr_t galloc, struct ggml_cgr
     const int * parse_seq     = galloc->parse_seq;
     int         parse_seq_len = galloc->parse_seq_len;
 
+    // fprintf(stderr, "%s: alloc %d nodes \n ", __func__,  gf->n_nodes);
+
     // count number of children and views
     for (int i = 0; i < gf->n_nodes; i++) {
         struct ggml_tensor * node = gf->nodes[i];
@@ -567,10 +579,23 @@ static void ggml_tallocr_alloc_graph_impl(ggml_gallocr_t galloc, struct ggml_cgr
                     break;
                 }
                 allocate_node(galloc, parent);
+                // if(strcmp(ggml_get_name(parent), "decode2_relu") == 0) {
+                //     fprintf(stderr, "%s,%ld: %s ( %p, %p)\n ", __func__, __LINE__, parent->name, (void *)parent->data, (void *)parent->buffer);
+                // }
+                // if(strcmp(ggml_get_name(parent), "totloss") == 0) {
+                //     fprintf(stderr, "%s,%ld: %s ( %p, %p)\n ", __func__, __LINE__, parent->name, (void *)parent->data, (void *)parent->buffer);
+                // }
             }
 
             // allocate node
             allocate_node(galloc, node);
+            // if(strcmp(ggml_get_name(node), "decode2_relu") == 0) {
+            //     fprintf(stderr, "%s,%ld: %s ( %p, %p)\n ", __func__, __LINE__, node->name, (void *)node->data, (void *)node->buffer);
+            // }
+            // if(strcmp(ggml_get_name(node), "totloss") == 0) {
+            //     fprintf(stderr, "%s,%ld: %s ( %p, %p)\n ", __func__, __LINE__, node->name, (void *)node->data, (void *)node->buffer);
+            // }
+
 
             AT_PRINTF("exec: %s (%s) <= ", ggml_op_name(node->op), node->name);
             for (int j = 0; j < GGML_MAX_SRC; j++) {
@@ -632,7 +657,6 @@ static void ggml_tallocr_alloc_graph_impl(ggml_gallocr_t galloc, struct ggml_cgr
 
 size_t ggml_gallocr_alloc_graph(ggml_gallocr_t galloc, ggml_tallocr_t talloc, struct ggml_cgraph * graph) {
     size_t hash_size = graph->visited_hash_table.size;
-
     // check if the hash table is initialized and large enough
     if (galloc->hash_set.size < hash_size) {
         if (galloc->hash_set.keys != NULL) {

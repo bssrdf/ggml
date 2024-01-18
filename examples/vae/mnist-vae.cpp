@@ -345,16 +345,15 @@ static void load_data(ggml_backend_t backend, struct ggml_tensor * dst, struct g
 
 static void randomize_bias( struct mnist_vae_model * model, 
                             struct ggml_context    * ctx0,
+                            struct random_uniform_distribution * rnd,
                             struct ggml_tensor     * w,
-                            struct ggml_tensor     * b,
-                            int seed ){
+                            struct ggml_tensor     * b){
         int64_t fan_in = w->ne[0];
-        float scale = 1./sqrt((float)fan_in);
-        struct random_uniform_distribution * rnd = init_random_uniform_distribution(seed, -scale, scale);
-        struct ggml_tensor * rn = ggml_dup_tensor(ctx0, b);
+        float scale = 1./sqrt((float)fan_in);        
+        struct ggml_tensor * rn = ggml_dup_tensor(ctx0, b);        
         randomize_tensor_uniform(rn, rnd);
+        rn = ggml_scale(ctx0, rn, scale);
         load_data(model->backend, b, rn);
-        free_random_uniform_distribution(rnd);
 }
 
 static void zero_bias_model(struct mnist_vae_model * model, int seed){
@@ -364,19 +363,22 @@ static void zero_bias_model(struct mnist_vae_model * model, int seed){
         .mem_buffer = NULL,
         .no_alloc   = false,
     };
+    struct random_uniform_distribution * rnd = init_random_uniform_distribution(seed, -1.f, 1.f);
 
     struct ggml_context * ctx0 = ggml_init(params);
-    randomize_bias(model, ctx0, model->decode1_weight, model->decode1_bias, seed);
-    randomize_bias(model, ctx0, model->decode2_weight, model->decode2_bias, seed);
-    randomize_bias(model, ctx0, model->decode3_weight, model->decode3_bias, seed);
-    randomize_bias(model, ctx0, model->decode4_weight, model->decode4_bias, seed);
-    randomize_bias(model, ctx0, model->encode1_weight, model->encode1_bias, seed);
-    randomize_bias(model, ctx0, model->encode2_weight, model->encode2_bias, seed);
-    randomize_bias(model, ctx0, model->encode3_weight, model->encode3_bias, seed);
-    randomize_bias(model, ctx0, model->mu_weight, model->mu_bias, seed);
-    randomize_bias(model, ctx0, model->logsd_weight, model->logsd_bias, seed);
+    randomize_bias(model, ctx0, rnd, model->decode1_weight, model->decode1_bias);
+    randomize_bias(model, ctx0, rnd, model->decode2_weight, model->decode2_bias);
+    randomize_bias(model, ctx0, rnd, model->decode3_weight, model->decode3_bias);
+    randomize_bias(model, ctx0, rnd, model->decode4_weight, model->decode4_bias);
+    randomize_bias(model, ctx0, rnd, model->encode1_weight, model->encode1_bias);
+    randomize_bias(model, ctx0, rnd, model->encode2_weight, model->encode2_bias);
+    randomize_bias(model, ctx0, rnd, model->encode3_weight, model->encode3_bias);
+    randomize_bias(model, ctx0, rnd, model->mu_weight, model->mu_bias);
+    randomize_bias(model, ctx0, rnd, model->logsd_weight, model->logsd_bias);
     
     ggml_free(ctx0);
+    free_random_uniform_distribution(rnd);
+
 
 }
 
@@ -552,9 +554,9 @@ static void train_forward_batch(
     struct ggml_tensor* var = ggml_sqr(ctx0, sd);
     ggml_set_name(var, "var");
     struct ggml_tensor* h3 = ggml_add(ctx0, ggml_scale(ctx0, h1, 0.5f), 
-                                            ggml_scale(ctx0, var, 0.5f));
+                                            ggml_scale(ctx0, sd, 0.5f));
     if(ggml_backend_is_cpu(model->backend)){ 
-       h3 = ggml_sub(ctx0, h3, logsd);
+       h3 = ggml_sub(ctx0, h3, ggml_scale(ctx0, logsd, 0.5f));
     }else{
         h3 = ggml_add(ctx0, h3, ggml_scale(ctx0, logsd, -1.f));
     }
@@ -565,8 +567,8 @@ static void train_forward_batch(
        h3 = ggml_add1(ctx0, h3, ggml_new_f32(ctx0, -0.5f));
     }    
     ggml_set_name(h3, "kldiv");   
-    // h3 = ggml_scale(ctx0, ggml_sum(ctx0, h3), 1.f/(float)n_batch);
-    h3 = ggml_sum(ctx0, h3);
+    h3 = ggml_scale(ctx0, ggml_sum(ctx0, h3), 1.f/(float)n_batch);
+    // h3 = ggml_sum(ctx0, h3);
     struct ggml_tensor* klloss = h3;
     ggml_set_name(h3, "klloss");   
 
@@ -602,8 +604,8 @@ static void train_forward_batch(
                                   ggml_exp(ctx0, ggml_neg(ctx0, ggml_abs(ctx0, x))),
                                   ggml_new_f32(ctx0, 1.f))));
     // h = ggml_scale(ctx0, ggml_sum(ctx0, h), 1.f/((float)(n_batch*n_input)));
-    // h = ggml_scale(ctx0, ggml_sum(ctx0, h), 1.f/((float)(n_batch*n_input)));
-    h = ggml_sum(ctx0, h);
+    h = ggml_scale(ctx0, ggml_sum(ctx0, h), 1.f/((float)(n_batch*n_input)));
+    // h = ggml_sum(ctx0, h);
     ggml_set_name(h, "sigloss");
 
     h = ggml_add(ctx0, h, klloss);
@@ -871,7 +873,7 @@ int main(int argc, char ** argv) {
     size_t    compute_size = 1024ll*1024ll*1024ll;
     uint8_t * compute_addr = new uint8_t[compute_size];
 
-    struct random_normal_distribution * rnd = init_random_normal_distribution(1337, 0, 0.1f, -1, 1);
+    struct random_normal_distribution * rnd = init_random_normal_distribution(1337, 0, 1.f, -FLT_MAX, FLT_MAX);
 
     float *rnds = new float[model.hparams.n_latent*n_batch];
 
@@ -903,13 +905,18 @@ int main(int argc, char ** argv) {
         struct ggml_tensor * input_batch = ggml_get_tensor(model.ctx, "input");
         struct ggml_tensor * noise_batch = ggml_get_tensor(model.ctx, "noise");
         
-
+        float mi = FLT_MAX, mx = -FLT_MAX;  
         for(int i = 0; i < model.hparams.n_latent*n_batch; i++){            
             rnds[i] = frand_normal(rnd);
+            if(mi > rnds[i])
+                mi = rnds[i];
+            if(mx < rnds[i])
+                mx = rnds[i];
             // printf(" %f, ", rnds[i]);
             // if((i+1)%model.hparams.n_latent == 0)
             //    printf("\n");
         }
+        printf("min,max of noise %f, %f\n", mi, mx);
         
         
         

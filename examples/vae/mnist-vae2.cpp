@@ -4,6 +4,7 @@
 #include "train.h"
 
 #include <vector>
+#include <map>
 #include <cassert>
 #include <cstdlib>
 #include <cstring>
@@ -23,6 +24,7 @@
 #ifdef GGML_USE_CUBLAS
 #include "ggml-cuda.h"
 #endif
+
 
 typedef unsigned char uint8;
 typedef uint8 image[28][28];
@@ -146,6 +148,8 @@ struct mnist_vae_model {
 
     struct ggml_context * ctx;
 
+    std::map<void *, struct ggml_tensor*> data_map;
+
     size_t calculate_mem_size() {
         double mem_size = 0;
         mem_size += (hparams.n_input  * hparams.enc1_out + hparams.enc1_out) * ggml_type_sizef(GGML_TYPE_F32);  // encode1_w+b
@@ -261,6 +265,29 @@ static void init_model(struct mnist_vae_model * model, bool use_gpu = false, int
 
 }
 
+static void print_compnent(struct mnist_vae_model * model, struct ggml_tensor * t){
+    fprintf(stderr, " name: %s, addr: %p, buffer: %p \n", t->name, (void *)t->data, (void *)t->buffer);
+    model->data_map[(void *)t->data] = t;
+}
+
+static void print_model_data_addr(struct mnist_vae_model * model){
+    fprintf(stderr, " ********************************* \n");
+    print_compnent(model, model->input);
+    print_compnent(model, model->noise);
+    print_compnent(model, model->encode1_weight);
+    print_compnent(model, model->encode1_bias);
+    print_compnent(model, model->decode1_weight);
+    print_compnent(model, model->decode1_bias);
+    print_compnent(model, model->decode2_weight);
+    print_compnent(model, model->decode2_bias);
+    print_compnent(model, model->mu_weight);
+    print_compnent(model, model->mu_bias);
+    print_compnent(model, model->logsd_weight);
+    print_compnent(model, model->logsd_bias);
+    fprintf(stderr, " ********************************* \n");
+}
+
+
 static void set_param_model(struct mnist_vae_model * model) {
 
     struct ggml_context* ctx = model->ctx;
@@ -290,19 +317,17 @@ static void load_data(ggml_backend_t backend, struct ggml_tensor * dst, struct g
 
 }
 
-
 static void randomize_bias( struct mnist_vae_model * model, 
                             struct ggml_context    * ctx0,
+                            struct random_uniform_distribution * rnd,
                             struct ggml_tensor     * w,
-                            struct ggml_tensor     * b,
-                            int seed ){
+                            struct ggml_tensor     * b){
         int64_t fan_in = w->ne[0];
-        float scale = 1./sqrt((float)fan_in);
-        struct random_uniform_distribution * rnd = init_random_uniform_distribution(seed, -scale, scale);
-        struct ggml_tensor * rn = ggml_dup_tensor(ctx0, b);
+        float scale = sqrt(1./(float)fan_in);        
+        struct ggml_tensor * rn = ggml_dup_tensor(ctx0, b);        
         randomize_tensor_uniform(rn, rnd);
+        rn = ggml_scale(ctx0, rn, scale);
         load_data(model->backend, b, rn);
-        free_random_uniform_distribution(rnd);
 }
 
 static void zero_bias_model(struct mnist_vae_model * model, int seed){
@@ -312,17 +337,20 @@ static void zero_bias_model(struct mnist_vae_model * model, int seed){
         .mem_buffer = NULL,
         .no_alloc   = false,
     };
+    struct random_uniform_distribution * rnd = init_random_uniform_distribution(seed, -1.f, 1.f);
 
     struct ggml_context * ctx0 = ggml_init(params);
-    randomize_bias(model, ctx0, model->decode1_weight, model->decode1_bias, seed);
-    randomize_bias(model, ctx0, model->decode2_weight, model->decode2_bias, seed);
-    randomize_bias(model, ctx0, model->encode1_weight, model->encode1_bias, seed);
-    randomize_bias(model, ctx0, model->mu_weight, model->mu_bias, seed);
-    randomize_bias(model, ctx0, model->logsd_weight, model->logsd_bias, seed);
+    randomize_bias(model, ctx0, rnd, model->decode1_weight, model->decode1_bias);
+    randomize_bias(model, ctx0, rnd, model->decode2_weight, model->decode2_bias);    
+    randomize_bias(model, ctx0, rnd, model->encode1_weight, model->encode1_bias);
+    randomize_bias(model, ctx0, rnd, model->mu_weight, model->mu_bias);
+    randomize_bias(model, ctx0, rnd, model->logsd_weight, model->logsd_bias);
     
     ggml_free(ctx0);
-
+    free_random_uniform_distribution(rnd);
 }
+
+
 
 static void print_row(struct ggml_tensor * probs, int i) {
     for (int k = 0; k < probs->ne[0]; ++k) {
@@ -488,7 +516,7 @@ static void train_forward_batch(
     // h3 = ggml_scale(ctx0, ggml_sum(ctx0, h3), 1.f/(float)n_batch);
     h3 = ggml_sum(ctx0, h3);
     struct ggml_tensor* klloss = h3;
-    ggml_set_name(h3, "klloss");   
+    ggml_set_name(klloss, "klloss");   
 
     h3 = ggml_mul(ctx0, model->noise, ggml_exp(ctx0, ggml_scale(ctx0, logsd, 0.5f)));
     ggml_set_name(h3, "sdnoise");
@@ -500,6 +528,7 @@ static void train_forward_batch(
     h = ggml_add(ctx0, h, ggml_repeat(ctx0, model->decode2_bias, h)); 
     // h = ggml_add(ctx0, ggml_mul_mat(ctx0, model->decode2_weight, h), model->decode2_bias);
     h = ggml_relu(ctx0, h);
+    ggml_set_name(h, "decode2_relu");
     h = ggml_mul_mat(ctx0, model->decode1_weight, h); 
     h = ggml_add(ctx0, h, ggml_repeat(ctx0, model->decode1_bias, h)); 
     // h = ggml_add(ctx0, ggml_mul_mat(ctx0, model->decode1_weight, h), model->decode1_bias);
@@ -516,12 +545,14 @@ static void train_forward_batch(
                                   ggml_exp(ctx0, ggml_neg(ctx0, ggml_abs(ctx0, x))),
                                   ggml_new_f32(ctx0, 1.f))));
     // h = ggml_scale(ctx0, ggml_sum(ctx0, h), 1.f/((float)(n_batch*n_input)));
-    // h = ggml_scale(ctx0, ggml_sum(ctx0, h), 1.f/((float)(n_batch*n_input)));
+    // h = ggml_scale(ctx0, ggml_sum(ctx0, h), 1.f/((float)(n_batch)));
     h = ggml_sum(ctx0, h);
     ggml_set_name(h, "sigloss");
 
-    h = ggml_add(ctx0, h, klloss);
-    ggml_set_name(h, "totloss");
+    // h = ggml_add(ctx0, h, klloss);
+    struct ggml_tensor* hf = ggml_add(ctx0, klloss, h);
+    // h = ggml_neg(ctx0, h);
+    ggml_set_name(hf, "totloss");
 
     ggml_set_name(model->decode1_bias, "decode1_bias");       
     ggml_set_name(model->decode1_weight, "decode1_weight");       
@@ -601,6 +632,17 @@ struct ggml_cgraph * compute_graph_batch(struct mnist_vae_model * model,
 
     // allocate tensors
     ggml_allocr_alloc_graph(allocr, gf);
+
+    std::map<void *, struct ggml_tensor*> gf_map;  
+    std::map<void *, struct ggml_tensor*>::iterator it;
+    for(int i = 0; i < gf->n_nodes; ++i){
+        struct ggml_tensor *node = gf->nodes[i];
+        it = gf_map.find((void *)node->data);
+        if (it != gf_map.end()){ 
+            printf( "%s 's data addr already allocated for %s \n", node->name, gf_map[(void *)node->data]->name);
+        }
+        gf_map[(void *)node->data] = node;
+    }
     int n_threads = 1;
 
     if (ggml_backend_is_cpu(model->backend)) {
@@ -763,21 +805,39 @@ int main(int argc, char ** argv) {
         //create the worst case graph for memory usage estimation
          printf("try build graph \n");   
         struct ggml_cgraph * gf = build_train_graph_batch(&model, allocr, n_batch);
-         printf("after try \n");   
+        printf("after try \n"); 
+        // ggml_graph_dump_dot(gf, NULL, "mnist-vae-forward.dot");
+        
         size_t mem_size = ggml_allocr_alloc_graph(allocr, gf);
+
+        std::map<void *, struct ggml_tensor*> gf_map;  
+        std::map<void *, struct ggml_tensor*>::iterator it;
+        for(int i = 0; i < gf->n_nodes; ++i){
+            struct ggml_tensor *node = gf->nodes[i];
+            it = gf_map.find((void *)node->data);
+            if (it != gf_map.end()){ 
+                printf( "%s 's data addr already allocated for %s \n", node->name, gf_map[(void *)node->data]->name);
+            }
+            gf_map[(void *)node->data] = node;
+        }
         ggml_allocr_free(allocr);
 
         // compute the required memory
         graph_compute = ggml_backend_alloc_buffer(model.backend, mem_size);
         allocr = ggml_allocr_new_from_buffer(graph_compute);
         fprintf(stderr, "%s: compute buffer size: %.4f KB\n", __func__, mem_size/1024.0);
+
     }
+
+    print_model_data_addr(&model);
+
+
    
 
     size_t    compute_size = 1024ll*1024ll*1024ll;
     uint8_t * compute_addr = new uint8_t[compute_size];
 
-    struct random_normal_distribution * rnd = init_random_normal_distribution(1337, 0, 0.1f, -1, 1);
+    struct random_normal_distribution * rnd = init_random_normal_distribution(1337, 0, 1.f, -FLT_MAX, FLT_MAX);
 
     float *rnds = new float[model.hparams.n_latent*n_batch];
 
@@ -809,13 +869,18 @@ int main(int argc, char ** argv) {
         struct ggml_tensor * input_batch = ggml_get_tensor(model.ctx, "input");
         struct ggml_tensor * noise_batch = ggml_get_tensor(model.ctx, "noise");
         
-
+        // float mi = FLT_MAX, mx = -FLT_MAX;  
         for(int i = 0; i < model.hparams.n_latent*n_batch; i++){            
             rnds[i] = frand_normal(rnd);
+            // if(mi > rnds[i])
+            //     mi = rnds[i];
+            // if(mx < rnds[i])
+            //     mx = rnds[i];
             // printf(" %f, ", rnds[i]);
             // if((i+1)%model.hparams.n_latent == 0)
             //    printf("\n");
         }
+        // printf("min,max of noise %f, %f\n", mi, mx);
         
         
         
@@ -837,19 +902,44 @@ int main(int argc, char ** argv) {
         
         // printf("after compute graph \n", ex);
         
-        struct ggml_cgraph * gf_res = compute_graph_batch(&model, allocr, n_batch);
+        // struct ggml_cgraph * gf_res = compute_graph_batch(&model, allocr, n_batch);
+        // print_model_data_addr(&model);
         // ggml_graph_dump_dot(gf_res, NULL, "mnist-vae-forward.dot");
-        // struct ggml_tensor * err_kl = get_tensor_from_graph(gf_res, "klloss");
-        // struct ggml_tensor * err_sig = get_tensor_from_graph(gf_res, "sigloss");
+        struct ggml_cgraph* gf_res = ggml_new_graph(ctx0);
+        train_forward_batch(&model, ctx0, n_batch);    
+        ggml_build_forward_expand(gf_res, ggml_get_tensor(ctx0, "totloss"));       
+        std::map<void *, struct ggml_tensor*> gf_map;  
+        std::map<void *, struct ggml_tensor*>::iterator it;
+        for(int i = 0; i < gf_res->n_nodes; ++i){
+            struct ggml_tensor *node = gf_res->nodes[i];
+            it = gf_map.find((void *)node->data);
+            if (it != gf_map.end()){ 
+                printf( "%s 's data addr already allocated for %s \n", node->name, gf_map[(void *)node->data]->name);
+            }
+            gf_map[(void *)node->data] = node;
+        } 
+        // struct ggml_tensor * n36 = get_tensor_from_graph(gf_res, "decode2_relu");
+        // if (n36){
+        //      printf("  %s(%p), %s(%p) \n", n36->name, (void *)n36, n36->src[0]->name,(void *)n36->src[0]); 
+        //      printf("  %s(%p), %s(%p) \n", n36->name, (void *)n36->data, n36->src[0]->name,(void *)n36->src[0]->data); 
+        //      float n36v = ggml_get_f32_nd(n36, 0, 0, 0, 0);
+        //      float n35v = ggml_get_f32_nd(n36->src[0], 0, 0, 0, 0);
+        //      printf("  %s(%f), %s(%f) \n",  n36->name, n36v, n36->src[0]->name, n35v);
+
+        // }
+        ggml_graph_compute_helper(work_buffer, gf_res, /*n_threads*/ 1);
+
+        struct ggml_tensor * err_kl = get_tensor_from_graph(gf_res, "klloss");
+        struct ggml_tensor * err_sig = get_tensor_from_graph(gf_res, "sigloss");
         struct ggml_tensor * err_tot = get_tensor_from_graph(gf_res, "totloss");
-        // if(!err_kl){
-        //     fprintf(stderr, "something wrong with graph compute \n");
-        //     exit(1);
-        // }
-        // if(!err_sig){
-        //     fprintf(stderr, "something wrong with graph compute \n");
-        //     exit(1);
-        // }
+        if(!err_kl){
+            fprintf(stderr, "something wrong with graph compute \n");
+            exit(1);
+        }
+        if(!err_sig){
+            fprintf(stderr, "something wrong with graph compute \n");
+            exit(1);
+        }
         if(!err_tot){
             fprintf(stderr, "something wrong with graph compute \n");
             exit(1);
@@ -858,27 +948,37 @@ int main(int argc, char ** argv) {
         // int64_t *ne = err_kl->ne;
         // printf(" loss ne = (%d, %d, %d, %d)\n", ne[0], ne[1], ne[2], ne[3]);
 
-        // float error_before_opt0 = ggml_get_f32_1d(err_kl, 0);
-        // float error_before_opt1 = ggml_get_f32_1d(err_sig, 0);
-        float error_before_opt1 = ggml_get_f32_1d(err_tot, 0);
-        // printf(" after compute error is  %f,%f \n", error_before_opt0, error_before_opt1);
-        printf(" after compute error is  %f\n", error_before_opt1);
+        float error_before_opt0 = ggml_get_f32_1d(err_kl, 0);
+        float error_before_opt1 = ggml_get_f32_1d(err_sig, 0);
+        float error_before_optt = ggml_get_f32_1d(err_tot, 0);
+        printf(" after compute KLD and BCE is  %f(%p), %f(%p) \n", 
+        error_before_opt0, (void *)err_kl, error_before_opt1, (void *)err_sig);
+        printf(" after compute total error is  %f(%p)\n", error_before_optt, (void *)err_tot->data);
 
-        struct ggml_opt_params opt_params = ggml_opt_default_params(GGML_OPT_ADAM);
-        // struct ggml_opt_params opt_params = ggml_opt_default_params(GGML_OPT_LBFGS);
+        // struct ggml_opt_params opt_params = ggml_opt_default_params(GGML_OPT_ADAM);
+        struct ggml_opt_params opt_params = ggml_opt_default_params(GGML_OPT_LBFGS);
         opt_params.print_backward_graph = false;
         opt_params.print_forward_graph = false;
-        opt_params.adam.n_iter = 16;
+        // opt_params.adam.n_iter = 16;
+        // opt_params.adam.gclip = 2.f;
         // opt_params.lbfgs.n_iter = 16;
         // opt_params.lbfgs.max_linesearch = 50;
         
 
         // printf(" before opt  \n");
-        // ggml_opt(ctx0, opt_params, err_kl);        
-        // ggml_opt(ctx0, opt_params, err_sig);
-        ggml_opt(ctx0, opt_params, err_tot);
+        // int ret = ggml_opt(ctx0, opt_params, err_kl);        
+        // ggml_opt(ctx0, opt_params, err_kl);
+        int ret = ggml_opt(ctx0, opt_params, err_tot);
+        // if (ret == GGML_OPT_DID_NOT_CONVERGE)
+        //     printf(" klloss did not  converge  \n");
+
+        // ggml_opt(ctx0, opt_params, err_sig);        
+        // ret = ggml_opt(ctx0, opt_params, err_sig);        
+        // if (ret == GGML_OPT_DID_NOT_CONVERGE)
+        //     printf(" sigloss did not  converge  \n");
+
         // exit(1);
-        // printf(" after opt  \n");
+            
 
 
         //

@@ -499,6 +499,7 @@ int main(int argc, const char ** argv) {
                                           ggml_new_f32(ctx0, 1.f))));
         
         ggml_set_name(sig, "sigloss");
+        struct ggml_tensor * add1_res = ggml_add1(ctx0, x, ggml_new_f32(ctx0, -0.5f));
 
         struct ggml_cgraph * gf = ggml_new_graph_custom(ctx0, GGML_DEFAULT_GRAPH_SIZE, true);
         ggml_build_forward_expand(gf, sig);
@@ -526,6 +527,15 @@ int main(int argc, const char ** argv) {
 
         for (int i= 0; i < 7; i++){
             printf("%f, ", ggml_get_f32_1d(z, i));            
+        }
+        printf("\n");
+
+        ggml_build_forward_expand(gf, add1_res);
+        ggml_graph_reset(gf);        
+        ggml_graph_compute_with_ctx(ctx0, gf, n_threads);
+        printf("add1_res: \n");
+        for (int i= 0; i < 7; i++){
+            printf("%f, ", ggml_get_f32_1d(add1_res, i));            
         }
         printf("\n");
         
