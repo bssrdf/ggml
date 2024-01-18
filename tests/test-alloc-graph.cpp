@@ -251,6 +251,20 @@ struct ggml_cgraph * compute(const test_model & model, struct ggml_allocr * allo
 
     // allocate tensors
     ggml_allocr_alloc_graph(allocr, gf);
+
+    std::map<void *, struct ggml_tensor*> gf_map;  
+    std::map<void *, struct ggml_tensor*>::iterator it;
+    for(int i = 0; i < gf->n_nodes; ++i){
+        struct ggml_tensor *node = gf->nodes[i];
+        it = gf_map.find((void *)node->data);
+        if (it != gf_map.end()){ 
+            printf( "%s 's data addr already allocated for %s \n", node->name, gf_map[(void *)node->data]->name);
+        }
+        gf_map[(void *)node->data] = node;
+    }
+
+
+
     int n_threads = 1;
 
     if (ggml_backend_is_cpu(model.backend)) {
