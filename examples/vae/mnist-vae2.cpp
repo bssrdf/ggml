@@ -966,7 +966,7 @@ int main(int argc, char ** argv) {
 
         // struct ggml_opt_params opt_params = ggml_opt_default_params(GGML_OPT_ADAM);
         struct ggml_opt_params opt_params = ggml_opt_default_params(GGML_OPT_LBFGS);
-        opt_params.print_backward_graph = false;
+        opt_params.print_backward_graph = true;
         opt_params.print_forward_graph = false;
         // opt_params.adam.n_iter = 16;
         // opt_params.adam.gclip = 2.f;

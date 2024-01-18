@@ -14535,6 +14535,10 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
 
 #ifdef GGML_USE_CUBLAS
     bool skip_cpu = ggml_cuda_compute_forward(params, tensor);
+        if(skip_cpu)
+            fprintf(stderr, " %s: cuda compute forward for %s success \n", __func__, tensor->name);
+        else
+            fprintf(stderr, " %s: cuda compute forward fpr %s failed\n", __func__, tensor->name);
     if (skip_cpu) {
         return;
     }
@@ -17814,10 +17818,17 @@ void ggml_graph_dump_dot(const struct ggml_cgraph * gb, const struct ggml_cgraph
 static void ggml_opt_set_params(int np, struct ggml_tensor * const ps[], const float * x) {
     int i = 0;
     for (int p = 0; p < np; ++p) {
-        const int64_t ne = ggml_nelements(ps[p]) ;
-        // TODO: add function to set tensor from array
-        for (int64_t j = 0; j < ne; ++j) {
-            ggml_set_f32_1d(ps[p], j, x[i++]);
+        if(ps[p]->backend != GGML_BACKEND_CPU){
+            int64_t bytes = ggml_nbytes(ps[p]);
+            ggml_backend_tensor_set(ps[p], x, 0, bytes);
+            x += bytes;
+        }
+        else{
+            const int64_t ne = ggml_nelements(ps[p]) ;
+            // TODO: add function to set tensor from array
+            for (int64_t j = 0; j < ne; ++j) {
+                ggml_set_f32_1d(ps[p], j, x[i++]);
+            }
         }
     }
 }
@@ -17825,10 +17836,16 @@ static void ggml_opt_set_params(int np, struct ggml_tensor * const ps[], const f
 static void ggml_opt_get_params(int np, struct ggml_tensor * const ps[], float * x) {
     int i = 0;
     for (int p = 0; p < np; ++p) {
-        const int64_t ne = ggml_nelements(ps[p]) ;
-        // TODO: add function to get all elements at once
-        for (int64_t j = 0; j < ne; ++j) {
-            x[i++] = ggml_get_f32_1d(ps[p], j);
+        if(ps[p]->backend != GGML_BACKEND_CPU){
+            int64_t bytes = ggml_nbytes(ps[p]);
+            ggml_backend_tensor_get(ps[p], x, 0, bytes);
+            x += bytes;
+        }else{
+            const int64_t ne = ggml_nelements(ps[p]) ;
+            // TODO: add function to get all elements at once
+            for (int64_t j = 0; j < ne; ++j) {
+                x[i++] = ggml_get_f32_1d(ps[p], j);
+            }
         }
     }
 }
@@ -18329,7 +18346,9 @@ static enum ggml_opt_result ggml_opt_lbfgs(
     float gnorm = 0.0f; // ||g||
 
     // initialize x from the graph nodes
+    fprintf(stderr, "%s: lbfgs bef  ggml_opt_get_params\n ", __func__);
     ggml_opt_get_params(np, ps, x);
+    fprintf(stderr, "%s: lbfgs aft ggml_opt_get_params\n ", __func__);
 
     // the L-BFGS memory
     float * lm_alpha = opt->lbfgs.lmal->data;
@@ -18341,7 +18360,9 @@ static enum ggml_opt_result ggml_opt_lbfgs(
 
     // evaluate the function value and its gradient
     {
+        fprintf(stderr, "%s: lbfgs bef  ggml_opt_set_params\n ", __func__);
         ggml_opt_set_params(np, ps, x);
+        fprintf(stderr, "%s: lbfgs aft  ggml_opt_set_params\n ", __func__);
 
         fx = 0;
         memset(g, 0, sizeof(float)*nx);
