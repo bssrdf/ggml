@@ -14535,10 +14535,12 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
 
 #ifdef GGML_USE_CUBLAS
     bool skip_cpu = ggml_cuda_compute_forward(params, tensor);
-        if(skip_cpu)
-            fprintf(stderr, " %s: cuda compute forward for %s success \n", __func__, tensor->name);
-        else
-            fprintf(stderr, " %s: cuda compute forward fpr %s failed\n", __func__, tensor->name);
+    if(skip_cpu)
+        fprintf(stderr, " %s: cuda compute forward for %s(%s) success \n", __func__, tensor->name, 
+               ggml_op_desc(tensor));
+    else
+        fprintf(stderr, " %s: cuda compute forward fpr %s(%s) failed\n", __func__, tensor->name,
+               ggml_op_desc(tensor));
     if (skip_cpu) {
         return;
     }
@@ -17853,10 +17855,16 @@ static void ggml_opt_get_params(int np, struct ggml_tensor * const ps[], float *
 static void ggml_opt_get_grad(int np, struct ggml_tensor * const ps[], float * g) {
     int64_t i = 0;
     for (int p = 0; p < np; ++p) {
-        const int64_t ne = ggml_nelements(ps[p]) ;
-        // TODO: add function to get all elements at once
-        for (int64_t j = 0; j < ne; ++j) {
-            g[i++] = ggml_get_f32_1d(ps[p]->grad, j);
+        if(ps[p]->backend != GGML_BACKEND_CPU){
+            int64_t bytes = ggml_nbytes(ps[p]->grad);
+            ggml_backend_tensor_get(ps[p]->grad, g, 0, bytes);
+            g += bytes;
+        }else{            
+            const int64_t ne = ggml_nelements(ps[p]) ;
+            // TODO: add function to get all elements at once
+            for (int64_t j = 0; j < ne; ++j) {
+                g[i++] = ggml_get_f32_1d(ps[p]->grad, j);
+            }
         }
     }
 }
@@ -17866,10 +17874,17 @@ static void ggml_opt_acc_grad(int np, struct ggml_tensor * const ps[], float * g
     // printf("there are %d tensors as params \n", np);    
     for (int p = 0; p < np; ++p) {
         const int64_t ne = ggml_nelements(ps[p]) ;
-        // TODO: add function to get all elements at once
-        for (int64_t j = 0; j < ne; ++j) {
-            g[i++] += ggml_get_f32_1d(ps[p]->grad, j) * scale;
-        }
+        if(ps[p]->backend != GGML_BACKEND_CPU){
+            int64_t bytes = ggml_nbytes(ps[p]->grad);
+            ggml_backend_tensor_get(ps[p]->grad, g, 0, bytes);
+            for (int64_t j = 0; j < ne; ++j) {
+                g[i++] *= scale;
+            }
+        }else{            
+            // TODO: add function to get all elements at once
+            for (int64_t j = 0; j < ne; ++j) {
+                g[i++] += ggml_get_f32_1d(ps[p]->grad, j) * scale;
+            }
         // if(strcmp(ggml_get_name(ps[p]), "mu_weight") == 0) {
         //     printf("mu_weight ============================================\n");    
         //     for (int64_t j = 0; j < ne; ++j){
@@ -17906,7 +17921,19 @@ static void ggml_opt_acc_grad(int np, struct ggml_tensor * const ps[], float * g
         //     }
         //     printf("============================================\n");    
         // }
+        }
     }
+}
+
+static void ggml_opt_set_grad_to_one( struct ggml_tensor *f ){
+    GGML_ASSERT(ggml_is_scalar(f));
+    if(f->backend != GGML_BACKEND_CPU){
+        float one = 1.f;
+        ggml_backend_tensor_set(f->grad, &one, 0, ggml_nbytes(f->grad));
+    }else{
+        ggml_set_f32      (f->grad, 1.0f);
+    }
+
 }
 
 //
@@ -17940,17 +17967,7 @@ static enum ggml_opt_result ggml_opt_adam(
 
             ps[np++] = gf->nodes[i];
             nx += ggml_nelements(gf->nodes[i]);
-        }
-        if(strcmp(ggml_get_name(gf->nodes[i]), "decode2_relu") == 0) {        
-            struct ggml_tensor * n36 = gf->nodes[i];
-            if (n36){
-                printf(" in opt: %s(%p), %s(%p) \n", n36->name, (void *)n36, n36->src[0]->name,(void *)n36->src[0]); 
-                printf(" in opt: %s(%p), %s(%p) \n", n36->name, (void *)n36->data, n36->src[0]->name,(void *)n36->src[0]->data); 
-                float n36v = ggml_get_f32_nd(n36, 0, 0, 0, 0);
-                float n35v = ggml_get_f32_nd(n36->src[0], 0, 0, 0, 0);
-                printf("  %s(%f), %s(%f) \n",  n36->name, n36v, n36->src[0]->name, n35v);
-            }
-        }
+        }        
     }
 
     if ((opt->params.type != params.type) || (opt->nx != nx) || (opt->params.past != params.past)) {
@@ -17994,7 +18011,8 @@ static enum ggml_opt_result ggml_opt_adam(
             }
         }
         // ggml_graph_reset  (gf);
-        ggml_set_f32      (f->grad, 1.0f);
+        // ggml_set_f32      (f->grad, 1.0f);
+        ggml_opt_set_grad_to_one(f);
         ggml_graph_compute(gb, &cplan);
         ggml_opt_acc_grad(np, ps, g, accum_norm);
         fx += ggml_get_f32_1d(f, 0);
@@ -18085,8 +18103,9 @@ static enum ggml_opt_result ggml_opt_adam(
                     return GGML_OPT_CANCEL;;
                 }
             }
-            ggml_graph_reset  (gf);
-            ggml_set_f32      (f->grad, 1.0f);
+            // ggml_graph_reset  (gf);
+            // ggml_set_f32      (f->grad, 1.0f);
+            ggml_opt_set_grad_to_one(f);
             ggml_graph_compute(gb, &cplan);
             ggml_opt_acc_grad(np, ps, g, accum_norm);
             fx += ggml_get_f32_1d(f, 0);
@@ -18095,7 +18114,7 @@ static enum ggml_opt_result ggml_opt_adam(
 
         opt->loss_after = fx;
 
-        printf("%d iter f, prev_f      = %16.6f, %16.6f\n", t, ggml_get_f32_1d(f, 0), fx_prev[0]);
+        // printf("%d iter f, prev_f      = %16.6f, %16.6f\n", t, ggml_get_f32_1d(f, 0), fx_prev[0]);
 
         // check convergence
         if (fabsf(fx - fx_prev[0])/fx < params.adam.eps_f) {
@@ -18231,7 +18250,8 @@ static enum ggml_opt_result linesearch_backtracking(
                     }
                 }
                 // ggml_graph_reset  (gf);
-                ggml_set_f32      (f->grad, 1.0f);
+                // ggml_set_f32      (f->grad, 1.0f);
+                ggml_opt_set_grad_to_one(f);
                 ggml_graph_compute(gb, cplan);
                 ggml_opt_acc_grad(np, ps, g, accum_norm);
                 *fx += ggml_get_f32_1d(f, 0);
@@ -18376,7 +18396,8 @@ static enum ggml_opt_result ggml_opt_lbfgs(
                 }
             }
             // ggml_graph_reset  (gf);
-            ggml_set_f32      (f->grad, 1.0f);
+            // ggml_set_f32      (f->grad, 1.0f);
+            ggml_opt_set_grad_to_one(f);
             ggml_graph_compute(gb, &cplan);
             ggml_opt_acc_grad(np, ps, g, accum_norm);
             fx += ggml_get_f32_1d(f, 0);
@@ -18582,7 +18603,8 @@ struct ggml_opt_params ggml_opt_default_params(enum ggml_opt_type type) {
                     .print_backward_graph = true,
 
                     .n_gradient_accumulation = 1,
-
+                    .gf        = NULL,
+                    .gb        = NULL,
                     .adam = {
                         .n_iter = 10000,
                         .sched  = 1.000f,
@@ -18613,7 +18635,8 @@ struct ggml_opt_params ggml_opt_default_params(enum ggml_opt_type type) {
                     .print_backward_graph = true,
 
                     .n_gradient_accumulation = 1,
-
+                    .gf        = NULL,
+                    .gb        = NULL,
                     .lbfgs = {
                         .m              = 6,
                         .n_iter         = 100,
@@ -18746,6 +18769,9 @@ enum ggml_opt_result ggml_opt_resume(
         struct ggml_opt_context * opt,
         struct ggml_tensor * f) {
 
+    if (opt->params.gf != NULL){
+        return ggml_opt_resume_g(ctx, opt, f, opt->params.gf, opt->params.gb, NULL, NULL);
+    }  
     // build forward + backward compute graphs
     struct ggml_cgraph * gf = ggml_new_graph_custom(ctx, opt->params.graph_size, true);
     ggml_build_forward_expand(gf, f);

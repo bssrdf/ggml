@@ -584,7 +584,8 @@ struct ggml_cgraph* build_train_graph_batch(struct mnist_vae_model * model,
 
     // struct ggml_context* ctx0 = model->ctx;
 
-    struct ggml_cgraph* gf = ggml_new_graph(model->ctx);
+    // struct ggml_cgraph* gf = ggml_new_graph(model->ctx);
+    struct ggml_cgraph* gf  = ggml_new_graph_custom(model->ctx, GGML_DEFAULT_GRAPH_SIZE, true);
 
 
     train_forward_batch(model, model->ctx, n_batch);
@@ -815,6 +816,7 @@ int main(int argc, char ** argv) {
 
 
     struct ggml_cgraph* gf = NULL; 
+    struct ggml_cgraph* gb = NULL; 
 
     for (int ex=0; ex<num_batches; ++ex) {
         printf(" enter loop %d \n", ex);
@@ -840,19 +842,19 @@ int main(int argc, char ** argv) {
 
         if(ex == 0){            
             gf = build_train_graph_batch(&model, n_batch);
-            ggml_graph_dump_dot(gf, NULL, "mnist-vae-forward.dot");
+            gb = ggml_graph_dup(model.ctx, gf);           
+            printf("build backward graph \n");
+            ggml_build_backward_expand(model.ctx, gf, gb, true);
+            printf("finished build backward graph \n");
+            // ggml_graph_dump_dot(gf, NULL, "mnist-vae-forward.dot");
+            // ggml_graph_dump_dot(gb, gf,  "mnist-vae-cpu-backward.dot");
             model.compute_buffer = ggml_backend_alloc_ctx_tensors(model.ctx, model.backend);
             check_data_buffer(gf);
             randomize_model(&model, 1337, 0.0f, 0.1f, -1.0f, +1.0f);
             // randomize_model(&model, 1337, 0.0f, .1f, -FLT_MAX, FLT_MAX);
             printf("modle initialzed with random numbers \n");
             zero_bias_model(&model, 1337);
-            printf("modle bias zeroed \n");
-            // h = model.encode1_weight;
-            // ne = h->ne;
-            // printf("h is %s \n", h->name);
-            // printf("(%ld, %ld, %ld, %ld) \n", ne[0], ne[1], ne[2], ne[3]);
-            // printf("after zero bias \n"); 
+            printf("modle bias zeroed \n");            
         }
 
          
@@ -964,14 +966,16 @@ int main(int argc, char ** argv) {
             error_before_opt0, error_before_opt1);
         printf(" after compute total error is  %f\n", error_before_optt);
 
-        // struct ggml_opt_params opt_params = ggml_opt_default_params(GGML_OPT_ADAM);
-        struct ggml_opt_params opt_params = ggml_opt_default_params(GGML_OPT_LBFGS);
-        opt_params.print_backward_graph = true;
+        struct ggml_opt_params opt_params = ggml_opt_default_params(GGML_OPT_ADAM);
+        // struct ggml_opt_params opt_params = ggml_opt_default_params(GGML_OPT_LBFGS);
+        opt_params.print_backward_graph = false;
         opt_params.print_forward_graph = false;
-        // opt_params.adam.n_iter = 16;
+        opt_params.adam.n_iter = 16;
         // opt_params.adam.gclip = 2.f;
         // opt_params.lbfgs.n_iter = 16;
         // opt_params.lbfgs.max_linesearch = 50;
+        opt_params.gf = gf;
+        opt_params.gb = gb;
         
 
         // printf(" before opt  \n");

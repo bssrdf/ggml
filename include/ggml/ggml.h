@@ -1959,6 +1959,9 @@ extern "C" {
 
         int n_gradient_accumulation;
 
+        struct ggml_cgraph* gf;
+        struct ggml_cgraph* gb;
+
         // ADAM parameters
         struct {
             int n_iter;

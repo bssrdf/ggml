@@ -493,6 +493,8 @@ static_assert(sizeof(block_iq2_xxs) == sizeof(ggml_fp16_t) + QK_K/8*sizeof(uint1
 #define CUDA_TANH_BLOCK_SIZE 256
 #define CUDA_ABS_BLOCK_SIZE  256
 #define CUDA_NEG_BLOCK_SIZE  256
+#define CUDA_SGN_BLOCK_SIZE  256
+#define CUDA_STEP_BLOCK_SIZE 256
 #define CUDA_RELU_BLOCK_SIZE 256
 #define CUDA_SQR_BLOCK_SIZE 256
 #define CUDA_EXP_BLOCK_SIZE 256
@@ -760,6 +762,22 @@ static __global__ void neg_f32(const float * x, float * dst, int k) {
         return;
     }
     dst[i] = -x[i];
+}
+
+static __global__ void sgn_f32(const float * x, float * dst, int k) {
+    const int i  = blockDim.x*blockIdx.x + threadIdx.x;
+    if (i >= k) {
+        return;
+    }
+    dst[i] = (x[i] > 0.f) ? 1.f : ((x[i] < 0.f) ? -1.f : 0.f);
+}
+
+static __global__ void step_f32(const float * x, float * dst, int k) {
+    const int i  = blockDim.x*blockIdx.x + threadIdx.x;
+    if (i >= k) {
+        return;
+    }
+    dst[i] = x[i] > 0.f ? 1.f : 0.f;
 }
 
 static __global__ void relu_f32(const float * x, float * dst, const int k) {
@@ -5773,6 +5791,16 @@ static void neg_f32_cuda(const float * x, float * dst, const int k, cudaStream_t
     neg_f32<<<num_blocks, CUDA_NEG_BLOCK_SIZE, 0, stream>>>(x, dst, k);
 }
 
+static void sgn_f32_cuda(const float * x, float * dst, const int k, cudaStream_t stream) {
+    const int num_blocks = (k + CUDA_SGN_BLOCK_SIZE - 1) / CUDA_SGN_BLOCK_SIZE;
+    sgn_f32<<<num_blocks, CUDA_SGN_BLOCK_SIZE, 0, stream>>>(x, dst, k);
+}
+
+static void step_f32_cuda(const float * x, float * dst, const int k, cudaStream_t stream) {
+    const int num_blocks = (k + CUDA_STEP_BLOCK_SIZE - 1) / CUDA_STEP_BLOCK_SIZE;
+    step_f32<<<num_blocks, CUDA_STEP_BLOCK_SIZE, 0, stream>>>(x, dst, k);
+}
+
 static void relu_f32_cuda(const float * x, float * dst, const int k, cudaStream_t stream) {
     const int num_blocks = (k + CUDA_RELU_BLOCK_SIZE - 1) / CUDA_RELU_BLOCK_SIZE;
     relu_f32<<<num_blocks, CUDA_RELU_BLOCK_SIZE, 0, stream>>>(x, dst, k);
@@ -7462,6 +7490,34 @@ static void ggml_cuda_op_neg(
     (void) src1_dd;
 }
 
+static void ggml_cuda_op_sgn(
+    const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
+    const float * src0_dd, const float * src1_dd, float * dst_dd, cudaStream_t main_stream) {
+
+    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT( dst->type == GGML_TYPE_F32);
+
+    sgn_f32_cuda(src0_dd, dst_dd, ggml_nelements(src0), main_stream);
+
+    (void) src1;
+    (void) dst;
+    (void) src1_dd;
+}
+
+static void ggml_cuda_op_step(
+    const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
+    const float * src0_dd, const float * src1_dd, float * dst_dd, cudaStream_t main_stream) {
+
+    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT( dst->type == GGML_TYPE_F32);
+
+    step_f32_cuda(src0_dd, dst_dd, ggml_nelements(src0), main_stream);
+
+    (void) src1;
+    (void) dst;
+    (void) src1_dd;
+}
+
 static void ggml_cuda_op_relu(
     const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
     const float * src0_dd, const float * src1_dd, float * dst_dd, cudaStream_t main_stream) {
@@ -8799,6 +8855,13 @@ static void ggml_cuda_neg(const ggml_tensor * src0, const ggml_tensor * src1, gg
     ggml_cuda_op_flatten(src0, src1, dst, ggml_cuda_op_neg);
 }
 
+static void ggml_cuda_sgn(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    ggml_cuda_op_flatten(src0, src1, dst, ggml_cuda_op_sgn);
+}
+
+static void ggml_cuda_step(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    ggml_cuda_op_flatten(src0, src1, dst, ggml_cuda_op_step);
+}
 
 static void ggml_cuda_relu(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     ggml_cuda_op_flatten(src0, src1, dst, ggml_cuda_op_relu);
@@ -9955,6 +10018,12 @@ bool ggml_cuda_compute_forward(struct ggml_compute_params * params, struct ggml_
                 case GGML_UNARY_OP_NEG:
                     func = ggml_cuda_neg;                    
                     break;    
+                case GGML_UNARY_OP_SGN:
+                    func = ggml_cuda_sgn;                    
+                    break;    
+                case GGML_UNARY_OP_STEP:
+                    func = ggml_cuda_step;                    
+                    break;    
                 default:
                     return false;
             }
@@ -10463,6 +10532,8 @@ static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, const ggml_ten
                 case GGML_UNARY_OP_TANH:
                 case GGML_UNARY_OP_ABS:
                 case GGML_UNARY_OP_NEG:
+                case GGML_UNARY_OP_SGN:
+                case GGML_UNARY_OP_STEP:
                     return true;
                 default:
                     return false;
