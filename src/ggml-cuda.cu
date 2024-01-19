@@ -493,6 +493,7 @@ static_assert(sizeof(block_iq2_xxs) == sizeof(ggml_fp16_t) + QK_K/8*sizeof(uint1
 #define CUDA_TANH_BLOCK_SIZE 256
 #define CUDA_ABS_BLOCK_SIZE  256
 #define CUDA_NEG_BLOCK_SIZE  256
+#define CUDA_REPEAT_BACK_BLOCK_SIZE  256
 #define CUDA_SGN_BLOCK_SIZE  256
 #define CUDA_STEP_BLOCK_SIZE 256
 #define CUDA_RELU_BLOCK_SIZE 256
@@ -7365,6 +7366,35 @@ static void ggml_cuda_op_repeat(
     (void) src1_d;
 }
 
+static __global__ void acc_along_dim_f32(const float * x, float * dst, int64_t n, int64_t k){
+    unsigned int i = blockDim.x*blockIdx.x + threadIdx.x;
+    if(i < n)
+        dst[i] = 0.f;
+    for (unsigned int j = 0 ;  j < k; j++ ){
+        if(i < n){
+            dst[i] += x[j*n+i];
+        }    
+    }
+    
+}
+
+static void ggml_cuda_op_repeat_back(
+    const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
+    const float * src0_d, const float * src1_d, float * dst_d, cudaStream_t main_stream) {
+
+    // ggml_cuda_op_bin_bcast<bin_bcast_cuda<op_repeat>>(dst, src0, dst, nullptr, src0_d, dst_d, main_stream);
+    int64_t n = src0->ne[0];
+    int64_t k = src0->ne[1];
+
+    const dim3 block_dims(CUDA_REPEAT_BACK_BLOCK_SIZE, 1, 1);
+    int64_t nrows = (n + CUDA_REPEAT_BACK_BLOCK_SIZE - 1) / CUDA_REPEAT_BACK_BLOCK_SIZE;
+    const dim3 block_nums(nrows, 1, 1);
+    acc_along_dim_f32<<<block_nums, block_dims, 0, main_stream>>>(src0_d, dst_d, n, k);
+
+    (void) src1;
+    (void) src1_d;
+}
+
 static void ggml_cuda_op_add(
     const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
     const float * src0_dd, const float * src1_dd, float * dst_dd, cudaStream_t main_stream) {
@@ -8842,6 +8872,10 @@ static void ggml_cuda_repeat(const ggml_tensor * src0, const ggml_tensor * src1,
     ggml_cuda_op_flatten(src0, src1, dst, ggml_cuda_op_repeat);
 }
 
+static void ggml_cuda_repeat_back(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    ggml_cuda_op_flatten(src0, src1, dst, ggml_cuda_op_repeat_back);
+}
+
 static void ggml_cuda_get_rows(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     ggml_cuda_op_flatten(src0, src1, dst, ggml_cuda_op_get_rows);
 }
@@ -10013,6 +10047,9 @@ bool ggml_cuda_compute_forward(struct ggml_compute_params * params, struct ggml_
         case GGML_OP_REPEAT:
             func = ggml_cuda_repeat;
             break;
+        case GGML_OP_REPEAT_BACK:
+            func = ggml_cuda_repeat_back;
+            break;
         case GGML_OP_GET_ROWS:
             func = ggml_cuda_get_rows;
             break;
@@ -10581,6 +10618,18 @@ static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, const ggml_ten
                     return false;
             }
             break;
+        case GGML_OP_REPEAT_BACK:        
+            {
+                struct ggml_tensor * a;
+                struct ggml_tensor * b;
+                a = op->src[0];
+                b = op->src[1];
+                if (!ggml_is_matrix(a))
+                    return false;
+                if (!ggml_is_vector(b))
+                    return false;    
+                return true;
+            } break;   
         case GGML_OP_MUL_MAT:
         case GGML_OP_MUL_MAT_ID:
             {
@@ -10649,8 +10698,9 @@ static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, const ggml_ten
                 }
                 return false;
             } break;
+
         case GGML_OP_DUP:
-        case GGML_OP_REPEAT:
+        case GGML_OP_REPEAT:        
         case GGML_OP_CONCAT:
             {
                 ggml_type src0_type = op->src[0]->type;

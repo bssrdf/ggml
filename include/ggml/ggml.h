@@ -2007,6 +2007,7 @@ extern "C" {
         float loss_after;
 
         struct {
+            struct ggml_tensor * x;
             struct ggml_tensor * g;  // current gradient
             struct ggml_tensor * m;  // first moment
             struct ggml_tensor * v;  // second moment

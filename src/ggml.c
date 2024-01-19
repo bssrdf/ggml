@@ -14534,13 +14534,7 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
     }
 
 #ifdef GGML_USE_CUBLAS
-    bool skip_cpu = ggml_cuda_compute_forward(params, tensor);
-    if(skip_cpu)
-        fprintf(stderr, " %s: cuda compute forward for %s(%s) success \n", __func__, tensor->name, 
-               ggml_op_desc(tensor));
-    else
-        fprintf(stderr, " %s: cuda compute forward fpr %s(%s) failed\n", __func__, tensor->name,
-               ggml_op_desc(tensor));
+    bool skip_cpu = ggml_cuda_compute_forward(params, tensor);    
     if (skip_cpu) {
         return;
     }
@@ -17835,6 +17829,16 @@ static void ggml_opt_set_params(int np, struct ggml_tensor * const ps[], const f
     }
 }
 
+static void ggml_opt_set_one_param(struct ggml_tensor *p, int64_t offset, const float x) {
+    
+    if(p->backend != GGML_BACKEND_CPU){
+        ggml_backend_tensor_set(p, &x, offset, 1);
+    }
+    else{
+        ggml_set_f32_1d(p, offset, x);
+    }
+}
+
 static void ggml_opt_get_params(int np, struct ggml_tensor * const ps[], float * x) {
     int i = 0;
     for (int p = 0; p < np; ++p) {
@@ -17850,6 +17854,17 @@ static void ggml_opt_get_params(int np, struct ggml_tensor * const ps[], float *
             }
         }
     }
+}
+
+static float  ggml_opt_get_one_param(struct ggml_tensor *p, int64_t offset) {
+    float x = 0.f;
+    if(p->backend != GGML_BACKEND_CPU){
+        ggml_backend_tensor_get(p, &x, offset, 1);
+    }else{
+        x = ggml_get_f32_1d(p, offset);
+        
+    }
+    return x;
 }
 
 static void ggml_opt_get_grad(int np, struct ggml_tensor * const ps[], float * g) {
@@ -17936,6 +17951,17 @@ static void ggml_opt_set_grad_to_one( struct ggml_tensor *f ){
 
 }
 
+static float ggml_opt_get_func( struct ggml_tensor *f ){
+     float ff = 0.f;
+    GGML_ASSERT(ggml_is_scalar(f));
+    if(f->backend != GGML_BACKEND_CPU){
+        ggml_backend_tensor_get(f, &ff, 0, ggml_nbytes(f));
+    }else{
+        ff =  ggml_get_f32_1d(f, 0);
+    }
+    return ff;
+}
+
 //
 // Using AdamW - ref: https://arxiv.org/pdf/1711.05101v3.pdf
 //
@@ -17988,6 +18014,7 @@ static enum ggml_opt_result ggml_opt_adam(
     const int n_accum = MAX(1, params.n_gradient_accumulation);
     const float accum_norm = 1.0f / (float) n_accum;
 
+    float * x  = opt->adam.x->data;  // current parameters
     float * g  = opt->adam.g->data;  // gradients
     float * m  = opt->adam.m->data;  // first moment
     float * v  = opt->adam.v->data;  // second moment
@@ -17999,6 +18026,8 @@ static enum ggml_opt_result ggml_opt_adam(
     cplan.work_data = (uint8_t *)ctx->mem_buffer + obj->offs;
 
     bool cancel = false;
+
+    ggml_opt_get_params(np, ps, x);
 
     // compute the function value
     float fx = 0;
@@ -18015,7 +18044,8 @@ static enum ggml_opt_result ggml_opt_adam(
         ggml_opt_set_grad_to_one(f);
         ggml_graph_compute(gb, &cplan);
         ggml_opt_acc_grad(np, ps, g, accum_norm);
-        fx += ggml_get_f32_1d(f, 0);
+        // fx += ggml_get_f32_1d(f, 0);
+        fx += ggml_opt_get_func(f);
     }
     fx *= accum_norm;
 
@@ -18059,6 +18089,7 @@ static enum ggml_opt_result ggml_opt_adam(
         const int64_t t_start_cpu = ggml_cycles();
         UNUSED(t_start_wall);
         UNUSED(t_start_cpu);
+        // printf("%d iter f      = %16.6f\n", t, fx);
 
         {
             float gnorm = 1.0f;
@@ -18079,20 +18110,25 @@ static enum ggml_opt_result ggml_opt_adam(
             for (int p = 0; p < np; ++p) {
                 const int64_t ne = ggml_nelements(ps[p]);
                 const float p_decay = ((ggml_n_dims(ps[p]) >= decay_min_ndim) ? decay : 0.0f) * sched;
-                for (int64_t j = 0; j < ne; ++j) {
-                    float x  = ggml_get_f32_1d(ps[p], j);
+                for (int64_t j = 0; j < ne; ++j) {                    
+                    // float x0  = ggml_get_f32_1d(ps[p], j);
+                    // printf("%d iter f  = %16.6f  %ld (%d, %ld)  \n", t, fx, ne, p, j);
+                    // float x = ggml_opt_get_one_param(ps[p], j);
                     float g_ = g[i]*gnorm;
                     m[i] = m[i]*beta1 +    g_*(1.0f - beta1);
                     v[i] = v[i]*beta2 + g_*g_*(1.0f - beta2);
                     float mh = m[i]*beta1h;
                     float vh = v[i]*beta2h;
                     vh = sqrtf(vh) + eps;
-                    x  = x*(1.0f - p_decay) - mh/vh;
-                    ggml_set_f32_1d(ps[p], j, x);
+                    x[i] = x[i] * (1.0f - p_decay) - mh/vh;
+                    // ggml_set_f32_1d(ps[p], j, x);
+                    // ggml_opt_set_one_param(ps[p], j, x);
                     ++i;
                 }
             }
         }
+
+        ggml_opt_set_params(np, ps, x);
 
         fx = 0;
         ggml_set_zero(opt->adam.g);
@@ -18108,7 +18144,8 @@ static enum ggml_opt_result ggml_opt_adam(
             ggml_opt_set_grad_to_one(f);
             ggml_graph_compute(gb, &cplan);
             ggml_opt_acc_grad(np, ps, g, accum_norm);
-            fx += ggml_get_f32_1d(f, 0);
+            // fx += ggml_get_f32_1d(f, 0);
+            fx += ggml_opt_get_func(f);    
         }
         fx *= accum_norm;
 
@@ -18254,7 +18291,8 @@ static enum ggml_opt_result linesearch_backtracking(
                 ggml_opt_set_grad_to_one(f);
                 ggml_graph_compute(gb, cplan);
                 ggml_opt_acc_grad(np, ps, g, accum_norm);
-                *fx += ggml_get_f32_1d(f, 0);
+                // *fx += ggml_get_f32_1d(f, 0);
+                *fx += ggml_opt_get_func(f);
             }
             *fx *= accum_norm;
             // fprintf(stderr, "%s: *fx = %f, %f, %f, %f \n", __func__, *fx, finit, *step, finit+(*step)*dgtest); 
@@ -18366,9 +18404,9 @@ static enum ggml_opt_result ggml_opt_lbfgs(
     float gnorm = 0.0f; // ||g||
 
     // initialize x from the graph nodes
-    fprintf(stderr, "%s: lbfgs bef  ggml_opt_get_params\n ", __func__);
+    // fprintf(stderr, "%s: lbfgs bef  ggml_opt_get_params\n ", __func__);
     ggml_opt_get_params(np, ps, x);
-    fprintf(stderr, "%s: lbfgs aft ggml_opt_get_params\n ", __func__);
+    // fprintf(stderr, "%s: lbfgs aft ggml_opt_get_params\n ", __func__);
 
     // the L-BFGS memory
     float * lm_alpha = opt->lbfgs.lmal->data;
@@ -18380,9 +18418,9 @@ static enum ggml_opt_result ggml_opt_lbfgs(
 
     // evaluate the function value and its gradient
     {
-        fprintf(stderr, "%s: lbfgs bef  ggml_opt_set_params\n ", __func__);
+        // fprintf(stderr, "%s: lbfgs bef  ggml_opt_set_params\n ", __func__);
         ggml_opt_set_params(np, ps, x);
-        fprintf(stderr, "%s: lbfgs aft  ggml_opt_set_params\n ", __func__);
+        // fprintf(stderr, "%s: lbfgs aft  ggml_opt_set_params\n ", __func__);
 
         fx = 0;
         memset(g, 0, sizeof(float)*nx);
@@ -18399,8 +18437,11 @@ static enum ggml_opt_result ggml_opt_lbfgs(
             // ggml_set_f32      (f->grad, 1.0f);
             ggml_opt_set_grad_to_one(f);
             ggml_graph_compute(gb, &cplan);
+            // fprintf(stderr, "%s: lbfgs bef  ggml_opt_acc_grad\n ", __func__);
             ggml_opt_acc_grad(np, ps, g, accum_norm);
-            fx += ggml_get_f32_1d(f, 0);
+            // fprintf(stderr, "%s: lbfgs aft  ggml_opt_acc_grad\n ", __func__);
+            // fx += ggml_get_f32_1d(f, 0);
+            fx += ggml_opt_get_func(f);
         }
         fx *= accum_norm;
 
@@ -18688,6 +18729,7 @@ GGML_API void ggml_opt_init(
     switch (opt->params.type) {
         case GGML_OPT_ADAM:
             {
+                opt->adam.x  = ggml_new_tensor_1d(opt->ctx, GGML_TYPE_F32, nx);
                 opt->adam.g  = ggml_new_tensor_1d(opt->ctx, GGML_TYPE_F32, nx);
                 opt->adam.m  = ggml_new_tensor_1d(opt->ctx, GGML_TYPE_F32, nx);
                 opt->adam.v  = ggml_new_tensor_1d(opt->ctx, GGML_TYPE_F32, nx);
@@ -18696,6 +18738,7 @@ GGML_API void ggml_opt_init(
                     : NULL;
                 ggml_set_zero(opt->adam.m);
                 ggml_set_zero(opt->adam.v);
+                ggml_set_zero(opt->adam.x);
                 if (opt->adam.pf) {
                     ggml_set_zero(opt->adam.pf);
                 }

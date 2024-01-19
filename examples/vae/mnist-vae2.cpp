@@ -691,6 +691,7 @@ static void check_data_buffer(struct ggml_cgraph* gf){
     std::map<void *, struct ggml_tensor*>::iterator it;
     for(int i = 0; i < gf->n_nodes; ++i){
         struct ggml_tensor *node = gf->nodes[i];
+        // printf("%d, checking %s (%s) \n", i, node->name, ggml_op_desc(node));
         it = gf_map.find((void *)node->data);
         if (it != gf_map.end()){ 
             printf( "%s 's data addr already allocated for %s \n", node->name, gf_map[(void *)node->data]->name);
@@ -699,7 +700,7 @@ static void check_data_buffer(struct ggml_cgraph* gf){
     } 
 }
 
-static void check_data_buffer(struct mnist_vae_model * model, struct ggml_cgraph* gf){
+static void check_op_suppport(struct mnist_vae_model * model, struct ggml_cgraph* gf){
 
     for(int i = 0; i < gf->n_nodes; ++i){
         struct ggml_tensor *node = gf->nodes[i];
@@ -859,11 +860,12 @@ int main(int argc, char ** argv) {
             printf("build backward graph \n");
             ggml_build_backward_expand(model.ctx, gf, gb, true);
             printf("finished build backward graph \n");
-            check_data_buffer(&model, gb);
+            printf("after check data buffer \n");
             // ggml_graph_dump_dot(gf, NULL, "mnist-vae-forward.dot");
             // ggml_graph_dump_dot(gb, gf,  "mnist-vae-cpu-backward.dot");
             model.compute_buffer = ggml_backend_alloc_ctx_tensors(model.ctx, model.backend);
-            check_data_buffer(gf);
+            if(ggml_backend_is_cpu(model.backend))
+                check_data_buffer(gf);
             randomize_model(&model, 1337, 0.0f, 0.1f, -1.0f, +1.0f);
             // randomize_model(&model, 1337, 0.0f, .1f, -FLT_MAX, FLT_MAX);
             printf("modle initialzed with random numbers \n");
