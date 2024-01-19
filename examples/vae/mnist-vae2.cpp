@@ -699,6 +699,19 @@ static void check_data_buffer(struct ggml_cgraph* gf){
     } 
 }
 
+static void check_data_buffer(struct mnist_vae_model * model, struct ggml_cgraph* gf){
+
+    for(int i = 0; i < gf->n_nodes; ++i){
+        struct ggml_tensor *node = gf->nodes[i];
+        if(!ggml_backend_supports_op(model->backend, node)){
+            fprintf(stderr, "%s: node %s 's op (%s) is not supported by the backend\n",
+            __func__, node->name, ggml_op_desc(node));
+        }        
+
+    } 
+}
+
+
 
 #define COUNT_TRAIN 60000ll
 
@@ -846,6 +859,7 @@ int main(int argc, char ** argv) {
             printf("build backward graph \n");
             ggml_build_backward_expand(model.ctx, gf, gb, true);
             printf("finished build backward graph \n");
+            check_data_buffer(&model, gb);
             // ggml_graph_dump_dot(gf, NULL, "mnist-vae-forward.dot");
             // ggml_graph_dump_dot(gb, gf,  "mnist-vae-cpu-backward.dot");
             model.compute_buffer = ggml_backend_alloc_ctx_tensors(model.ctx, model.backend);

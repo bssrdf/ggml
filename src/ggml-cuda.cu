@@ -8379,6 +8379,41 @@ static void ggml_cuda_op_add1(
     // (void) src1_dd;
 }
 
+static void ggml_cuda_op_out_prod(
+    const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
+    const float * src0_dd, const float * src1_dd, float * dst_dd, cudaStream_t main_stream) {
+
+    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(src1->type == GGML_TYPE_F32);
+    GGML_ASSERT( dst->type == GGML_TYPE_F32);
+
+    const int64_t ne00 = src0->ne[0];
+    const int64_t ne01 = src0->ne[1];
+    const int64_t ne10 = src1->ne[0];
+    const int64_t ne11 = src1->ne[1];
+
+    const int64_t ne0 = dst->ne[0];
+
+    int id;
+    CUDA_CHECK(cudaGetDevice(&id));
+
+    const float alpha = 1.0f;
+    const float beta = 0.0f;
+
+    CUBLAS_CHECK(cublasSetStream(g_cublas_handles[id], main_stream));
+    CUBLAS_CHECK(
+        cublasSgemm(g_cublas_handles[id], CUBLAS_OP_N, CUBLAS_OP_T,
+                ne00, ne10, ne01,
+                &alpha, src0_dd,  ne00,
+                        src1_dd,  ne10,
+                &beta,  dst_dd,   ne00));
+    
+    CUDA_CHECK(cudaGetLastError());
+
+    (void) src1;
+    (void) dst;
+}
+
 static void ggml_cuda_op_clamp(
     const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
     const float * src0_dd, const float * src1_dd, float * dst_dd, cudaStream_t main_stream) {
@@ -8817,6 +8852,10 @@ static void ggml_cuda_add(const ggml_tensor * src0, const ggml_tensor * src1, gg
 
 static void ggml_cuda_add1(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     ggml_cuda_op_flatten(src0, src1, dst, ggml_cuda_op_add1);
+}
+
+static void ggml_cuda_out_prod(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    ggml_cuda_op_flatten(src0, src1, dst, ggml_cuda_op_out_prod);
 }
 
 static void ggml_cuda_acc(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
@@ -9995,6 +10034,9 @@ bool ggml_cuda_compute_forward(struct ggml_compute_params * params, struct ggml_
         case GGML_OP_DIV:
             func = ggml_cuda_div;
             break;
+        case GGML_OP_OUT_PROD:
+            func = ggml_cuda_out_prod;
+            break;
         case GGML_OP_UNARY:
             switch (ggml_get_unary_op(tensor)) {
                 case GGML_UNARY_OP_GELU:
@@ -10556,6 +10598,18 @@ static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, const ggml_ten
                 }
                 return true;
             } break;
+        case GGML_OP_OUT_PROD:
+            {
+                struct ggml_tensor * a= op->src[0];
+                struct ggml_tensor * b= op->src[1];                
+                if (a->ne[2] != 1 ||  b->ne[2] != 1) {
+                    return false;
+                }
+                if (a->ne[3] != 1 ||  b->ne[3] != 1) {
+                    return false;
+                }
+                return true;
+            } break;
         case GGML_OP_GET_ROWS:
             {
                 switch (op->src[0]->type) {
@@ -10609,6 +10663,7 @@ static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, const ggml_ten
         case GGML_OP_TRANSPOSE:
         case GGML_OP_NORM:
         case GGML_OP_ADD:
+        case GGML_OP_ADD1:
         case GGML_OP_MUL:
         case GGML_OP_DIV:
         case GGML_OP_RMS_NORM:
