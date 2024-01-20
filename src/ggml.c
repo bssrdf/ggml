@@ -17697,6 +17697,7 @@ void ggml_graph_dump_dot(const struct ggml_cgraph * gb, const struct ggml_cgraph
     fprintf(fp, "  newrank = true;\n");
     fprintf(fp, "  rankdir = LR;\n");
 
+
     for (int i = 0; i < gb->n_nodes; i++) {
         struct ggml_tensor * node = gb->nodes[i];
 
@@ -17740,6 +17741,7 @@ void ggml_graph_dump_dot(const struct ggml_cgraph * gb, const struct ggml_cgraph
         }
     }
 
+
     for (int i = 0; i < gb->n_leafs; i++) {
         struct ggml_tensor * node = gb->leafs[i];
 
@@ -17757,6 +17759,8 @@ void ggml_graph_dump_dot(const struct ggml_cgraph * gb, const struct ggml_cgraph
         }
 
         fprintf(fp, "CONST %d [%" PRId64 ", %" PRId64 "]", i, node->ne[0], node->ne[1]);
+
+
         if (ggml_nelements(node) < 5) {
             fprintf(fp, " | (");
             for (int j = 0; j < ggml_nelements(node); j++) {
@@ -17764,7 +17768,13 @@ void ggml_graph_dump_dot(const struct ggml_cgraph * gb, const struct ggml_cgraph
                     fprintf(fp, "%d", ggml_get_i32_1d(node, j));
                 }
                 else if (node->type == GGML_TYPE_F32 || node->type == GGML_TYPE_F16) {
-                    fprintf(fp, "%.1e", (double)ggml_get_f32_1d(node, j));
+                    if(node->backend != GGML_BACKEND_CPU){
+                        float val;
+                        ggml_backend_tensor_get(node, &val, j, sizeof(float)); 
+                        fprintf(fp, "%.1e", (double)val);
+                    }
+                    else
+                        fprintf(fp, "%.1e", (double)ggml_get_f32_1d(node, j));
                 }
                 else {
                     fprintf(fp, "#");
@@ -17778,6 +17788,7 @@ void ggml_graph_dump_dot(const struct ggml_cgraph * gb, const struct ggml_cgraph
         fprintf(fp, "\"; ]\n");
     }
 
+
     for (int i = 0; i < gb->n_nodes; i++) {
         struct ggml_tensor * node = gb->nodes[i];
 
@@ -17789,6 +17800,8 @@ void ggml_graph_dump_dot(const struct ggml_cgraph * gb, const struct ggml_cgraph
             }
         }
     }
+
+    fprintf(stderr, "%s: after dumping node edge\n ", __func__);
 
     for (int i = 0; i < gb->n_leafs; i++) {
         struct ggml_tensor * node = gb->leafs[i];
@@ -17814,13 +17827,13 @@ void ggml_graph_dump_dot(const struct ggml_cgraph * gb, const struct ggml_cgraph
 static void ggml_opt_set_params(int np, struct ggml_tensor * const ps[], const float * x) {
     int i = 0;
     for (int p = 0; p < np; ++p) {
+        const int64_t ne = ggml_nelements(ps[p]) ;
         if(ps[p]->backend != GGML_BACKEND_CPU){
             int64_t bytes = ggml_nbytes(ps[p]);
             ggml_backend_tensor_set(ps[p], x, 0, bytes);
-            x += bytes;
+            x += ne;
         }
-        else{
-            const int64_t ne = ggml_nelements(ps[p]) ;
+        else{            
             // TODO: add function to set tensor from array
             for (int64_t j = 0; j < ne; ++j) {
                 ggml_set_f32_1d(ps[p], j, x[i++]);
@@ -17829,25 +17842,16 @@ static void ggml_opt_set_params(int np, struct ggml_tensor * const ps[], const f
     }
 }
 
-static void ggml_opt_set_one_param(struct ggml_tensor *p, int64_t offset, const float x) {
-    
-    if(p->backend != GGML_BACKEND_CPU){
-        ggml_backend_tensor_set(p, &x, offset, 1);
-    }
-    else{
-        ggml_set_f32_1d(p, offset, x);
-    }
-}
 
 static void ggml_opt_get_params(int np, struct ggml_tensor * const ps[], float * x) {
     int i = 0;
     for (int p = 0; p < np; ++p) {
+        const int64_t ne = ggml_nelements(ps[p]) ;
         if(ps[p]->backend != GGML_BACKEND_CPU){
             int64_t bytes = ggml_nbytes(ps[p]);
             ggml_backend_tensor_get(ps[p], x, 0, bytes);
-            x += bytes;
+            x += ne;
         }else{
-            const int64_t ne = ggml_nelements(ps[p]) ;
             // TODO: add function to get all elements at once
             for (int64_t j = 0; j < ne; ++j) {
                 x[i++] = ggml_get_f32_1d(ps[p], j);
@@ -17856,26 +17860,17 @@ static void ggml_opt_get_params(int np, struct ggml_tensor * const ps[], float *
     }
 }
 
-static float  ggml_opt_get_one_param(struct ggml_tensor *p, int64_t offset) {
-    float x = 0.f;
-    if(p->backend != GGML_BACKEND_CPU){
-        ggml_backend_tensor_get(p, &x, offset, 1);
-    }else{
-        x = ggml_get_f32_1d(p, offset);
-        
-    }
-    return x;
-}
+
 
 static void ggml_opt_get_grad(int np, struct ggml_tensor * const ps[], float * g) {
     int64_t i = 0;
     for (int p = 0; p < np; ++p) {
+        const int64_t ne = ggml_nelements(ps[p]) ;
         if(ps[p]->backend != GGML_BACKEND_CPU){
             int64_t bytes = ggml_nbytes(ps[p]->grad);
             ggml_backend_tensor_get(ps[p]->grad, g, 0, bytes);
-            g += bytes;
+            g += ne;
         }else{            
-            const int64_t ne = ggml_nelements(ps[p]) ;
             // TODO: add function to get all elements at once
             for (int64_t j = 0; j < ne; ++j) {
                 g[i++] = ggml_get_f32_1d(ps[p]->grad, j);
@@ -17893,8 +17888,9 @@ static void ggml_opt_acc_grad(int np, struct ggml_tensor * const ps[], float * g
             int64_t bytes = ggml_nbytes(ps[p]->grad);
             ggml_backend_tensor_get(ps[p]->grad, g, 0, bytes);
             for (int64_t j = 0; j < ne; ++j) {
-                g[i++] *= scale;
+                g[j] *= scale;
             }
+            g += ne;
         }else{            
             // TODO: add function to get all elements at once
             for (int64_t j = 0; j < ne; ++j) {
@@ -17952,7 +17948,7 @@ static void ggml_opt_set_grad_to_one( struct ggml_tensor *f ){
 }
 
 static float ggml_opt_get_func( struct ggml_tensor *f ){
-     float ff = 0.f;
+    float ff = 0.f;
     GGML_ASSERT(ggml_is_scalar(f));
     if(f->backend != GGML_BACKEND_CPU){
         ggml_backend_tensor_get(f, &ff, 0, ggml_nbytes(f));
@@ -18025,9 +18021,7 @@ static enum ggml_opt_result ggml_opt_adam(
     struct ggml_object * obj = ggml_new_object(ctx, GGML_OBJECT_WORK_BUFFER, cplan.work_size);
     cplan.work_data = (uint8_t *)ctx->mem_buffer + obj->offs;
 
-    bool cancel = false;
-
-    ggml_opt_get_params(np, ps, x);
+    bool cancel = false;  
 
     // compute the function value
     float fx = 0;
@@ -18085,11 +18079,22 @@ static enum ggml_opt_result ggml_opt_adam(
                     ggml_get_f32_1d(ps[i], 0), ggml_get_f32_1d(ps[i]->grad, 0));
         }
 
+        ggml_opt_get_params(np, ps, x);
+
         const int64_t t_start_wall = ggml_time_us();
         const int64_t t_start_cpu = ggml_cycles();
         UNUSED(t_start_wall);
         UNUSED(t_start_cpu);
-        // printf("%d iter f      = %16.6f\n", t, fx);
+
+        // printf("before opti iter %d\n", t);
+        // for(int  i =0; i < 10; ++i){  
+        //    fprintf(stderr, "%f, ", x[i]);
+        // }
+        // fprintf(stderr, "\n ");    
+        // for(int  i =0; i < 10; ++i){  
+        //    fprintf(stderr, "%f, ", g[i]);
+        // }
+        // fprintf(stderr, "\n ");    
 
         {
             float gnorm = 1.0f;
@@ -18127,6 +18132,11 @@ static enum ggml_opt_result ggml_opt_adam(
                 }
             }
         }
+        // printf("after opti iter %d\n", t);
+        // for(int  i =0; i < 10; ++i){  
+        //    fprintf(stderr, "%f, ", x[i]);
+        // }
+        // fprintf(stderr, "\n ");    
 
         ggml_opt_set_params(np, ps, x);
 
@@ -18151,7 +18161,7 @@ static enum ggml_opt_result ggml_opt_adam(
 
         opt->loss_after = fx;
 
-        // printf("%d iter f, prev_f      = %16.6f, %16.6f\n", t, ggml_get_f32_1d(f, 0), fx_prev[0]);
+        // printf("%d iter f, prev_f      = %16.6f, %16.6f\n", t, fx, fx_prev[0]);
 
         // check convergence
         if (fabsf(fx - fx_prev[0])/fx < params.adam.eps_f) {
@@ -18200,6 +18210,11 @@ static enum ggml_opt_result ggml_opt_adam(
             GGML_PRINT_DEBUG("wall time iter: %5.3f s\n", (t_end_wall - t_start_wall)/1e6);
             UNUSED(t_end_wall);
         }
+
+               
+
+
+
     }
 
     return GGML_OPT_DID_NOT_CONVERGE;

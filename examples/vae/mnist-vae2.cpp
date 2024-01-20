@@ -997,9 +997,9 @@ int main(int argc, char ** argv) {
         // printf(" before opt  \n");
         // int ret = ggml_opt(ctx0, opt_params, err_kl);        
         // ggml_opt(ctx0, opt_params, err_kl);
-        fprintf(stderr, "begin optimize \n");
+        // fprintf(stderr, "begin optimize \n");
         int ret = ggml_opt(ctx0, opt_params, err_tot);
-        fprintf(stderr, "done optimize \n");
+        // fprintf(stderr, "done optimize \n");
         // if (ret == GGML_OPT_DID_NOT_CONVERGE)
         //     printf(" klloss did not  converge  \n");
 
