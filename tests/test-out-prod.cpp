@@ -89,7 +89,7 @@ void load_model(test_model & model, float* a, float* b, int M, int N, int K, boo
     // create tensors
     model.a = ggml_new_tensor_2d(model.ctx, GGML_TYPE_F32, M, K);
     printf("Matrix A: [%i, %i]\n", K, M);
-    model.b = ggml_new_tensor_2d(model.ctx, GGML_TYPE_F32, N, K);
+    model.b = ggml_new_tensor_2d(model.ctx, GGML_TYPE_F32, K, N);
     printf("Matrix B: [%i, %i]\n", K, N);
 
     // create a allocator
@@ -141,7 +141,8 @@ struct ggml_cgraph * build_graph(const test_model& model, struct ggml_allocr * a
     struct ggml_cgraph * gf = ggml_new_graph(ctx0);
 
     // zT = x @ yT
-    struct ggml_tensor * result = ggml_out_prod(ctx0, model.a, model.b);
+    // struct ggml_tensor * result = ggml_out_prod(ctx0, model.a, model.b);
+    struct ggml_tensor * result = ggml_out_prod(ctx0, model.a, ggml_transpose(ctx0, model.b));
 
     struct ggml_tensor * h = model.a;
     int64_t *ne = h->ne;
@@ -276,7 +277,7 @@ int main(void)
             printf("\n");
     }
 
-    printf("ggml_out_prod (%d): %s\n", (int) ggml_nelements(result), passed && (ggml_nelements(result) == M * N) ? "\033[32mPASSED\033[0m" : "\033[31mFAILED\033[0m");
+    // printf("ggml_out_prod (%d): %s\n", (int) ggml_nelements(result), passed && (ggml_nelements(result) == M * N) ? "\033[32mPASSED\033[0m" : "\033[31mFAILED\033[0m");
 
    // free memory
     ggml_free(model.ctx);

@@ -86,11 +86,16 @@ static struct ggml_tensor * randomize_tensor(
 
 
 static struct ggml_tensor * get_tensor_from_graph(struct ggml_cgraph * gf, const char *name){
-
     struct ggml_tensor * res = NULL;
     for(int i = 0; i < gf->n_nodes; i++) {
         if(strcmp(ggml_get_name(gf->nodes[i]), name) == 0) {
-            res = gf->nodes[i];
+            return gf->nodes[i];
+            break;
+        } 
+    }
+    for(int i = 0; i < gf->n_leafs; i++) {
+        if(strcmp(ggml_get_name(gf->leafs[i]), name) == 0) {
+            return gf->leafs[i];
             break;
         } 
     }
@@ -105,6 +110,11 @@ struct mnist_hparams {
     int32_t n_latent  = 20;    
     int32_t enc1_out  = 400;    
     int32_t dec2_out  = 400;
+
+
+    // int32_t n_latent  = 5;    
+    // int32_t enc1_out  = 10;    
+    // int32_t dec2_out  = 10;
 
     // int32_t n_latent  = 10;
     // int32_t enc1_out  = 100;
@@ -340,21 +350,50 @@ static void zero_bias_model(struct mnist_vae_model * model, int seed){
 
 
 static void print_row(struct ggml_tensor * probs, int i) {
-    for (int k = 0; k < probs->ne[0]; ++k) {
-        float p = ggml_get_f32_1d(probs, i*probs->ne[0] + k);
-        printf(" %.6f", p);
+    if(probs->backend != GGML_BACKEND_CPU){
+        const int64_t ne = ggml_nelements(probs) ;
+        int64_t ne0 = probs->ne[0];
+        float *g = new float[ne0]; 
+        int64_t bytes = ggml_nbytes(probs);
+        ggml_backend_tensor_get(probs, g, i*sizeof(float)*ne0, sizeof(float)*ne0);
+        for (int k = 0; k < ne0; ++k) {
+            printf(" %f", g[k]);
+        }
+        printf("\n");  
+        delete g;
     }
-    printf("\n");
-}
-
-static void print_matrix(struct ggml_tensor * probs) {
-    assert(ggml_is_matrix(probs));
-    for (int i = 0; i < probs->ne[1]; ++i) {
+    else{
         for (int k = 0; k < probs->ne[0]; ++k) {
             float p = ggml_get_f32_1d(probs, i*probs->ne[0] + k);
-            printf(" %.6f", p);
+            printf(" %.f", p);
         }
         printf("\n");
+    }
+}
+
+static void print_matrix(struct ggml_tensor * p) {
+    assert(ggml_is_matrix(p));
+    const int64_t ne = ggml_nelements(p) ;
+    if(p->backend != GGML_BACKEND_CPU){
+        float *g = new float[ne]; 
+        int64_t bytes = ggml_nbytes(p);
+        ggml_backend_tensor_get(p, g, 0, bytes);
+        for (int i = 0; i < p->ne[1]; ++i) {
+            for (int k = 0; k < p->ne[0]; ++k) {
+                printf(" %f", g[i*p->ne[0] + k]);
+            }
+            printf("\n");
+        }
+        delete g;
+    }else{            
+        // TODO: add function to get all elements at once
+        for (int i = 0; i < p->ne[1]; ++i) {
+            for (int k = 0; k < p->ne[0]; ++k) {
+                float f = ggml_get_f32_1d(p, i*p->ne[0] + k);
+                printf(" %f", f);
+            }
+            printf("\n");
+        }
     }
 }
 
@@ -459,7 +498,8 @@ static void train_forward_batch(
 
     ggml_set_name(model->input, "input");
     ggml_set_name(model->noise, "noise");
-    struct ggml_tensor* h = ggml_mul_mat(ctx0, model->encode1_weight, ggml_cont(ctx0, model->input)); 
+    // struct ggml_tensor* h = ggml_mul_mat(ctx0, model->encode1_weight, ggml_cont(ctx0, model->input)); 
+    struct ggml_tensor* h = ggml_mul_mat(ctx0, model->encode1_weight, model->input); 
     ggml_set_name(h, "encode1_w");
 
     h = ggml_add(ctx0, h, ggml_repeat(ctx0, model->encode1_bias, h)); 
@@ -487,19 +527,18 @@ static void train_forward_batch(
     ggml_set_name(var, "var");
     struct ggml_tensor* h3 = ggml_add(ctx0, ggml_scale(ctx0, h1, 0.5f), 
                                             ggml_scale(ctx0, sd, 0.5f));
-    if(ggml_backend_is_cpu(model->backend)){ 
-    //    h3 = ggml_sub(ctx0, h3, logsd);
-       h3 = ggml_add(ctx0, h3, ggml_scale(ctx0, logsd, -0.5f));
-    }else{
+    // if(ggml_backend_is_cpu(model->backend)){ 
+    h3 = ggml_add(ctx0, h3, ggml_scale(ctx0, logsd, -0.5f));
+    // }else{
         // h3 = ggml_sub(ctx0, h3, logsd);
-        h3 = ggml_add(ctx0, h3, ggml_scale(ctx0, logsd, -0.5f));
-    }
+        // h3 = ggml_add(ctx0, h3, ggml_scale(ctx0, logsd, -0.5f));
+    // }
     ggml_set_name(h3, "kldiv_plus_half");
-    if(ggml_backend_is_cpu(model->backend)){ 
-       h3 = ggml_add1(ctx0, h3, ggml_new_f32(ctx0, -0.5f));
-    }else{
-       h3 = ggml_add1(ctx0, h3, ggml_new_f32(ctx0, -0.5f));
-    }    
+    // if(ggml_backend_is_cpu(model->backend)){ 
+    //    h3 = ggml_add1(ctx0, h3, ggml_new_f32(ctx0, -0.5f));
+    // }else{
+    h3 = ggml_add1(ctx0, h3, ggml_new_f32(ctx0, -0.5f));
+    // }    
     ggml_set_name(h3, "kldiv");   
     // h3 = ggml_scale(ctx0, ggml_sum(ctx0, h3), 1.f/(float)n_batch);
     h3 = ggml_sum(ctx0, h3);
@@ -527,12 +566,12 @@ static void train_forward_batch(
     ggml_set_name(h, "src1_sigloss");
     struct ggml_tensor* x = h;
     struct ggml_tensor* z = model->input;
-    if(ggml_backend_is_cpu(model->backend)){ 
-        h = ggml_sub(ctx0, ggml_relu(ctx0, x), ggml_mul(ctx0, x, z));
-    }
-    else{
-        h = ggml_add(ctx0, ggml_relu(ctx0, x), ggml_neg(ctx0, ggml_mul(ctx0, x, z)));
-    }
+    // if(ggml_backend_is_cpu(model->backend)){ 
+    //     h = ggml_sub(ctx0, ggml_relu(ctx0, x), ggml_mul(ctx0, x, z));
+    // }
+    // else{
+    h = ggml_add(ctx0, ggml_relu(ctx0, x), ggml_neg(ctx0, ggml_mul(ctx0, x, z)));
+    // }
     h = ggml_add(ctx0, h, ggml_log(ctx0, 
                              ggml_add1(ctx0,  
                                   ggml_exp(ctx0, ggml_neg(ctx0, ggml_abs(ctx0, x))),
@@ -713,6 +752,17 @@ static void check_op_suppport(struct mnist_vae_model * model, struct ggml_cgraph
 }
 
 
+static void ggml_opt_set_grad_to_one( struct ggml_tensor *f ){
+    GGML_ASSERT(ggml_is_scalar(f));
+    if(f->backend != GGML_BACKEND_CPU){
+        float one = 1.f;
+        ggml_backend_tensor_set(f->grad, &one, 0, ggml_nbytes(f->grad));
+    }else{
+        ggml_set_f32      (f->grad, 1.0f);
+    }
+
+}
+
 
 #define COUNT_TRAIN 60000ll
 
@@ -831,7 +881,7 @@ int main(int argc, char ** argv) {
 
     struct ggml_cgraph* gf = NULL; 
     struct ggml_cgraph* gb = NULL; 
-
+    // num_batches = 5;  
     for (int ex=0; ex<num_batches; ++ex) {
         printf(" enter loop %d \n", ex);
         struct ggml_init_params optparams = {
@@ -862,16 +912,19 @@ int main(int argc, char ** argv) {
             printf("finished build backward graph \n");
             printf("after check data buffer \n");
             // ggml_graph_dump_dot(gf, NULL, "mnist-vae-forward.dot");
-            // ggml_graph_dump_dot(gb, gf,  "mnist-vae-cpu-backward.dot");
+            
+            // printf("graph dumped \n");
             model.compute_buffer = ggml_backend_alloc_ctx_tensors(model.ctx, model.backend);
             if(ggml_backend_is_cpu(model.backend))
                 check_data_buffer(gf);
+            ggml_graph_dump_dot(gb, gf,  "mnist-vae-cpu-backward.dot");    
             randomize_model(&model, 1337, 0.0f, 0.1f, -1.0f, +1.0f);
             // randomize_model(&model, 1337, 0.0f, .1f, -FLT_MAX, FLT_MAX);
             printf("modle initialzed with random numbers \n");
             zero_bias_model(&model, 1337);
             printf("modle bias zeroed \n");            
         }
+
 
          
 
@@ -926,16 +979,6 @@ int main(int argc, char ** argv) {
         // struct ggml_cgraph * gf_res = compute_graph_batch(&model, allocr, n_batch);
         // print_model_data_addr(&model);
         // ggml_graph_dump_dot(gf_res, NULL, "mnist-vae-forward.dot");
-          
-        
-        // struct ggml_tensor * n36 = get_tensor_from_graph(gf_res, "decode2_relu");
-        // if (n36){
-        //      printf("  %s(%p), %s(%p) \n", n36->name, (void *)n36, n36->src[0]->name,(void *)n36->src[0]); 
-        //      printf("  %s(%p), %s(%p) \n", n36->name, (void *)n36->data, n36->src[0]->name,(void *)n36->src[0]->data); 
-        //      float n36v = ggml_get_f32_nd(n36, 0, 0, 0, 0);
-        //      float n35v = ggml_get_f32_nd(n36->src[0], 0, 0, 0, 0);
-        //      printf("  %s(%f), %s(%f) \n",  n36->name, n36v, n36->src[0]->name, n35v);
-        // }
         
 
         if (ggml_backend_is_cpu(model.backend)) {
@@ -943,12 +986,80 @@ int main(int argc, char ** argv) {
         }
         GGML_ASSERT(gf != NULL);
         ggml_backend_graph_compute(model.backend, gf);
+        struct ggml_tensor * err_tot = get_tensor_from_graph(gf, "totloss");
+
+        // ggml_graph_reset(gf);
+        // ggml_opt_set_grad_to_one(err_tot);
+        // ggml_backend_graph_compute(model.backend, gb);
+
+        // struct ggml_tensor * t = get_tensor_from_graph(gf, "node_74");
+        // struct ggml_tensor * t = get_tensor_from_graph(gb, "mu_weight");
+        // struct ggml_tensor * t = get_tensor_from_graph(gb, "node_74");
+        // struct ggml_tensor * t = get_tensor_from_graph(gb, "node_75"); //node_70, node_74
+        // struct ggml_tensor * t = get_tensor_from_graph(gb, "node_70"); //diff decode2_weight,  (transposed)
+        // struct ggml_tensor * t = get_tensor_from_graph(gb, "node_74"); // same
+        // struct ggml_tensor * t = get_tensor_from_graph(gb, "decode2_weight"); // same
+        // struct ggml_tensor * t = get_tensor_from_graph(gb, "(transposed)"); // diff: node_68
+        // struct ggml_tensor * t = get_tensor_from_graph(gb, "node_68"); // diff: node_52, node67
+        // struct ggml_tensor * t = get_tensor_from_graph(gb, "node_52"); // same
+        // struct ggml_tensor * t = get_tensor_from_graph(gb, "node_67"); // diff: decode1_weight,  (transposed)
+        // struct ggml_tensor * t = get_tensor_from_graph(gb, "decode1_weight"); // same
+        // struct ggml_tensor * t = get_tensor_from_graph(gb, "(transposed)"); // diff: node_65
+        // struct ggml_tensor * t = get_tensor_from_graph(gb, "node_65"); // same
+
+
+
+
+
+        //
+        //  struct ggml_tensor * g = t->grad;
+        // GGML_ASSERT(t != NULL);
+        // struct ggml_tensor * g = t;
+
+        // GGML_ASSERT(g != NULL);
+
+        // printf("%s[%s]: ->%s, ->%s (%ld, %ld) \n", g->name, ggml_op_desc(g), g->src[0]?g->src[0]->name:"###", g->src[1]?g->src[1]->name:"###", 
+        //    g->ne[0], g->ne[1]);
+        // // g = g->src[1];
+        // // printf("%s[%s]: ->%s, ->%s (%ld, %ld) \n", g->name, ggml_op_desc(g), g->src[0]?g->src[0]->name:"###", g->src[1]?g->src[1]->name:"###",
+        // //      g->ne[0], g->ne[1]);
+        // if(!ggml_is_contiguous(g))
+        //     printf("tensor %s is not contiguous \n", g->name);
+        // else   
+        //     printf("tensor %s is contiguous \n", g->name);
+        // if(!ggml_is_transposed(g))
+        //     printf("tensore %s is not transposed \n", g->name);
+        // else   
+        //     printf("tensore %s is transposed \n", g->name);
+
+        // if(ggml_is_matrix(g))
+        //     print_matrix(g);
+        // else
+        //     print_row(g, 0);        
+        // exit(1);
+
+
+        // int k = 0; 
+        // for(int i = (gb->n_nodes)-1; i >= 0; i--){
+        //     struct ggml_tensor * t = gb->nodes[i];
+        //     if(t->grad){
+        //         k++;
+        //         struct ggml_tensor * g = t->grad;
+        //         printf("%s grad==========================\n", t->name);
+        //         if(ggml_is_matrix(g))
+        //             print_matrix(g);
+        //         else
+        //             print_row(g, 0);
+        //     }
+        //     if(k > 50)
+        //        break;
+        // }
 
         // ggml_graph_compute_helper(work_buffer, gf_res, /*n_threads*/ 1);
 
         struct ggml_tensor * err_kl = get_tensor_from_graph(gf, "klloss");
         struct ggml_tensor * err_sig = get_tensor_from_graph(gf, "sigloss");
-        struct ggml_tensor * err_tot = get_tensor_from_graph(gf, "totloss");
+        // struct ggml_tensor * err_tot = get_tensor_from_graph(gf, "totloss");
         if(!err_kl){
             fprintf(stderr, "something wrong with graph compute \n");
             exit(1);
@@ -981,6 +1092,8 @@ int main(int argc, char ** argv) {
          printf(" after compute KLD and BCE is  %f, %f \n", 
             error_before_opt0, error_before_opt1);
         printf(" after compute total error is  %f\n", error_before_optt);
+        // exit(1);
+        
 
         struct ggml_opt_params opt_params = ggml_opt_default_params(GGML_OPT_ADAM);
         // struct ggml_opt_params opt_params = ggml_opt_default_params(GGML_OPT_LBFGS);

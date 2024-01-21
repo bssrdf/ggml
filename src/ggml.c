@@ -17702,6 +17702,8 @@ void ggml_graph_dump_dot(const struct ggml_cgraph * gb, const struct ggml_cgraph
         struct ggml_tensor * node = gb->nodes[i];
 
         if (ggml_graph_get_parent(gb, node) != NULL) {
+            struct ggml_tensor * g = ggml_graph_get_parent(gb, node);
+            fprintf(stderr, "node %s is node %s 's grad\n ", node->name, g->name);
             continue;
         }
 
@@ -17984,6 +17986,9 @@ static enum ggml_opt_result ggml_opt_adam(
         if (gf->nodes[i]->is_param) {
             GGML_PRINT_DEBUG("found param %d: grad->op = %d, name (%s) \n", 
                  np, gf->nodes[i]->grad->op, gf->nodes[i]->name);
+            // printf("found param %d: grad->op = %d, name (%s) \n", 
+            //      np, gf->nodes[i]->grad->op, gf->nodes[i]->name);
+
 
             GGML_ASSERT(np < GGML_MAX_PARAMS);
 

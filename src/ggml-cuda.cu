@@ -8431,12 +8431,21 @@ static void ggml_cuda_op_out_prod(
     const float beta = 0.0f;
 
     CUBLAS_CHECK(cublasSetStream(g_cublas_handles[id], main_stream));
-    CUBLAS_CHECK(
-        cublasSgemm(g_cublas_handles[id], CUBLAS_OP_N, CUBLAS_OP_T,
-                ne00, ne10, ne01,
-                &alpha, src0_dd,  ne00,
-                        src1_dd,  ne10,
-                &beta,  dst_dd,   ne00));
+    if (!ggml_is_transposed(src1)){
+        CUBLAS_CHECK(
+            cublasSgemm(g_cublas_handles[id], CUBLAS_OP_N, CUBLAS_OP_T,
+                    ne00, ne10, ne01,
+                    &alpha, src0_dd,  ne00,
+                            src1_dd,  ne10,
+                    &beta,  dst_dd,   ne00));
+    }else{
+        CUBLAS_CHECK(
+            cublasSgemm(g_cublas_handles[id], CUBLAS_OP_N, CUBLAS_OP_N,
+                    ne00, ne10, ne01,
+                    &alpha, src0_dd,  ne00,
+                            src1_dd,  ne01,
+                    &beta,  dst_dd,   ne00));
+    }
     
     CUDA_CHECK(cudaGetLastError());
 
