@@ -3,6 +3,11 @@
 #include "ggml/ggml-backend.h"
 #include "train.h"
 
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb_image.h"
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "stb_image_write.h"
+
 #include <vector>
 #include <map>
 #include <cassert>
@@ -39,6 +44,10 @@ static void ggml_graph_compute_helper(std::vector<uint8_t> & buf, ggml_cgraph * 
         plan.work_data = buf.data();
     }
     ggml_graph_compute(graph, &plan);
+}
+
+static uint8 float2pixel(float f){
+   return (uint8)((f >= 1.0 ? 255 : (f <= 0.0 ? 0 : (int)floor(f * 256.0))));
 }
 
 static struct ggml_tensor * randomize_tensor(
@@ -765,10 +774,26 @@ static void ggml_opt_set_grad_to_one( struct ggml_tensor *f ){
 
 
 #define COUNT_TRAIN 60000ll
+#define COUNT_TEST  10000ll
 
 int read_data(uint8 *data, const unsigned long count)
 {
     FILE *fp_image = fopen("models/mnist/train-images-idx3-ubyte", "rb");
+    if (!fp_image) return 1;
+    if(fseek(fp_image, 16, SEEK_SET) != 0)
+       return 1;
+    size_t r = fread(data, 1, 28ll*28ll*count, fp_image);     
+    if (ferror(fp_image)){
+        fprintf(stderr, "%s: error afetr read \n", __func__);       
+        return 1;
+    }
+    fclose(fp_image);
+    return 0;
+}
+
+int read_test_data(uint8 *data, const unsigned long count)
+{
+    FILE *fp_image = fopen("models/mnist/t10k-images.idx3-ubyte", "rb");
     if (!fp_image) return 1;
     if(fseek(fp_image, 16, SEEK_SET) != 0)
        return 1;
@@ -899,6 +924,20 @@ int main(int argc, char ** argv) {
                 }
                 // printf("\n");
             }
+
+        if(ex == 0){
+            std::string filename = "mnist-" + std::to_string(ex) + ".png";
+            uint8 *pixels = new uint8[28*28];
+            for (int row = 0; row < 28; row++)
+                for (int col = 0; col < 28; col++)
+                    pixels[row*28 + col] = float2pixel(digit[row*28 + col]);
+            if (!stbi_write_png(filename.c_str(), 28, 28, 1, pixels, 28)) {
+                // if (!stbi_write_png(filename.c_str(), 28, 28, 1, pixels, 28*sizeof(float))) {
+                printf("%s: failed to write mask %s\n", __func__, filename.c_str());
+                return false;
+            }
+            delete pixels;
+        }    
 
 
         buf += n_batch*28*28;  
@@ -1125,6 +1164,7 @@ int main(int argc, char ** argv) {
         // exit(1);
             
 
+     
 
         //
         // ggml_build_forward_expand(gf, e);        
@@ -1132,9 +1172,146 @@ int main(int argc, char ** argv) {
         // float error_after_opt = ggml_get_f32_1d(e, 0);
 
         ggml_free(ctx0);
+        
     }
 
-    printf("done\n");
+    printf("training done\n");
+
+
+    uint8 *test_data = (uint8 *)malloc(COUNT_TEST * 28 * 28 * sizeof(uint8));
+
+    if(read_test_data(test_data, COUNT_TEST) > 0){
+        fprintf(stderr, "Error in read in Mnist test data! \n");
+        exit(1);
+    }
+
+    buf = test_data;
+
+    num_batches = COUNT_TEST / n_batch;
+    
+    // num_batches = 5;  
+    for (int ex=0; ex<num_batches; ++ex) {
+                
+
+        for (int ib = 0; ib < n_batch; ib++) 
+            for (int row = 0; row < 28; row++) {
+                for (int col = 0; col < 28; col++) {
+                    digit[ib*28*28 + row*28 + col] = ((float)buf[ib*28*28 + row*28 + col])/255.f;
+                    // printf(" %.2f,  ", digit[ib*28*28 + row*28 + col]);
+                }
+                // printf("\n");
+            }
+
+        if(ex == 0){
+            std::string filename = "mnist-test-" + std::to_string(ex) + ".png";
+            uint8 *pixels = new uint8[28*28];
+            for (int row = 0; row < 28; row++)
+                for (int col = 0; col < 28; col++)
+                    pixels[row*28 + col] = float2pixel(digit[row*28 + col]);
+            if (!stbi_write_png(filename.c_str(), 28, 28, 1, pixels, 28)) {
+                // if (!stbi_write_png(filename.c_str(), 28, 28, 1, pixels, 28*sizeof(float))) {
+                printf("%s: failed to write mask %s\n", __func__, filename.c_str());
+                return false;
+            }
+            delete pixels;
+        }    
+
+
+        buf += n_batch*28*28;  
+        
+        
+        struct ggml_tensor * input_batch = ggml_get_tensor(model.ctx, "input");
+        struct ggml_tensor * noise_batch = ggml_get_tensor(model.ctx, "noise");
+        
+        // float mi = FLT_MAX, mx = -FLT_MAX;  
+        for(int i = 0; i < model.hparams.n_latent*n_batch; i++){            
+            rnds[i] = frand_normal(rnd);
+            // if(mi > rnds[i])
+            //     mi = rnds[i];
+            // if(mx < rnds[i])
+            //     mx = rnds[i];
+            // printf(" %f, ", rnds[i]);
+            // if((i+1)%model.hparams.n_latent == 0)
+            //    printf("\n");
+        }
+        // printf("min,max of noise %f, %f\n", mi, mx);
+        
+        
+        
+        // load input and noise data  
+        if(ggml_backend_is_cpu(model.backend)
+#ifdef GGML_USE_METAL
+                || ggml_backend_is_metal(model.backend)
+#endif
+        ) {
+            memcpy(input_batch->data, digit.data(), ggml_nbytes(input_batch));
+            memcpy(noise_batch->data, rnds, ggml_nbytes(noise_batch));
+            // memcpy(model.b->data, b, ggml_nbytes(model.b));
+        } else {
+            ggml_backend_tensor_set(input_batch, digit.data(), 0, ggml_nbytes(input_batch));  // cuda requires copy the data directly to device
+            ggml_backend_tensor_set(noise_batch, rnds, 0, ggml_nbytes(noise_batch));  // cuda requires copy the data directly to device
+        } 
+        // printf("copy to input \n", ex);
+
+        
+        
+        
+        // struct ggml_cgraph * gf_res = compute_graph_batch(&model, allocr, n_batch);
+        // print_model_data_addr(&model);
+        // ggml_graph_dump_dot(gf_res, NULL, "mnist-vae-forward.dot");
+        struct ggml_tensor * err_tot = get_tensor_from_graph(gf, "totloss");
+
+        if (ex % log_interval == 0){
+        if (ggml_backend_is_cpu(model.backend)) {
+            ggml_backend_cpu_set_n_threads(model.backend, n_threads);
+        }
+        GGML_ASSERT(gf != NULL);
+        ggml_backend_graph_compute(model.backend, gf);
+        
+
+        struct ggml_tensor * err_kl = get_tensor_from_graph(gf, "klloss");
+        struct ggml_tensor * err_sig = get_tensor_from_graph(gf, "sigloss");
+        // struct ggml_tensor * err_tot = get_tensor_from_graph(gf, "totloss");
+        if(!err_kl){
+            fprintf(stderr, "something wrong with graph compute \n");
+            exit(1);
+        }
+        if(!err_sig){
+            fprintf(stderr, "something wrong with graph compute \n");
+            exit(1);
+        }
+        if(!err_tot){
+            fprintf(stderr, "something wrong with graph compute \n");
+            exit(1);
+        }
+
+        // int64_t *ne = err_kl->ne;
+        // printf(" loss ne = (%d, %d, %d, %d)\n", ne[0], ne[1], ne[2], ne[3]);
+        float error_before_opt0,  error_before_opt1,  error_before_optt;
+        if (ggml_backend_is_cpu(model.backend)) {
+            error_before_opt0 = ggml_get_f32_1d(err_kl, 0);
+            error_before_opt1 = ggml_get_f32_1d(err_sig, 0);
+            error_before_optt = ggml_get_f32_1d(err_tot, 0);
+        }
+        else{        
+            ggml_backend_tensor_get(err_kl, &error_before_opt0, 0, ggml_nbytes(err_kl));
+            ggml_backend_tensor_get(err_sig, &error_before_opt1, 0, ggml_nbytes(err_sig));
+            ggml_backend_tensor_get(err_tot, &error_before_optt, 0, ggml_nbytes(err_tot));
+        }
+        printf("At %05.2f%%, KLD, BCE, TOTAL loss: (%f, %f, %f) \n",  100. * ex / num_batches,
+               error_before_opt0/(float)n_batch, error_before_opt1/(float)n_batch,
+               error_before_optt/(float)n_batch);
+
+        // exit(1);
+        }
+        
+
+        
+    }
+
+    printf("test done\n");
+
+
 
     // ggml_free(kv_self.ctx);
     // ggml_free(model_lora.ctx);
