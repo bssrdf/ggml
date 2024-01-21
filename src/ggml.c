@@ -17702,8 +17702,6 @@ void ggml_graph_dump_dot(const struct ggml_cgraph * gb, const struct ggml_cgraph
         struct ggml_tensor * node = gb->nodes[i];
 
         if (ggml_graph_get_parent(gb, node) != NULL) {
-            struct ggml_tensor * g = ggml_graph_get_parent(gb, node);
-            fprintf(stderr, "node %s is node %s 's grad\n ", node->name, g->name);
             continue;
         }
 
@@ -17881,18 +17879,17 @@ static void ggml_opt_get_grad(int np, struct ggml_tensor * const ps[], float * g
     }
 }
 
-static void ggml_opt_acc_grad(int np, struct ggml_tensor * const ps[], float * g, float scale) {
+static void ggml_opt_acc_grad(int np, struct ggml_tensor * const ps[], float * g, float *gacc, float scale) {
     int64_t i = 0;
-    // printf("there are %d tensors as params \n", np);    
     for (int p = 0; p < np; ++p) {
         const int64_t ne = ggml_nelements(ps[p]) ;
         if(ps[p]->backend != GGML_BACKEND_CPU){
             int64_t bytes = ggml_nbytes(ps[p]->grad);
-            ggml_backend_tensor_get(ps[p]->grad, g, 0, bytes);
+            ggml_backend_tensor_get(ps[p]->grad, gacc, 0, bytes);
             for (int64_t j = 0; j < ne; ++j) {
-                g[j] *= scale;
+                g[i++] = gacc[j] * scale;
             }
-            g += ne;
+            gacc += ne;
         }else{            
             // TODO: add function to get all elements at once
             for (int64_t j = 0; j < ne; ++j) {
@@ -18017,6 +18014,7 @@ static enum ggml_opt_result ggml_opt_adam(
 
     float * x  = opt->adam.x->data;  // current parameters
     float * g  = opt->adam.g->data;  // gradients
+    float * gacc  = opt->adam.gacc->data;  // gradients accumulator
     float * m  = opt->adam.m->data;  // first moment
     float * v  = opt->adam.v->data;  // second moment
 
@@ -18042,7 +18040,7 @@ static enum ggml_opt_result ggml_opt_adam(
         // ggml_set_f32      (f->grad, 1.0f);
         ggml_opt_set_grad_to_one(f);
         ggml_graph_compute(gb, &cplan);
-        ggml_opt_acc_grad(np, ps, g, accum_norm);
+        ggml_opt_acc_grad(np, ps, g, gacc, accum_norm);
         // fx += ggml_get_f32_1d(f, 0);
         fx += ggml_opt_get_func(f);
     }
@@ -18158,7 +18156,7 @@ static enum ggml_opt_result ggml_opt_adam(
             // ggml_set_f32      (f->grad, 1.0f);
             ggml_opt_set_grad_to_one(f);
             ggml_graph_compute(gb, &cplan);
-            ggml_opt_acc_grad(np, ps, g, accum_norm);
+            ggml_opt_acc_grad(np, ps, g, gacc, accum_norm);
             // fx += ggml_get_f32_1d(f, 0);
             fx += ggml_opt_get_func(f);    
         }
@@ -18246,6 +18244,7 @@ static enum ggml_opt_result linesearch_backtracking(
         float * x,
         float * fx,
         float * g,
+        float * ga,
         float * d,
         float * step,
         const float * xp,
@@ -18310,7 +18309,7 @@ static enum ggml_opt_result linesearch_backtracking(
                 // ggml_set_f32      (f->grad, 1.0f);
                 ggml_opt_set_grad_to_one(f);
                 ggml_graph_compute(gb, cplan);
-                ggml_opt_acc_grad(np, ps, g, accum_norm);
+                ggml_opt_acc_grad(np, ps, g, ga, accum_norm);
                 // *fx += ggml_get_f32_1d(f, 0);
                 *fx += ggml_opt_get_func(f);
             }
@@ -18411,6 +18410,7 @@ static enum ggml_opt_result ggml_opt_lbfgs(
     float * x  = opt->lbfgs.x->data;  // current parameters
     float * xp = opt->lbfgs.xp->data; // previous parameters
     float * g  = opt->lbfgs.g->data;  // current gradient
+    float * gacc  = opt->lbfgs.gacc->data;  // gradients accumulator
     float * gp = opt->lbfgs.gp->data; // previous gradient
     float * d  = opt->lbfgs.d->data;  // search direction
 
@@ -18458,7 +18458,7 @@ static enum ggml_opt_result ggml_opt_lbfgs(
             ggml_opt_set_grad_to_one(f);
             ggml_graph_compute(gb, &cplan);
             // fprintf(stderr, "%s: lbfgs bef  ggml_opt_acc_grad\n ", __func__);
-            ggml_opt_acc_grad(np, ps, g, accum_norm);
+            ggml_opt_acc_grad(np, ps, g, gacc, accum_norm);
             // fprintf(stderr, "%s: lbfgs aft  ggml_opt_acc_grad\n ", __func__);
             // fx += ggml_get_f32_1d(f, 0);
             fx += ggml_opt_get_func(f);
@@ -18525,7 +18525,7 @@ static enum ggml_opt_result ggml_opt_lbfgs(
         //       to determine if the optimization should be cancelled
         //       this is a simple change, but not doing this atm, since I don't have a nice
         //       way to test and don't want to break something with so many changes lined up
-        ls = linesearch_backtracking(&params, nx, x, &fx, g, d, step, xp, f, gb, &cplan, np, ps, &cancel, callback, callback_data);
+        ls = linesearch_backtracking(&params, nx, x, &fx, g, gacc, d, step, xp, f, gb, &cplan, np, ps, &cancel, callback, callback_data);
         if (cancel) {
             return GGML_OPT_CANCEL;
         }
@@ -18751,6 +18751,7 @@ GGML_API void ggml_opt_init(
             {
                 opt->adam.x  = ggml_new_tensor_1d(opt->ctx, GGML_TYPE_F32, nx);
                 opt->adam.g  = ggml_new_tensor_1d(opt->ctx, GGML_TYPE_F32, nx);
+                opt->adam.gacc  = ggml_new_tensor_1d(opt->ctx, GGML_TYPE_F32, nx);
                 opt->adam.m  = ggml_new_tensor_1d(opt->ctx, GGML_TYPE_F32, nx);
                 opt->adam.v  = ggml_new_tensor_1d(opt->ctx, GGML_TYPE_F32, nx);
                 opt->adam.pf = params.past > 0
@@ -18758,6 +18759,7 @@ GGML_API void ggml_opt_init(
                     : NULL;
                 ggml_set_zero(opt->adam.m);
                 ggml_set_zero(opt->adam.v);
+                ggml_set_zero(opt->adam.gacc);
                 ggml_set_zero(opt->adam.x);
                 if (opt->adam.pf) {
                     ggml_set_zero(opt->adam.pf);
@@ -18768,6 +18770,7 @@ GGML_API void ggml_opt_init(
                 opt->lbfgs.x  = ggml_new_tensor_1d(opt->ctx, GGML_TYPE_F32, nx);
                 opt->lbfgs.xp = ggml_new_tensor_1d(opt->ctx, GGML_TYPE_F32, nx);
                 opt->lbfgs.g  = ggml_new_tensor_1d(opt->ctx, GGML_TYPE_F32, nx);
+                opt->lbfgs.gacc  = ggml_new_tensor_1d(opt->ctx, GGML_TYPE_F32, nx);
                 opt->lbfgs.gp = ggml_new_tensor_1d(opt->ctx, GGML_TYPE_F32, nx);
                 opt->lbfgs.d  = ggml_new_tensor_1d(opt->ctx, GGML_TYPE_F32, nx);
                 opt->lbfgs.pf = params.past > 0
@@ -18780,6 +18783,7 @@ GGML_API void ggml_opt_init(
                 ggml_set_zero(opt->lbfgs.x);
                 ggml_set_zero(opt->lbfgs.xp);
                 ggml_set_zero(opt->lbfgs.g);
+                ggml_set_zero(opt->lbfgs.gacc);
                 ggml_set_zero(opt->lbfgs.gp);
                 ggml_set_zero(opt->lbfgs.d);
                 if (opt->lbfgs.pf) {

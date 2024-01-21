@@ -916,8 +916,8 @@ int main(int argc, char ** argv) {
             
             // printf("graph dumped \n");
             model.compute_buffer = ggml_backend_alloc_ctx_tensors(model.ctx, model.backend);
-            if(ggml_backend_is_cpu(model.backend))
-                check_data_buffer(gf);
+            // if(ggml_backend_is_cpu(model.backend))
+            //     check_data_buffer(gf);
             ggml_graph_dump_dot(gb, gf,  "mnist-vae-cpu-backward.dot");    
             randomize_model(&model, 1337, 0.0f, 0.1f, -1.0f, +1.0f);
             // randomize_model(&model, 1337, 0.0f, .1f, -FLT_MAX, FLT_MAX);
@@ -1088,12 +1088,10 @@ int main(int argc, char ** argv) {
             ggml_backend_tensor_get(err_sig, &error_before_opt1, 0, ggml_nbytes(err_sig));
             ggml_backend_tensor_get(err_tot, &error_before_optt, 0, ggml_nbytes(err_tot));
         }
-        // printf(" after compute KLD and BCE is  %f(%p), %f(%p) \n", 
-        //     error_before_opt0, (void *)err_kl, error_before_opt1, (void *)err_sig);
-        // printf(" after compute total error is  %f(%p)\n", error_before_optt, (void *)err_tot->data);
-         printf(" after compute KLD and BCE is  %f, %f \n", 
-            error_before_opt0/(float)n_batch, error_before_opt1/(float)n_batch);
-        printf(" after compute total error is  %f\n", error_before_optt/(float)n_batch);
+        printf("At %05.2f%%, KLD, BCE, TOTAL loss: (%f, %f, %f) \n",  100. * ex / num_batches,
+               error_before_opt0/(float)n_batch, error_before_opt1/(float)n_batch,
+               error_before_optt/(float)n_batch);
+
         // exit(1);
         }
         

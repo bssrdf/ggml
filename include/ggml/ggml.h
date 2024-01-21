@@ -2006,9 +2006,11 @@ extern "C" {
         float loss_before;
         float loss_after;
 
+
         struct {
             struct ggml_tensor * x;
             struct ggml_tensor * g;  // current gradient
+            struct ggml_tensor * gacc;
             struct ggml_tensor * m;  // first moment
             struct ggml_tensor * v;  // second moment
             struct ggml_tensor * pf; // past function values
@@ -2021,6 +2023,7 @@ extern "C" {
             struct ggml_tensor * x;    // current parameters
             struct ggml_tensor * xp;   // previous parameters
             struct ggml_tensor * g;    // current gradient
+            struct ggml_tensor * gacc;
             struct ggml_tensor * gp;   // previous gradient
             struct ggml_tensor * d;    // search direction
             struct ggml_tensor * pf;   // past function values
