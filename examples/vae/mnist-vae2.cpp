@@ -790,6 +790,7 @@ int main(int argc, char ** argv) {
     bool use_gpu = true;
     int n_batch = 100;
     int n_threads = 1;
+    int log_interval = 10;
     
     
 
@@ -883,7 +884,7 @@ int main(int argc, char ** argv) {
     struct ggml_cgraph* gb = NULL; 
     // num_batches = 5;  
     for (int ex=0; ex<num_batches; ++ex) {
-        printf(" enter loop %d \n", ex);
+        // printf(" enter loop %d \n", ex);
         struct ggml_init_params optparams = {
             /*.mem_size   =*/ compute_size,
             /*.mem_buffer =*/ compute_addr,
@@ -979,14 +980,15 @@ int main(int argc, char ** argv) {
         // struct ggml_cgraph * gf_res = compute_graph_batch(&model, allocr, n_batch);
         // print_model_data_addr(&model);
         // ggml_graph_dump_dot(gf_res, NULL, "mnist-vae-forward.dot");
-        
+        struct ggml_tensor * err_tot = get_tensor_from_graph(gf, "totloss");
 
+        if (ex % log_interval == 0){
         if (ggml_backend_is_cpu(model.backend)) {
             ggml_backend_cpu_set_n_threads(model.backend, n_threads);
         }
         GGML_ASSERT(gf != NULL);
         ggml_backend_graph_compute(model.backend, gf);
-        struct ggml_tensor * err_tot = get_tensor_from_graph(gf, "totloss");
+        
 
         // ggml_graph_reset(gf);
         // ggml_opt_set_grad_to_one(err_tot);
@@ -1090,9 +1092,10 @@ int main(int argc, char ** argv) {
         //     error_before_opt0, (void *)err_kl, error_before_opt1, (void *)err_sig);
         // printf(" after compute total error is  %f(%p)\n", error_before_optt, (void *)err_tot->data);
          printf(" after compute KLD and BCE is  %f, %f \n", 
-            error_before_opt0, error_before_opt1);
-        printf(" after compute total error is  %f\n", error_before_optt);
+            error_before_opt0/(float)n_batch, error_before_opt1/(float)n_batch);
+        printf(" after compute total error is  %f\n", error_before_optt/(float)n_batch);
         // exit(1);
+        }
         
 
         struct ggml_opt_params opt_params = ggml_opt_default_params(GGML_OPT_ADAM);
