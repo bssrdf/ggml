@@ -617,6 +617,10 @@ static __device__ __forceinline__ float op_add(const float a, const float b) {
     return a + b;
 }
 
+static __device__ __forceinline__ float op_sub(const float a, const float b) {
+    return a - b;
+}
+
 static __device__ __forceinline__ float op_mul(const float a, const float b) {
     return a * b;
 }
@@ -7402,6 +7406,13 @@ static void ggml_cuda_op_add(
     ggml_cuda_op_bin_bcast<bin_bcast_cuda<op_add>>(src0, src1, dst, src0_dd, src1_dd, dst_dd, main_stream);
 }
 
+static void ggml_cuda_op_sub(
+    const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
+    const float * src0_dd, const float * src1_dd, float * dst_dd, cudaStream_t main_stream) {
+
+    ggml_cuda_op_bin_bcast<bin_bcast_cuda<op_sub>>(src0, src1, dst, src0_dd, src1_dd, dst_dd, main_stream);
+}
+
 
 static void ggml_cuda_op_acc(
     const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
@@ -8889,6 +8900,10 @@ static void ggml_cuda_get_rows(const ggml_tensor * src0, const ggml_tensor * src
     ggml_cuda_op_flatten(src0, src1, dst, ggml_cuda_op_get_rows);
 }
 
+static void ggml_cuda_sub(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    ggml_cuda_op_flatten(src0, src1, dst, ggml_cuda_op_sub);
+}
+
 static void ggml_cuda_add(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     ggml_cuda_op_flatten(src0, src1, dst, ggml_cuda_op_add);
 }
@@ -10065,6 +10080,9 @@ bool ggml_cuda_compute_forward(struct ggml_compute_params * params, struct ggml_
         case GGML_OP_DUP:
             func = ggml_cuda_dup;
             break;
+        case GGML_OP_SUB:
+            func = ggml_cuda_sub;
+            break;    
         case GGML_OP_ADD:
             func = ggml_cuda_add;
             break;
@@ -10721,6 +10739,7 @@ static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, const ggml_ten
         case GGML_OP_PERMUTE:
         case GGML_OP_TRANSPOSE:
         case GGML_OP_NORM:
+        case GGML_OP_SUB:
         case GGML_OP_ADD:
         case GGML_OP_ADD1:
         case GGML_OP_MUL:

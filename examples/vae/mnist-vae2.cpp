@@ -532,22 +532,16 @@ static void train_forward_batch(
     ggml_set_name(h1, "meansq");
     struct ggml_tensor* sd = ggml_exp(ctx0, logsd);
     ggml_set_name(sd, "sd");
-    struct ggml_tensor* var = ggml_sqr(ctx0, sd);
-    ggml_set_name(var, "var");
-    struct ggml_tensor* h3 = ggml_add(ctx0, ggml_scale(ctx0, h1, 0.5f), 
-                                            ggml_scale(ctx0, sd, 0.5f));
-    // if(ggml_backend_is_cpu(model->backend)){ 
-    h3 = ggml_add(ctx0, h3, ggml_scale(ctx0, logsd, -0.5f));
-    // }else{
-        // h3 = ggml_sub(ctx0, h3, logsd);
-        // h3 = ggml_add(ctx0, h3, ggml_scale(ctx0, logsd, -0.5f));
-    // }
+    // struct ggml_tensor* var = ggml_sqr(ctx0, sd);
+    // ggml_set_name(var, "var");
+    // struct ggml_tensor* h3 = ggml_add(ctx0, ggml_scale(ctx0, h1, 0.5f), 
+    //                                         ggml_scale(ctx0, sd, 0.5f));
+    // h3 = ggml_add(ctx0, h3, ggml_scale(ctx0, logsd, -0.5f));
+    struct ggml_tensor* h3 = ggml_add(ctx0, h1, sd);
+    h3 = ggml_sub(ctx0, h3, logsd);
+    h3 = ggml_scale(ctx0, h3, 0.5f);
     ggml_set_name(h3, "kldiv_plus_half");
-    // if(ggml_backend_is_cpu(model->backend)){ 
-    //    h3 = ggml_add1(ctx0, h3, ggml_new_f32(ctx0, -0.5f));
-    // }else{
     h3 = ggml_add1(ctx0, h3, ggml_new_f32(ctx0, -0.5f));
-    // }    
     ggml_set_name(h3, "kldiv");   
     // h3 = ggml_scale(ctx0, ggml_sum(ctx0, h3), 1.f/(float)n_batch);
     h3 = ggml_sum(ctx0, h3);
@@ -575,12 +569,8 @@ static void train_forward_batch(
     ggml_set_name(h, "src1_sigloss");
     struct ggml_tensor* x = h;
     struct ggml_tensor* z = model->input;
-    // if(ggml_backend_is_cpu(model->backend)){ 
-    //     h = ggml_sub(ctx0, ggml_relu(ctx0, x), ggml_mul(ctx0, x, z));
-    // }
-    // else{
-    h = ggml_add(ctx0, ggml_relu(ctx0, x), ggml_neg(ctx0, ggml_mul(ctx0, x, z)));
-    // }
+    
+    h = ggml_sub(ctx0, ggml_relu(ctx0, x), ggml_mul(ctx0, x, z));
     h = ggml_add(ctx0, h, ggml_log(ctx0, 
                              ggml_add1(ctx0,  
                                   ggml_exp(ctx0, ggml_neg(ctx0, ggml_abs(ctx0, x))),
