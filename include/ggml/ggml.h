@@ -478,7 +478,7 @@ extern "C" {
         GGML_UNARY_OP_GELU,
         GGML_UNARY_OP_GELU_QUICK,
         GGML_UNARY_OP_SILU,
-
+        GGML_UNARY_OP_SIGMOID,
         GGML_UNARY_OP_COUNT,
     };
 
@@ -967,6 +967,14 @@ extern "C" {
             struct ggml_tensor  * a);
 
     GGML_API struct ggml_tensor * ggml_step_inplace(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_sigmoid(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a);
+
+    GGML_API struct ggml_tensor * ggml_sigmoid_inplace(
             struct ggml_context * ctx,
             struct ggml_tensor  * a);
 

@@ -563,11 +563,12 @@ static void train_forward_batch(
     h = ggml_add(ctx0, h, ggml_repeat(ctx0, model->decode1_bias, h)); 
     // h = ggml_add(ctx0, ggml_mul_mat(ctx0, model->decode1_weight, h), model->decode1_bias);
     
-    // run the computation
-    // ggml_build_forward_expand(gf, inpL);
-    // *l2 = h; // 2nd loss is sigmoid cross entropy
+    // 2nd loss is sigmoid cross entropy
     ggml_set_name(h, "src1_sigloss");
     struct ggml_tensor* x = h;
+    struct ggml_tensor* recon = ggml_sigmoid(ctx0, x);
+    ggml_set_name(recon, "reconstructed");
+
     struct ggml_tensor* z = model->input;
     
     h = ggml_sub(ctx0, ggml_relu(ctx0, x), ggml_mul(ctx0, x, z));
@@ -625,80 +626,14 @@ struct ggml_cgraph* build_train_graph_batch(struct mnist_vae_model * model,
     // struct ggml_cgraph* gf = ggml_new_graph(model->ctx);
     struct ggml_cgraph* gf  = ggml_new_graph_custom(model->ctx, GGML_DEFAULT_GRAPH_SIZE, true);
 
-
     train_forward_batch(model, model->ctx, n_batch);
-
-    // ggml_build_forward_expand(gf, l1);
-    // ggml_build_forward_expand(gf, ggml_get_tensor(ctx0, "klloss"));
-    // ggml_build_forward_expand(gf, ggml_get_tensor(ctx0, "sigloss"));
+    
     ggml_build_forward_expand(gf, ggml_get_tensor(model->ctx, "totloss"));
-
-    // struct ggml_tensor * t = get_tensor_from_graph(gf, "node_38");
-    // if(t != NULL){
-    //     printf("node_38 found \n ");
-    //     if( t->src[0])
-    //         printf("src0: %s \n ", t->src[0]->name);
-    //     if(t->src[1])
-    //         printf("src1: %s \n ", t->src[1]->name);
-    // } 
-    // else{
-    //     printf("node_38 not found \n ");
-    // }
-
 
     ggml_free(ctx0);
 
     return gf;
 }
-
-
-// struct ggml_cgraph * compute_graph_batch(struct mnist_vae_model * model, 
-//                                          struct ggml_allocr * allocr, 
-//                                          int32_t n_batch) {
-//     // reset the allocator to free all the memory allocated during the previous inference
-//     // ggml_allocr_reset(allocr);
-
-//     struct ggml_cgraph * gf = build_train_graph_batch(model, allocr, n_batch);
-
-//     // allocate tensors
-//     // ggml_allocr_alloc_graph(allocr, gf);
-
-//     std::map<void *, struct ggml_tensor*> gf_map;  
-//     std::map<void *, struct ggml_tensor*>::iterator it;
-//     for(int i = 0; i < gf->n_nodes; ++i){
-//         struct ggml_tensor *node = gf->nodes[i];
-//         it = gf_map.find((void *)node->data);
-//         if (it != gf_map.end()){ 
-//             printf( "%s 's data addr already allocated for %s \n", node->name, gf_map[(void *)node->data]->name);
-//         }
-//         gf_map[(void *)node->data] = node;
-//     }
-//     int n_threads = 1;
-
-//     if (ggml_backend_is_cpu(model->backend)) {
-//         ggml_backend_cpu_set_n_threads(model->backend, n_threads);
-//     }
-
-//     ggml_backend_graph_compute(model->backend, gf);
-
-//     //ggml_graph_print(gf);
-
-//     return gf;
-// }
-
-
-static void lshift_examples(struct ggml_tensor * tokens_input, struct ggml_tensor * targets, int n_shift) {
-    int n_tokens = tokens_input->ne[0];
-    int n_vocab = targets->ne[0];
-    for (int i=0; i<n_tokens-n_shift; ++i) {
-        ggml_set_i32_1d(tokens_input, i, ggml_get_i32_1d(tokens_input, i + n_shift));
-        for (int k=0; k<n_vocab; ++k) {
-            ggml_set_f32_1d(targets, i*n_vocab + k, ggml_get_f32_1d(targets, (i + n_shift)*n_vocab + k));
-        }
-    }
-}
-
-
 
 static struct ggml_tensor * square_error_loss(
     struct ggml_context * ctx, struct ggml_tensor * a, struct ggml_tensor * b
@@ -760,6 +695,31 @@ static void ggml_opt_set_grad_to_one( struct ggml_tensor *f ){
         ggml_set_f32      (f->grad, 1.0f);
     }
 
+}
+
+static bool output_images(const std::string &filename, const float *data, int iter, int nr, int nc){    
+    int n = nr * nc;
+    uint8 *pixels = new uint8[28*28*n];
+    for (int i = 0; i < nr; i++){ 
+        for (int j = 0; j < nc; j++) {
+            for (int row = 0; row < 28; row++){
+                for (int col = 0; col < 28; col++){
+                    int idx = (i*nc+j)*28*28+row*28 + col;
+                    int idx0 = (i*28+row)*28*nc+ j*28+col; 
+                    // printf("accessing %d, %d, %d, %d - %d \n", i, j, row, col, idx);
+                    pixels[idx0] = float2pixel(data[idx]);
+                }
+            }
+        }
+    }
+    if (!stbi_write_png(filename.c_str(), 28*nc, 28*nr, 1, pixels, 28*nc)) {
+        printf("%s: failed to write mask %s\n", __func__, filename.c_str());
+        return false;
+    }
+
+    delete pixels;
+    printf("%s: image %s was written\n", __func__, filename.c_str());
+    return true;
 }
 
 
@@ -910,23 +870,12 @@ int main(int argc, char ** argv) {
             for (int row = 0; row < 28; row++) {
                 for (int col = 0; col < 28; col++) {
                     digit[ib*28*28 + row*28 + col] = ((float)buf[ib*28*28 + row*28 + col])/255.f;
-                    // printf(" %.2f,  ", digit[ib*28*28 + row*28 + col]);
                 }
-                // printf("\n");
             }
 
         if(ex == 0){
             std::string filename = "mnist-" + std::to_string(ex) + ".png";
-            uint8 *pixels = new uint8[28*28];
-            for (int row = 0; row < 28; row++)
-                for (int col = 0; col < 28; col++)
-                    pixels[row*28 + col] = float2pixel(digit[row*28 + col]);
-            if (!stbi_write_png(filename.c_str(), 28, 28, 1, pixels, 28)) {
-                // if (!stbi_write_png(filename.c_str(), 28, 28, 1, pixels, 28*sizeof(float))) {
-                printf("%s: failed to write mask %s\n", __func__, filename.c_str());
-                return false;
-            }
-            delete pixels;
+            output_images(filename, digit.data(), ex, 10, 5);                
         }    
 
 
@@ -955,21 +904,8 @@ int main(int argc, char ** argv) {
             printf("modle bias zeroed \n");            
         }
 
-
-         
-
-    // struct ggml_tensor * h = model.encode1_weight;
-    // int64_t *ne = h->ne;
-    // printf("h is %s \n", h->name);
-    // printf("(%ld, %ld, %ld, %ld) \n", ne[0], ne[1], ne[2], ne[3]);
-    
-    
                 
         struct ggml_context * ctx0 = ggml_init(optparams);
-        // printf("this is adam optimizer ctx %p \n ", (void *)ctx0);
-        // struct ggml_context * ctxm = model.ctx;
-        // printf("mode ctx is %p \n ", (void *)ctxm );
-        // ggml_print_objects(ctxm);
         struct ggml_tensor * input_batch = ggml_get_tensor(model.ctx, "input");
         struct ggml_tensor * noise_batch = ggml_get_tensor(model.ctx, "noise");
         
@@ -1292,10 +1228,25 @@ int main(int argc, char ** argv) {
                error_before_opt0/(float)n_batch, error_before_opt1/(float)n_batch,
                error_before_optt/(float)n_batch);
 
-        // exit(1);
+        // exit(1);        
         }
-        
+        if(ex == 0){
+            ggml_build_forward_expand(gf, ggml_get_tensor(model.ctx, "reconstructed"));
+            ggml_backend_graph_compute(model.backend, gf);
+            struct ggml_tensor * recon = get_tensor_from_graph(gf, "reconstructed");
+            // int64_t *ne = recon->ne; 
+            // printf(" (%ld, %ld, %ld, %ld) \n ", ne[0], ne[1], ne[2], ne[3]);
+            std::string filename = "mnist-test-batch-" + std::to_string(ex) + ".png";
+            output_images(filename, digit.data(), ex, 10, 10);
+            
+            float* out_data = new float[ggml_nelements(recon)];
+            ggml_backend_tensor_get(recon, out_data, 0, ggml_nbytes(recon));
 
+            filename = "mnist-recon-batch-" + std::to_string(ex) + ".png";
+            output_images(filename, out_data, ex, 10, 10);
+            delete out_data;
+            ggml_build_forward_expand(gf, ggml_get_tensor(model.ctx, "totloss"));
+        }
         
     }
 

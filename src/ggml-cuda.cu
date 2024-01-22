@@ -608,6 +608,53 @@ static __device__ __forceinline__ float warp_reduce_max(float x) {
     return x;
 }
 
+/* like copysignf(); when first argument is known to be positive */
+__forceinline__ __device__ float copysignf_pos (float a, float b)
+{
+    return __int_as_float (__float_as_int (a) | (__float_as_int (b) & 0x80000000));
+}
+
+/* device function intrinsic for hyperbolic tangent */
+__forceinline__ __device__ float __tanhf (float a)
+{
+#if (__CUDACC_VER_MAJOR__ >= 11) && (__CUDA_ARCH__ >= 750)
+    // maxulperr = 133.95290, maxrelerr = 1.1126e-5
+    float r;
+    asm ("tanh.approx.f32 %0,%1; \n\t" : "=f"(r) : "f"(a));
+#else
+    // maxulperr = 108.82848, maxrelerr = 9.3450e-6
+    const float L2E = 1.442695041f; // log2(exp(1))
+    float e, r, s, t, d;
+    s = fabsf (a);
+    t = -L2E * 2.0f * s;
+    asm ("ex2.approx.ftz.f32 %0,%1;\n\t" : "=f"(e) : "f"(t));
+    d = e + 1.0f;
+    asm ("rcp.approx.ftz.f32 %0,%1;\n\t" : "=f"(r) : "f"(d));
+    r = fmaf (e, -r, r);
+    if (s < 4.997253418e-3f) r = a;
+    if (!isnan (a)) r = copysignf_pos (r, a);
+#endif
+    return r;
+}
+
+/* compute the sigmoid function 1/(1+exp(-x)) */
+__forceinline__ __device__ float sigmoidf (float a)
+{
+#if USE_TANH
+    return fmaf (0.5, __tanhf (0.5f * a), 0.5f);
+#else // USE_TANH
+    const float L2E = 1.442695041f; // log2(exp(1))
+    float t, d, e, r;
+    t = -L2E * a;
+    asm ("ex2.approx.ftz.f32 %0,%1;\n\t" : "=f"(e) : "f"(t));
+    d = e + 1.0f;
+    asm ("rcp.approx.ftz.f32 %0,%1;\n\t" : "=f"(r) : "f"(d));
+    return r;
+#endif // USE_TANH
+}
+
+
+
 static __device__ __forceinline__ float op_repeat(const float a, const float b) {
     return b;
     GGML_UNUSED(a);
@@ -751,6 +798,14 @@ static __global__ void tanh_f32(const float * x, float * dst, int k) {
         return;
     }
     dst[i] = tanhf(x[i]);
+}
+
+static __global__ void sigmoid_f32(const float * x, float * dst, int k) {
+    const int i  = blockDim.x*blockIdx.x + threadIdx.x;
+    if (i >= k) {
+        return;
+    }
+    dst[i] = sigmoidf(x[i]);
 }
 
 static __global__ void abs_f32(const float * x, float * dst, int k) {
@@ -5786,6 +5841,11 @@ static void tanh_f32_cuda(const float * x, float * dst, const int k, cudaStream_
     tanh_f32<<<num_blocks, CUDA_TANH_BLOCK_SIZE, 0, stream>>>(x, dst, k);
 }
 
+static void sigmoid_f32_cuda(const float * x, float * dst, const int k, cudaStream_t stream) {
+    const int num_blocks = (k + CUDA_TANH_BLOCK_SIZE - 1) / CUDA_TANH_BLOCK_SIZE;
+    sigmoid_f32<<<num_blocks, CUDA_TANH_BLOCK_SIZE, 0, stream>>>(x, dst, k);
+}
+
 static void abs_f32_cuda(const float * x, float * dst, const int k, cudaStream_t stream) {
     const int num_blocks = (k + CUDA_ABS_BLOCK_SIZE - 1) / CUDA_ABS_BLOCK_SIZE;
     abs_f32<<<num_blocks, CUDA_ABS_BLOCK_SIZE, 0, stream>>>(x, dst, k);
@@ -7489,6 +7549,20 @@ static void ggml_cuda_op_gelu_quick(
     (void) src1_dd;
 }
 
+static void ggml_cuda_op_sigmoid(
+    const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
+    const float * src0_dd, const float * src1_dd, float * dst_dd, cudaStream_t main_stream) {
+
+    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT( dst->type == GGML_TYPE_F32);
+
+    sigmoid_f32_cuda(src0_dd, dst_dd, ggml_nelements(src0), main_stream);
+
+    (void) src1;
+    (void) dst;
+    (void) src1_dd;
+}
+
 static void ggml_cuda_op_tanh(
     const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
     const float * src0_dd, const float * src1_dd, float * dst_dd, cudaStream_t main_stream) {
@@ -8940,6 +9014,10 @@ static void ggml_cuda_gelu_quick(const ggml_tensor * src0, const ggml_tensor * s
     ggml_cuda_op_flatten(src0, src1, dst, ggml_cuda_op_gelu_quick);
 }
 
+static void ggml_cuda_sigmoid(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    ggml_cuda_op_flatten(src0, src1, dst, ggml_cuda_op_sigmoid);
+}
+
 static void ggml_cuda_tanh(const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     ggml_cuda_op_flatten(src0, src1, dst, ggml_cuda_op_tanh);
 }
@@ -10115,6 +10193,9 @@ bool ggml_cuda_compute_forward(struct ggml_compute_params * params, struct ggml_
                 case GGML_UNARY_OP_TANH:
                     func = ggml_cuda_tanh;
                     break;
+                case GGML_UNARY_OP_SIGMOID:
+                    func = ggml_cuda_sigmoid;
+                    break;
                 case GGML_UNARY_OP_RELU:
                     func = ggml_cuda_relu;
                     break;
@@ -10636,6 +10717,7 @@ static bool ggml_backend_cuda_supports_op(ggml_backend_t backend, const ggml_ten
                 case GGML_UNARY_OP_RELU:
                 case GGML_UNARY_OP_GELU_QUICK:
                 case GGML_UNARY_OP_TANH:
+                case GGML_UNARY_OP_SIGMOID:
                 case GGML_UNARY_OP_ABS:
                 case GGML_UNARY_OP_NEG:
                 case GGML_UNARY_OP_SGN:
