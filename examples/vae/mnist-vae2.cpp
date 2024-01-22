@@ -766,6 +766,7 @@ int main(int argc, char ** argv) {
     int n_batch = 100;
     int n_threads = 1;
     int log_interval = 10;
+    int n_epochs = 6;
     
     
 
@@ -795,6 +796,13 @@ int main(int argc, char ** argv) {
 
     if(read_data(train_data, COUNT_TRAIN) > 0){
         fprintf(stderr, "Error in read in Mnist training data! \n");
+        exit(1);
+    }
+
+     uint8 *test_data = (uint8 *)malloc(COUNT_TEST * 28 * 28 * sizeof(uint8));
+
+    if(read_test_data(test_data, COUNT_TEST) > 0){
+        fprintf(stderr, "Error in read in Mnist test data! \n");
         exit(1);
     }
 
@@ -857,9 +865,35 @@ int main(int argc, char ** argv) {
 
     struct ggml_cgraph* gf = NULL; 
     struct ggml_cgraph* gb = NULL; 
+
+    int64_t *indices = new int64_t[num_batches];
+    for (int epoch = 0; epoch < n_epochs; epoch++){
+
+    num_batches = COUNT_TRAIN / n_batch;    
+  
+    for(int i = 0; i < num_batches; i++){
+        indices[i] = i*n_batch*28*28;
+    }
+    for(int i = 0; i < num_batches; i++){
+        std::random_device     rand_dev;
+        std::mt19937   generator(rand_dev());
+        std::uniform_int_distribution<int>  distr(i, num_batches-1);
+        int j = distr(generator);
+        int64_t tmp = indices[i];
+        indices[i] =  indices[j];
+        indices[j] =  tmp;
+    }
+    // for(int i = 0; i < num_batches; i++){
+    //     printf("%ld, ", indices[i]/(28*28));
+    //     if((i+1)% 20 == 0)
+    //        printf("\n");
+    // }
+
     // num_batches = 5;  
     for (int ex=0; ex<num_batches; ++ex) {
+
         // printf(" enter loop %d \n", ex);
+        buf = train_data + indices[ex];
         struct ggml_init_params optparams = {
             /*.mem_size   =*/ compute_size,
             /*.mem_buffer =*/ compute_addr,
@@ -879,11 +913,11 @@ int main(int argc, char ** argv) {
         }    
 
 
-        buf += n_batch*28*28;  
+        // buf += n_batch*28*28;  
 
         
 
-        if(ex == 0){            
+        if(epoch == 0 && ex == 0){            
             gf = build_train_graph_batch(&model, n_batch);
             gb = ggml_graph_dup(model.ctx, gf);           
             printf("build backward graph \n");
@@ -1101,15 +1135,10 @@ int main(int argc, char ** argv) {
         
     }
 
-    printf("training done\n");
+    printf("epoch %d training done\n", epoch);
 
 
-    uint8 *test_data = (uint8 *)malloc(COUNT_TEST * 28 * 28 * sizeof(uint8));
-
-    if(read_test_data(test_data, COUNT_TEST) > 0){
-        fprintf(stderr, "Error in read in Mnist test data! \n");
-        exit(1);
-    }
+   
 
     buf = test_data;
 
@@ -1230,32 +1259,39 @@ int main(int argc, char ** argv) {
 
         // exit(1);        
         }
+#if 1
         if(ex == 0){
             ggml_build_forward_expand(gf, ggml_get_tensor(model.ctx, "reconstructed"));
             ggml_backend_graph_compute(model.backend, gf);
             struct ggml_tensor * recon = get_tensor_from_graph(gf, "reconstructed");
             // int64_t *ne = recon->ne; 
             // printf(" (%ld, %ld, %ld, %ld) \n ", ne[0], ne[1], ne[2], ne[3]);
-            std::string filename = "mnist-test-batch-" + std::to_string(ex) + ".png";
+            std::string filename = "mnist-test-e_" +std::to_string(epoch)+"-b_" + std::to_string(ex) + ".png";
             output_images(filename, digit.data(), ex, 10, 10);
             
             float* out_data = new float[ggml_nelements(recon)];
             ggml_backend_tensor_get(recon, out_data, 0, ggml_nbytes(recon));
 
-            filename = "mnist-recon-batch-" + std::to_string(ex) + ".png";
+            filename = "mnist-recon-e_" + std::to_string(epoch)+"-b_" + std::to_string(ex) + ".png";
             output_images(filename, out_data, ex, 10, 10);
             delete out_data;
             ggml_build_forward_expand(gf, ggml_get_tensor(model.ctx, "totloss"));
         }
+#endif
         
     }
 
-    printf("test done\n");
+    printf("epoch %d: test done\n", epoch);
+
+    }
 
 
 
     // ggml_free(kv_self.ctx);
     // ggml_free(model_lora.ctx);
+    delete indices;
+    free(train_data);
+    free(test_data);
     ggml_free(model.ctx);
     free_random_normal_distribution(rnd);
 
