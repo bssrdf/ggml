@@ -942,7 +942,8 @@ int main(int argc, char ** argv) {
             gf = build_train_graph_batch(&model, n_batch);
             gb = ggml_graph_dup(model.ctx, gf);           
             printf("build backward graph \n");
-            ggml_build_backward_expand(model.ctx, gf, gb, true);
+            // ggml_build_backward_expand(model.ctx, gf, gb, true);
+            ggml_build_backward_expand(model.ctx, gf, gb, false);
             printf("finished build backward graph \n");
             printf("after check data buffer \n");
             // ggml_graph_dump_dot(gf, NULL, "mnist-vae-forward.dot");
@@ -1121,8 +1122,8 @@ int main(int argc, char ** argv) {
         // struct ggml_opt_params opt_params = ggml_opt_default_params(GGML_OPT_LBFGS);
         opt_params.print_backward_graph = false;
         opt_params.print_forward_graph = false;
-        opt_params.adam.n_iter = 16;
-        // opt_params.adam.gclip = 2.f;
+        opt_params.adam.n_iter = 2;
+        opt_params.adam.gclip = 1.f;
         // opt_params.lbfgs.n_iter = 16;
         // opt_params.lbfgs.max_linesearch = 50;
         opt_params.gf = gf;
