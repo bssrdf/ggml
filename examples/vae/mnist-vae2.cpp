@@ -686,6 +686,36 @@ static void check_op_suppport(struct mnist_vae_model * model, struct ggml_cgraph
 }
 
 
+static void check_backend(struct mnist_vae_model * model, struct ggml_cgraph* gf){
+
+    for(int i = 0; i < gf->n_nodes; ++i){
+        struct ggml_tensor *node = gf->nodes[i];
+        if(node->backend == GGML_BACKEND_CPU){
+            fprintf(stderr, "%s: node %s is on CPU\n", __func__, node->name);
+        }  
+        else if (node->backend == GGML_BACKEND_GPU){
+            fprintf(stderr, "%s: node %s is on GPU\n", __func__, node->name);
+        }
+        else{
+            fprintf(stderr, "%s: node %s is on Others\n", __func__, node->name);
+        }
+
+    }
+    for(int i = 0; i < gf->n_leafs; ++i){
+        struct ggml_tensor *node = gf->leafs[i];
+        if(node->backend == GGML_BACKEND_CPU){
+            fprintf(stderr, "%s: leaf %s is on CPU\n", __func__, node->name);
+        }  
+        else if (node->backend == GGML_BACKEND_GPU){
+            fprintf(stderr, "%s: leaf %s is on GPU\n", __func__, node->name);
+        }
+        else{
+            fprintf(stderr, "%s: leaf %s is on Others\n", __func__, node->name);
+        }
+    } 
+}
+
+
 static void ggml_opt_set_grad_to_one( struct ggml_tensor *f ){
     GGML_ASSERT(ggml_is_scalar(f));
     if(f->backend != GGML_BACKEND_CPU){
@@ -930,6 +960,7 @@ int main(int argc, char ** argv) {
             model.compute_buffer = ggml_backend_alloc_ctx_tensors(model.ctx, model.backend);
             // if(ggml_backend_is_cpu(model.backend))
             //     check_data_buffer(gf);
+            // check_backend(&model, gf);
             ggml_graph_dump_dot(gb, gf,  "mnist-vae-cpu-backward.dot");    
             randomize_model(&model, 1337, 0.0f, 0.1f, -1.0f, +1.0f);
             // randomize_model(&model, 1337, 0.0f, .1f, -FLT_MAX, FLT_MAX);

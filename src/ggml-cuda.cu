@@ -5583,14 +5583,14 @@ static __global__ void scale_f32(const float * x, float * dst, const float scale
     dst[i] = scale * x[i];
 }
 
-static __global__ void add1_f32(const float * x, const float *y, float * dst, const int k) {
+static __global__ void add1_f32(const float * x, float y, float * dst, const int k) {
     const int i = blockDim.x*blockIdx.x + threadIdx.x;
 
     if (i >= k) {
         return;
     }
 
-    dst[i] = y[0] + x[i];
+    dst[i] = y + x[i];
 }
 
 static __global__ void clamp_f32(const float * x, float * dst, const float min, const float max, const int k) {
@@ -6814,7 +6814,7 @@ static void scale_f32_cuda(const float * x, float * dst, const float scale, cons
     scale_f32<<<num_blocks, CUDA_SCALE_BLOCK_SIZE, 0, stream>>>(x, dst, scale, k);
 }
 
-static void add1_f32_cuda(const float * x, const float * y, float * dst, const int k, cudaStream_t stream) {
+static void add1_f32_cuda(const float * x, float y, float * dst, const int k, cudaStream_t stream) {
     const int num_blocks = (k + CUDA_SCALE_BLOCK_SIZE - 1) / CUDA_SCALE_BLOCK_SIZE;
     add1_f32<<<num_blocks, CUDA_SCALE_BLOCK_SIZE, 0, stream>>>(x, y, dst, k);
 }
@@ -8482,11 +8482,13 @@ static void ggml_cuda_op_add1(
     const float * src0_dd, const float * src1_dd, float * dst_dd, cudaStream_t main_stream) {
 
     GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(ggml_is_scalar(src1));
+    GGML_ASSERT(src1->backend == GGML_BACKEND_CPU);
     GGML_ASSERT( dst->type == GGML_TYPE_F32);
 
-    
+    float src1_f = ((float *)((char *)src1->data))[0];
 
-    add1_f32_cuda(src0_dd, src1_dd, dst_dd, ggml_nelements(src0), main_stream);
+    add1_f32_cuda(src0_dd, src1_f , dst_dd, ggml_nelements(src0), main_stream);
     CUDA_CHECK(cudaGetLastError());
 
     (void) src1;
@@ -10658,25 +10660,32 @@ static bool ggml_backend_cuda_graph_compute(ggml_backend_t backend, ggml_cgraph 
         if (node->op == GGML_OP_RESHAPE || node->op == GGML_OP_TRANSPOSE || node->op == GGML_OP_VIEW || node->op == GGML_OP_PERMUTE)
             continue;
 
-        assert(node->backend == GGML_BACKEND_GPU);
-        assert(node->buffer->buft == ggml_backend_cuda_buffer_type(cuda_ctx->device));
-        assert(node->extra != nullptr);
+        // assert(node->backend == GGML_BACKEND_GPU);
+        // assert(node->buffer->buft == ggml_backend_cuda_buffer_type(cuda_ctx->device));
+        // assert(node->extra != nullptr);
+        GGML_ASSERT(node->backend == GGML_BACKEND_GPU);
+        GGML_ASSERT(node->buffer->buft == ggml_backend_cuda_buffer_type(cuda_ctx->device));
+        GGML_ASSERT(node->extra != nullptr);
 
         for (int j = 0; j < GGML_MAX_SRC; j++) {
+            if(node->op == GGML_OP_ADD1)
+               continue;
             if (node->src[j] != nullptr) {
-                assert(node->src[j]->backend == GGML_BACKEND_GPU);
-                assert(node->src[j]->buffer->buft == ggml_backend_cuda_buffer_type(cuda_ctx->device));
-                assert(node->src[j]->extra != nullptr);
+                // if(node->src[j]->backend == GGML_BACKEND_GPU){
+                //     fprintf(stderr, "%s:  %s 's src %s is on GPU \n", __func__, node->name, node->src[j]->name);
+                // }else{
+                //     fprintf(stderr, "%s:  %s 's src %s is on CPU \n", __func__, node->name, node->src[j]->name) ;
+                // }
+                // assert(node->src[j]->backend == GGML_BACKEND_GPU);
+                GGML_ASSERT(node->src[j]->backend == GGML_BACKEND_GPU);
+                GGML_ASSERT(node->src[j]->buffer->buft == ggml_backend_cuda_buffer_type(cuda_ctx->device));
+                GGML_ASSERT(node->src[j]->extra != nullptr);
             }
         }
-
         bool ok = ggml_cuda_compute_forward(&params, node);
         if (!ok) {
             fprintf(stderr, "%s: error: op not supported %s (%s)\n", __func__, node->name, ggml_op_name(node->op));
         }
-        // else{
-        //     fprintf(stderr, "%s: success: op %s (%s)\n", __func__, node->name, ggml_op_name(node->op));
-        // }
         GGML_ASSERT(ok);
 
 #if 0
