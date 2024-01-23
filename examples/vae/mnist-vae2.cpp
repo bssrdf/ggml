@@ -727,7 +727,7 @@ static void ggml_opt_set_grad_to_one( struct ggml_tensor *f ){
 
 }
 
-static bool output_images(const std::string &filename, const float *data, int iter, int nr, int nc){    
+static bool output_images(const std::string &filename, const float *data, int nr, int nc){    
     int n = nr * nc;
     uint8 *pixels = new uint8[28*28*n];
     for (int i = 0; i < nr; i++){ 
@@ -796,7 +796,7 @@ int main(int argc, char ** argv) {
     int n_batch = 100;
     int n_threads = 1;
     int log_interval = 10;
-    int n_epochs = 6;
+    int n_epochs = 10;
     
     
 
@@ -897,6 +897,7 @@ int main(int argc, char ** argv) {
     struct ggml_cgraph* gb = NULL; 
 
     int64_t *indices = new int64_t[num_batches];
+
     for (int epoch = 0; epoch < n_epochs; epoch++){
 
     num_batches = COUNT_TRAIN / n_batch;    
@@ -939,7 +940,7 @@ int main(int argc, char ** argv) {
 
         if(ex == 0){
             std::string filename = "mnist-" + std::to_string(ex) + ".png";
-            output_images(filename, digit.data(), ex, 10, 5);                
+            output_images(filename, digit.data(), 10, 5);                
         }    
 
 
@@ -1176,6 +1177,11 @@ int main(int argc, char ** argv) {
     num_batches = COUNT_TEST / n_batch;
     
     // num_batches = 5;  
+    float loss_sofar = FLT_MAX;
+
+    struct ggml_tensor *rec =ggml_get_tensor(model.ctx, "reconstructed");
+    float* out_data = new float[ggml_nelements(rec)];    
+    float *orig_data = new float[ggml_nelements(rec)];
     for (int ex=0; ex<num_batches; ++ex) {
                 
 
@@ -1247,7 +1253,7 @@ int main(int argc, char ** argv) {
         // ggml_graph_dump_dot(gf_res, NULL, "mnist-vae-forward.dot");
         struct ggml_tensor * err_tot = get_tensor_from_graph(gf, "totloss");
 
-        if (ex % log_interval == 0){
+        
         if (ggml_backend_is_cpu(model.backend)) {
             ggml_backend_cpu_set_n_threads(model.backend, n_threads);
         }
@@ -1284,34 +1290,34 @@ int main(int argc, char ** argv) {
             ggml_backend_tensor_get(err_sig, &error_before_opt1, 0, ggml_nbytes(err_sig));
             ggml_backend_tensor_get(err_tot, &error_before_optt, 0, ggml_nbytes(err_tot));
         }
-        printf("At %05.2f%%, KLD, BCE, TOTAL loss: (%f, %f, %f) \n",  100. * ex / num_batches,
-               error_before_opt0/(float)n_batch, error_before_opt1/(float)n_batch,
-               error_before_optt/(float)n_batch);
 
-        // exit(1);        
-        }
-#if 1
-        if(ex == 0){
+        if (error_before_optt < loss_sofar){
+            loss_sofar = error_before_optt;
+
             ggml_build_forward_expand(gf, ggml_get_tensor(model.ctx, "reconstructed"));
             ggml_backend_graph_compute(model.backend, gf);
             struct ggml_tensor * recon = get_tensor_from_graph(gf, "reconstructed");
-            // int64_t *ne = recon->ne; 
-            // printf(" (%ld, %ld, %ld, %ld) \n ", ne[0], ne[1], ne[2], ne[3]);
-            std::string filename = "mnist-test-e_" +std::to_string(epoch)+"-b_" + std::to_string(ex) + ".png";
-            output_images(filename, digit.data(), ex, 10, 10);
-            
-            float* out_data = new float[ggml_nelements(recon)];
+            memcpy(orig_data, digit.data(), ggml_nbytes(recon));
             ggml_backend_tensor_get(recon, out_data, 0, ggml_nbytes(recon));
-
-            filename = "mnist-recon-e_" + std::to_string(epoch)+"-b_" + std::to_string(ex) + ".png";
-            output_images(filename, out_data, ex, 10, 10);
-            delete out_data;
             ggml_build_forward_expand(gf, ggml_get_tensor(model.ctx, "totloss"));
         }
-#endif
+        if (ex % log_interval == 0){
+            printf("At %05.2f%%, KLD, BCE, TOTAL loss: (%f, %f, %f) \n",  100. * ex / num_batches,
+                error_before_opt0/(float)n_batch, error_before_opt1/(float)n_batch,
+                error_before_optt/(float)n_batch);
+        }
+
+           
         
     }
 
+    std::string filename = "mnist-test-e_" +std::to_string(epoch)+".png";
+    output_images(filename, orig_data, 10, 10);
+    filename = "mnist-recon-e_" + std::to_string(epoch)+ ".png";
+    output_images(filename, out_data, 10, 10);
+    delete out_data;
+    delete orig_data;
+    
     printf("epoch %d: test done\n", epoch);
 
     }
