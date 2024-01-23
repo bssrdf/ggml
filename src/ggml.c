@@ -17898,7 +17898,7 @@ void ggml_graph_dump_dot(const struct ggml_cgraph * gb, const struct ggml_cgraph
 
 ////////////////////////////////////////////////////////////////////////////////
 
-static void ggml_opt_set_params(int np, struct ggml_tensor * const ps[], const float * x) {
+static void ggml_opt_set_params(int np, struct ggml_tensor * ps[], const float * x) {
     int i = 0;
     for (int p = 0; p < np; ++p) {
         const int64_t ne = ggml_nelements(ps[p]) ;
@@ -17961,7 +17961,7 @@ static void ggml_opt_acc_grad(int np, struct ggml_tensor * const ps[], float * g
             int64_t bytes = ggml_nbytes(ps[p]->grad);
             ggml_backend_tensor_get(ps[p]->grad, gacc, 0, bytes);
             for (int64_t j = 0; j < ne; ++j) {
-                g[i++] = gacc[j] * scale;
+                g[i++] += gacc[j] * scale;
             }
             gacc += ne;
         }else{            
@@ -18242,7 +18242,6 @@ static enum ggml_opt_result ggml_opt_adam(
 
         // check convergence
         if (fabsf(fx - fx_prev[0])/fx < params.adam.eps_f) {
-        // if (fabsf(fx - fx_prev[0])/fx < params.adam.eps_g) {
             GGML_PRINT_DEBUG("converged\n");
 
             return GGML_OPT_OK;
