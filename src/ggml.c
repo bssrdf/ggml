@@ -18059,8 +18059,6 @@ static enum ggml_opt_result ggml_opt_adam(
     GGML_ASSERT(f != NULL);        
     GGML_ASSERT(ggml_is_scalar(f));
 
-    fprintf(stderr, "AA to here\n ");  
-
     // these will store the parameters we want to optimize
     struct ggml_tensor * ps[GGML_MAX_PARAMS];
 
@@ -18086,8 +18084,6 @@ static enum ggml_opt_result ggml_opt_adam(
         ggml_opt_init(opt->ctx, opt, params, nx);
         opt->iter = iter;
     }
-
-    fprintf(stderr, " to here\n ");    
 
     // constants
     float sched = params.adam.sched;
@@ -18910,12 +18906,10 @@ enum ggml_opt_result ggml_opt(
     }
 
     enum ggml_opt_result result = GGML_OPT_OK;
-    fprintf(stderr, "%s, AA to here\n ", __func__);  
 
     struct ggml_opt_context * opt = (struct ggml_opt_context *) alloca(sizeof(struct ggml_opt_context));
 
     ggml_opt_init(ctx, opt, params, 0);
-    fprintf(stderr, "%s, BB to here\n ", __func__);  
     result = ggml_opt_resume(ctx, opt, f, callback, callback_data);
 
     if (free_ctx) {
@@ -18933,7 +18927,6 @@ enum ggml_opt_result ggml_opt_resume(
         void *callback_data) {
 
     if (opt->params.gf != NULL){
-        fprintf(stderr, "%s, AA to here\n ", __func__);  
         return ggml_opt_resume_g(ctx, opt, f, opt->params.gf, opt->params.gb, callback, callback_data);
     }  
     // build forward + backward compute graphs
@@ -18971,7 +18964,6 @@ enum ggml_opt_result ggml_opt_resume_g(
     switch (opt->params.type) {
         case GGML_OPT_ADAM:
             {
-                fprintf(stderr, "%s, AA to here\n ", __func__);  
                 result = ggml_opt_adam(ctx, opt, opt->params, f, gf, gb, callback, callback_data);
             } break;
         case GGML_OPT_LBFGS:

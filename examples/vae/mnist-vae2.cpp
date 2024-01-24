@@ -820,9 +820,11 @@ static int log_interval = 0;
 static int64_t counter = 0;
 static int num_batches = 0;
 static int64_t *indices = NULL;
+static float *rnds = NULL;
 struct mnist_vae_model model;  
 struct ggml_tensor * input_batch = NULL;
 struct ggml_tensor * noise_batch = NULL;
+
 
 
 struct random_normal_distribution * rnd = NULL;
@@ -856,12 +858,9 @@ void opt_callback(void * data, int accum_step, float * sched, bool * cancel){
         }
     }
     
-
-    float *rnds = new float[model.hparams.n_latent*n_bat];
     for(int i = 0; i < model.hparams.n_latent*n_bat; i++){            
         rnds[i] = frand_normal(rnd);
     }
-
 
         // load input and noise data  
     if(ggml_backend_is_cpu(model.backend)
@@ -875,9 +874,6 @@ void opt_callback(void * data, int accum_step, float * sched, bool * cancel){
         ggml_backend_tensor_set(input_batch, data+indices[cnt], 0, ggml_nbytes(input_batch));  // cuda requires copy the data directly to device
         ggml_backend_tensor_set(noise_batch, rnds, 0, ggml_nbytes(noise_batch));  // cuda requires copy the data directly to device
     } 
-
-    // fprintf(stderr, "%s, counter ,cnt = %d, %d \n", __func__, counter, cnt);
-    delete rnds;
     counter++;
 }
 
@@ -898,7 +894,7 @@ void test_callback(int cnt, void *cc_data) {
             struct ggml_context * ctxs = ggml_init(sparams);
             struct ggml_cgraph* gs = build_sample_graph_batch(m, ctxs, n_bat); 
             ggml_backend_buffer_t sample_buffer = ggml_backend_alloc_ctx_tensors(ctxs, model.backend);
-            float *rnds = new float[m->hparams.n_latent*n_bat];
+
             for(int i = 0; i < m->hparams.n_latent*n_bat; i++){            
                 rnds[i] = frand_normal(rnd);         
             }
@@ -929,7 +925,6 @@ void test_callback(int cnt, void *cc_data) {
             output_images(filename, out_data, 10, 10);
             ggml_graph_clear(gs);
             ggml_free(ctxs);   
-            delete rnds;
             delete out_data;
         }
     }
@@ -989,7 +984,10 @@ int main(int argc, char ** argv) {
 
     free(train_data);
 
+
     num_batches = COUNT_TRAIN / n_batch;
+
+    rnds = new float[model.hparams.n_latent*n_batch];
 
     std::vector<uint8_t> work_buffer;
 
@@ -1013,7 +1011,6 @@ int main(int argc, char ** argv) {
     // ggml_build_backward_expand(model.ctx, gf, gb, true);
     ggml_build_backward_expand(model.ctx, gf, gb, false);
     printf("finished build backward graph \n");
-    printf("after check data buffer \n");
     // ggml_graph_dump_dot(gf, NULL, "mnist-vae-forward.dot");
     
     // printf("graph dumped \n");
@@ -1060,20 +1057,16 @@ int main(int argc, char ** argv) {
     opt_params.customer_data = (void *)&model;
     opt_params.log_callback = loss_print;
     
-    printf("begin opt \n");            
   
     int ret = ggml_opt(ctx0, opt_params, err_tot, opt_callback, digit);
-    if(ret == GGML_OPT_OK)
-        printf("opt ok\n");            
-    else{
-        printf("opt not ok\n");            
-    }
+
 
 
     
     ggml_free(ctx0);
 
     delete indices;
+    delete rnds;
     free(digit);
     // free(test_data);
     ggml_free(model.ctx);
