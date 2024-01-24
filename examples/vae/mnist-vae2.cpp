@@ -829,9 +829,8 @@ struct random_normal_distribution * rnd = NULL;
 
 void opt_callback(void * data, int accum_step, float * sched, bool * cancel){
     int n_bat = COUNT_TRAIN / num_batches;
-    int cnt = 0;
+    int cnt = counter % num_batches;
     if(counter % num_batches == 0){
-        cnt = 0;
         for(int i = 0; i < num_batches; i++){
            indices[i] = i*n_bat*28*28;
         }   
@@ -865,13 +864,69 @@ void opt_callback(void * data, int accum_step, float * sched, bool * cancel){
         ggml_backend_tensor_set(input_batch, data+indices[cnt], 0, ggml_nbytes(input_batch));  // cuda requires copy the data directly to device
         ggml_backend_tensor_set(noise_batch, rnds, 0, ggml_nbytes(noise_batch));  // cuda requires copy the data directly to device
     } 
+
+    // fprintf(stderr, "%s, counter ,cnt = %d, %d \n", __func__, counter, cnt);
+    delete rnds;
     counter++;
-    cnt++;
 
 
 }
 
 
+void test_callback(int cnt, void *cc_data) {
+
+    if (cnt > 1 and cnt % num_batches == 0){
+        int epoch = cnt / num_batches;
+        struct mnist_vae_model *m = (struct mnist_vae_model *)cc_data;
+        int n_bat = COUNT_TRAIN / num_batches;
+        {
+            struct ggml_init_params sparams {
+                // /*.mem_size   =*/ ggml_tensor_overhead() * (num_tensors + 2),
+                /*.mem_size   =*/ ggml_tensor_overhead() * 1024 + ggml_graph_overhead(),
+                /*.mem_buffer =*/ NULL,
+                /*.no_alloc   =*/ true,
+            };
+            struct ggml_context * ctxs = ggml_init(sparams);
+            struct ggml_cgraph* gs = build_sample_graph_batch(m, ctxs, n_bat); 
+            ggml_backend_buffer_t sample_buffer = ggml_backend_alloc_ctx_tensors(ctxs, model.backend);
+            float *rnds = new float[m->hparams.n_latent*n_bat];
+            for(int i = 0; i < m->hparams.n_latent*n_bat; i++){            
+                rnds[i] = frand_normal(rnd);         
+            }
+            struct ggml_tensor * noise_batch = ggml_get_tensor(m->ctx, "noise");
+            // load noise data  
+            if(ggml_backend_is_cpu(model.backend)
+    #ifdef GGML_USE_METAL
+                    || ggml_backend_is_metal(model.backend)
+    #endif
+            ) {
+                memcpy(noise_batch->data, rnds, ggml_nbytes(noise_batch));
+                // memcpy(model.b->data, b, ggml_nbytes(model.b));
+            } else {
+                ggml_backend_tensor_set(noise_batch, rnds, 0, ggml_nbytes(noise_batch));  // cuda requires copy the data directly to device
+            } 
+
+            if (ggml_backend_is_cpu(m->backend)) {
+                ggml_backend_cpu_set_n_threads(m->backend, 1);
+            }
+            GGML_ASSERT(gs != NULL);
+            ggml_backend_graph_compute(m->backend, gs);
+            struct ggml_tensor * sample = get_tensor_from_graph(gs, "sample");
+            
+            float* out_data = new float[ggml_nelements(sample)];    
+            ggml_backend_tensor_get(sample, out_data, 0, ggml_nbytes(sample));
+
+            std::string filename = "mnist-sample-epoch_" + std::to_string(epoch) + ".png";
+            output_images(filename, out_data, 10, 10);
+            ggml_graph_clear(gs);
+            ggml_free(ctxs);   
+            delete rnds;
+            delete out_data;
+        }
+    }
+
+
+}
 
 int main(int argc, char ** argv) {
     
@@ -992,6 +1047,8 @@ int main(int argc, char ** argv) {
     // opt_params.lbfgs.max_linesearch = 50;
     opt_params.gf = gf;
     opt_params.gb = gb;
+    opt_params.customer_callback  = test_callback;
+    opt_params.customer_data = (void *)&model;
     
     printf("begin opt \n");            
   
@@ -1005,6 +1062,52 @@ int main(int argc, char ** argv) {
 
     
     ggml_free(ctx0);
+
+
+    {
+        struct ggml_init_params sparams {
+            // /*.mem_size   =*/ ggml_tensor_overhead() * (num_tensors + 2),
+            /*.mem_size   =*/ ggml_tensor_overhead() * 1024 + ggml_graph_overhead(),
+            /*.mem_buffer =*/ NULL,
+            /*.no_alloc   =*/ true,
+        };
+        struct ggml_context * ctxs = ggml_init(sparams);
+        struct ggml_cgraph* gs = build_sample_graph_batch(&model, ctxs, n_batch); 
+        ggml_backend_buffer_t sample_buffer = ggml_backend_alloc_ctx_tensors(ctxs, model.backend);
+        float *rnds = new float[model.hparams.n_latent*n_batch];
+        for(int i = 0; i < model.hparams.n_latent*n_batch; i++){            
+            rnds[i] = frand_normal(rnd);         
+        }
+        struct ggml_tensor * noise_batch = ggml_get_tensor(model.ctx, "noise");
+          // load noise data  
+        if(ggml_backend_is_cpu(model.backend)
+#ifdef GGML_USE_METAL
+                || ggml_backend_is_metal(model.backend)
+#endif
+        ) {
+            memcpy(noise_batch->data, rnds, ggml_nbytes(noise_batch));
+            // memcpy(model.b->data, b, ggml_nbytes(model.b));
+        } else {
+            ggml_backend_tensor_set(noise_batch, rnds, 0, ggml_nbytes(noise_batch));  // cuda requires copy the data directly to device
+        } 
+
+        if (ggml_backend_is_cpu(model.backend)) {
+            ggml_backend_cpu_set_n_threads(model.backend, n_threads);
+        }
+        GGML_ASSERT(gs != NULL);
+        ggml_backend_graph_compute(model.backend, gs);
+        struct ggml_tensor * sample = get_tensor_from_graph(gs, "sample");
+        
+        float* out_data = new float[ggml_nelements(sample)];    
+        ggml_backend_tensor_get(sample, out_data, 0, ggml_nbytes(sample));
+
+        std::string filename = "mnist-sample-after.png";
+        output_images(filename, out_data, 10, 10);
+        ggml_graph_clear(gs);
+        ggml_free(ctxs);   
+        delete rnds;
+        delete out_data;
+    }
 
 
 

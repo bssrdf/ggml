@@ -1932,6 +1932,7 @@ extern "C" {
     };
 
     typedef void (*ggml_opt_callback)(void * data, int accum_step, float * sched, bool * cancel);
+    typedef void (*ggml_opt_customer_callback)(int iter, void *model);
     typedef void (*ggml_log_callback)(enum ggml_log_level level, const char * text, void * user_data);
 
     // optimization parameters
@@ -1970,6 +1971,8 @@ extern "C" {
         struct ggml_cgraph* gf;
         struct ggml_cgraph* gb;
 
+        ggml_opt_customer_callback customer_callback;
+        void                     * customer_data;
         // ADAM parameters
         struct {
             int n_iter;

@@ -18101,6 +18101,9 @@ static enum ggml_opt_result ggml_opt_adam(
     const int n_accum = MAX(1, params.n_gradient_accumulation);
     const float accum_norm = 1.0f / (float) n_accum;
 
+    ggml_opt_customer_callback ccb =  params.customer_callback;
+    void                * ccb_data =  params.customer_data;
+
     float * x  = opt->adam.x->data;  // current parameters
     float * g  = opt->adam.g->data;  // gradients
     float * gacc  = opt->adam.gacc->data;  // gradients accumulator
@@ -18255,10 +18258,13 @@ static enum ggml_opt_result ggml_opt_adam(
 
         printf("%d iter f, prev_f      = %16.6f, %16.6f, %d\n", t, fx, fx_prev[0], opt->iter);
 
+        if (ccb){
+            ccb(opt->iter, ccb_data);
+        }
+
         // check convergence
         if (fabsf(fx - fx_prev[0])/fx < params.adam.eps_f) {
             GGML_PRINT_DEBUG("converged\n");
-
             // return GGML_OPT_OK;
         }
 
@@ -18756,6 +18762,8 @@ struct ggml_opt_params ggml_opt_default_params(enum ggml_opt_type type) {
                     .n_gradient_accumulation = 1,
                     .gf        = NULL,
                     .gb        = NULL,
+                    .customer_callback = NULL,
+                    .customer_data = NULL,
                     .adam = {
                         .n_iter = 10000,
                         .sched  = 1.000f,
@@ -18788,6 +18796,8 @@ struct ggml_opt_params ggml_opt_default_params(enum ggml_opt_type type) {
                     .n_gradient_accumulation = 1,
                     .gf        = NULL,
                     .gb        = NULL,
+                    .customer_callback = NULL,
+                    .customer_data = NULL,
                     .lbfgs = {
                         .m              = 6,
                         .n_iter         = 100,
