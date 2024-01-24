@@ -2054,7 +2054,9 @@ extern "C" {
     GGML_API enum ggml_opt_result ggml_opt(
             struct ggml_context * ctx,
             struct ggml_opt_params params,
-            struct ggml_tensor * f);
+            struct ggml_tensor * f,
+            ggml_opt_callback callback,
+            void *callback_data);
 
     // initialize optimizer context
     GGML_API void ggml_opt_init(
@@ -2067,7 +2069,9 @@ extern "C" {
     GGML_API enum ggml_opt_result ggml_opt_resume(
             struct ggml_context * ctx,
             struct ggml_opt_context * opt,
-            struct ggml_tensor * f);
+            struct ggml_tensor * f,
+            ggml_opt_callback callback,
+            void *callback_data);
 
     // continue optimizing the function defined by the tensor f
     GGML_API enum ggml_opt_result ggml_opt_resume_g(

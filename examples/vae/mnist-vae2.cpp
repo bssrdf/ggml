@@ -817,10 +817,64 @@ int read_test_data(uint8 *data, const unsigned long count)
 }
 
 
-int main(int argc, char ** argv) {
+static int64_t counter = 0;
+static int num_batches = 0;
+static int64_t *indices = NULL;
+struct mnist_vae_model model;  
+struct ggml_tensor * input_batch = NULL;
+struct ggml_tensor * noise_batch = NULL;
+
+
+struct random_normal_distribution * rnd = NULL;
+
+void opt_callback(void * data, int accum_step, float * sched, bool * cancel){
+    int n_bat = COUNT_TRAIN / num_batches;
+    int cnt = 0;
+    if(counter % num_batches == 0){
+        cnt = 0;
+        for(int i = 0; i < num_batches; i++){
+           indices[i] = i*n_bat*28*28;
+        }   
+        for(int i = 0; i < num_batches; i++){
+            std::random_device     rand_dev;
+            std::mt19937   generator(rand_dev());
+            std::uniform_int_distribution<int>  distr(i, num_batches-1);
+            int j = distr(generator);
+            int64_t tmp = indices[i];
+            indices[i] =  indices[j];
+            indices[j] =  tmp;
+        }
+    }
     
 
-    struct mnist_vae_model model;    
+    float *rnds = new float[model.hparams.n_latent*n_bat];
+    for(int i = 0; i < model.hparams.n_latent*n_bat; i++){            
+        rnds[i] = frand_normal(rnd);
+    }
+
+
+        // load input and noise data  
+    if(ggml_backend_is_cpu(model.backend)
+#ifdef GGML_USE_METAL
+            || ggml_backend_is_metal(model.backend)
+#endif
+    ) {
+        memcpy(input_batch->data, data+indices[cnt], ggml_nbytes(input_batch));
+        memcpy(noise_batch->data, rnds, ggml_nbytes(noise_batch));
+    } else {
+        ggml_backend_tensor_set(input_batch, data+indices[cnt], 0, ggml_nbytes(input_batch));  // cuda requires copy the data directly to device
+        ggml_backend_tensor_set(noise_batch, rnds, 0, ggml_nbytes(noise_batch));  // cuda requires copy the data directly to device
+    } 
+    counter++;
+    cnt++;
+
+
+}
+
+
+
+int main(int argc, char ** argv) {
+    
 
     bool use_gpu = true;
     int n_batch = 100;
@@ -853,515 +907,112 @@ int main(int argc, char ** argv) {
     
    
     uint8 *train_data = (uint8 *)malloc(COUNT_TRAIN * 28 * 28 * sizeof(uint8));
+    float *digit = (float *)malloc(COUNT_TRAIN * 28 * 28 * sizeof(float));
 
     if(read_data(train_data, COUNT_TRAIN) > 0){
         fprintf(stderr, "Error in read in Mnist training data! \n");
         exit(1);
     }
-
-     uint8 *test_data = (uint8 *)malloc(COUNT_TEST * 28 * 28 * sizeof(uint8));
-
-    if(read_test_data(test_data, COUNT_TEST) > 0){
-        fprintf(stderr, "Error in read in Mnist test data! \n");
-        exit(1);
-    }
-
+    
     uint8_t *buf = train_data;
-    std::vector<float> digit;
 
-    digit.resize(n_batch*28*28);
+    for (int ib = 0; ib < COUNT_TRAIN; ib++) 
+        for (int row = 0; row < 28; row++) {
+            for (int col = 0; col < 28; col++) {
+                digit[ib*28*28 + row*28 + col] = ((float)buf[ib*28*28 + row*28 + col])/255.f;
+            }
+        }
 
-    int32_t num_batches = COUNT_TRAIN / n_batch;
+    free(train_data);
+
+    num_batches = COUNT_TRAIN / n_batch;
 
     std::vector<uint8_t> work_buffer;
 
     size_t    compute_size = 1024ll*1024ll*1024ll;
     uint8_t * compute_addr = new uint8_t[compute_size];
-
-    struct random_normal_distribution * rnd = init_random_normal_distribution(1337, 0, 1.f, -FLT_MAX, FLT_MAX);
-
-    float *rnds = new float[model.hparams.n_latent*n_batch];
-
-
-    struct ggml_cgraph* gf = NULL; 
-    struct ggml_cgraph* gb = NULL; 
-
-    int64_t *indices = new int64_t[num_batches];
-
-    for (int epoch = 0; epoch < n_epochs; epoch++){
-
-    num_batches = COUNT_TRAIN / n_batch;    
-  
-    for(int i = 0; i < num_batches; i++){
-        indices[i] = i*n_batch*28*28;
-    }
-    for(int i = 0; i < num_batches; i++){
-        std::random_device     rand_dev;
-        std::mt19937   generator(rand_dev());
-        std::uniform_int_distribution<int>  distr(i, num_batches-1);
-        int j = distr(generator);
-        int64_t tmp = indices[i];
-        indices[i] =  indices[j];
-        indices[j] =  tmp;
-    }
-    // for(int i = 0; i < num_batches; i++){
-    //     printf("%ld, ", indices[i]/(28*28));
-    //     if((i+1)% 20 == 0)
-    //        printf("\n");
-    // }
-
-    // num_batches = 5;  
-    for (int ex=0; ex<num_batches; ++ex) {
-
-        // printf(" enter loop %d \n", ex);
-        buf = train_data + indices[ex];
-        struct ggml_init_params optparams = {
+    struct ggml_init_params optparams = {
             /*.mem_size   =*/ compute_size,
             /*.mem_buffer =*/ compute_addr,
             /*.no_alloc   =*/ false,
         };
 
-        for (int ib = 0; ib < n_batch; ib++) 
-            for (int row = 0; row < 28; row++) {
-                for (int col = 0; col < 28; col++) {
-                    digit[ib*28*28 + row*28 + col] = ((float)buf[ib*28*28 + row*28 + col])/255.f;
-                }
-            }
+    
 
-        if(ex == 0){
-            std::string filename = "mnist-" + std::to_string(ex) + ".png";
-            output_images(filename, digit.data(), 10, 5);                
-        }    
+    struct ggml_cgraph* gf = NULL; 
+    struct ggml_cgraph* gb = NULL; 
 
+    
+    gf = build_train_graph_batch(&model, n_batch);
+    gb = ggml_graph_dup(model.ctx, gf);           
+    printf("build backward graph \n");
+    // ggml_build_backward_expand(model.ctx, gf, gb, true);
+    ggml_build_backward_expand(model.ctx, gf, gb, false);
+    printf("finished build backward graph \n");
+    printf("after check data buffer \n");
+    // ggml_graph_dump_dot(gf, NULL, "mnist-vae-forward.dot");
+    
+    // printf("graph dumped \n");
+    model.compute_buffer = ggml_backend_alloc_ctx_tensors(model.ctx, model.backend);
+    // if(ggml_backend_is_cpu(model.backend))
+    //     check_data_buffer(gf);
+    // check_backend(&model, gf);
+    // ggml_graph_dump_dot(gb, gf,  "mnist-vae-cpu-backward.dot");    
+    randomize_model(&model, 1337, 0.0f, 0.1f, -1.0f, +1.0f);
+    // randomize_model(&model, 1337, 0.0f, .1f, -FLT_MAX, FLT_MAX);
+    printf("modle initialzed with random numbers \n");
+    zero_bias_model(&model, 1337);
+    printf("modle bias zeroed \n");            
 
-        // buf += n_batch*28*28;  
+    indices = new int64_t[num_batches];
 
-        
+    num_batches = COUNT_TRAIN / n_batch;    
+  
+    
+     rnd = init_random_normal_distribution(1337, 0, 1.f, -FLT_MAX, FLT_MAX);     
 
-        if(epoch == 0 && ex == 0){            
-            gf = build_train_graph_batch(&model, n_batch);
-            gb = ggml_graph_dup(model.ctx, gf);           
-            printf("build backward graph \n");
-            // ggml_build_backward_expand(model.ctx, gf, gb, true);
-            ggml_build_backward_expand(model.ctx, gf, gb, false);
-            printf("finished build backward graph \n");
-            printf("after check data buffer \n");
-            // ggml_graph_dump_dot(gf, NULL, "mnist-vae-forward.dot");
-            
-            // printf("graph dumped \n");
-            model.compute_buffer = ggml_backend_alloc_ctx_tensors(model.ctx, model.backend);
-            // if(ggml_backend_is_cpu(model.backend))
-            //     check_data_buffer(gf);
-            // check_backend(&model, gf);
-            ggml_graph_dump_dot(gb, gf,  "mnist-vae-cpu-backward.dot");    
-            randomize_model(&model, 1337, 0.0f, 0.1f, -1.0f, +1.0f);
-            // randomize_model(&model, 1337, 0.0f, .1f, -FLT_MAX, FLT_MAX);
-            printf("modle initialzed with random numbers \n");
-            zero_bias_model(&model, 1337);
-            printf("modle bias zeroed \n");            
-        }
 
                 
-        struct ggml_context * ctx0 = ggml_init(optparams);
-        struct ggml_tensor * input_batch = ggml_get_tensor(model.ctx, "input");
-        struct ggml_tensor * noise_batch = ggml_get_tensor(model.ctx, "noise");
+    struct ggml_context * ctx0 = ggml_init(optparams);
+    input_batch = ggml_get_tensor(model.ctx, "input");
+    noise_batch = ggml_get_tensor(model.ctx, "noise");
+    static struct ggml_tensor * err_tot = ggml_get_tensor(model.ctx, "totloss");
         
-        // float mi = FLT_MAX, mx = -FLT_MAX;  
-        for(int i = 0; i < model.hparams.n_latent*n_batch; i++){            
-            rnds[i] = frand_normal(rnd);
-            // if(mi > rnds[i])
-            //     mi = rnds[i];
-            // if(mx < rnds[i])
-            //     mx = rnds[i];
-            // printf(" %f, ", rnds[i]);
-            // if((i+1)%model.hparams.n_latent == 0)
-            //    printf("\n");
-        }
-        // printf("min,max of noise %f, %f\n", mi, mx);
-        
-        
-        
-        // load input and noise data  
-        if(ggml_backend_is_cpu(model.backend)
-#ifdef GGML_USE_METAL
-                || ggml_backend_is_metal(model.backend)
-#endif
-        ) {
-            memcpy(input_batch->data, digit.data(), ggml_nbytes(input_batch));
-            memcpy(noise_batch->data, rnds, ggml_nbytes(noise_batch));
-            // memcpy(model.b->data, b, ggml_nbytes(model.b));
-        } else {
-            ggml_backend_tensor_set(input_batch, digit.data(), 0, ggml_nbytes(input_batch));  // cuda requires copy the data directly to device
-            ggml_backend_tensor_set(noise_batch, rnds, 0, ggml_nbytes(noise_batch));  // cuda requires copy the data directly to device
-        } 
-        // printf("copy to input \n", ex);
-
-        
-        
-        
-        // struct ggml_cgraph * gf_res = compute_graph_batch(&model, allocr, n_batch);
-        // print_model_data_addr(&model);
-        // ggml_graph_dump_dot(gf_res, NULL, "mnist-vae-forward.dot");
-        struct ggml_tensor * err_tot = get_tensor_from_graph(gf, "totloss");
-
-        if (ex % log_interval == 0){
-        if (ggml_backend_is_cpu(model.backend)) {
-            ggml_backend_cpu_set_n_threads(model.backend, n_threads);
-        }
-        GGML_ASSERT(gf != NULL);
-        ggml_backend_graph_compute(model.backend, gf);
-        
-
-        // ggml_graph_reset(gf);
-        // ggml_opt_set_grad_to_one(err_tot);
-        // ggml_backend_graph_compute(model.backend, gb);
-
-        // struct ggml_tensor * t = get_tensor_from_graph(gf, "node_74");
-        // struct ggml_tensor * t = get_tensor_from_graph(gb, "mu_weight");
-        // struct ggml_tensor * t = get_tensor_from_graph(gb, "node_74");
-        // struct ggml_tensor * t = get_tensor_from_graph(gb, "node_75"); //node_70, node_74
-        // struct ggml_tensor * t = get_tensor_from_graph(gb, "node_70"); //diff decode2_weight,  (transposed)
-        // struct ggml_tensor * t = get_tensor_from_graph(gb, "node_74"); // same
-        // struct ggml_tensor * t = get_tensor_from_graph(gb, "decode2_weight"); // same
-        // struct ggml_tensor * t = get_tensor_from_graph(gb, "(transposed)"); // diff: node_68
-        // struct ggml_tensor * t = get_tensor_from_graph(gb, "node_68"); // diff: node_52, node67
-        // struct ggml_tensor * t = get_tensor_from_graph(gb, "node_52"); // same
-        // struct ggml_tensor * t = get_tensor_from_graph(gb, "node_67"); // diff: decode1_weight,  (transposed)
-        // struct ggml_tensor * t = get_tensor_from_graph(gb, "decode1_weight"); // same
-        // struct ggml_tensor * t = get_tensor_from_graph(gb, "(transposed)"); // diff: node_65
-        // struct ggml_tensor * t = get_tensor_from_graph(gb, "node_65"); // same
-
-
-
-
-
-        //
-        //  struct ggml_tensor * g = t->grad;
-        // GGML_ASSERT(t != NULL);
-        // struct ggml_tensor * g = t;
-
-        // GGML_ASSERT(g != NULL);
-
-        // printf("%s[%s]: ->%s, ->%s (%ld, %ld) \n", g->name, ggml_op_desc(g), g->src[0]?g->src[0]->name:"###", g->src[1]?g->src[1]->name:"###", 
-        //    g->ne[0], g->ne[1]);
-        // // g = g->src[1];
-        // // printf("%s[%s]: ->%s, ->%s (%ld, %ld) \n", g->name, ggml_op_desc(g), g->src[0]?g->src[0]->name:"###", g->src[1]?g->src[1]->name:"###",
-        // //      g->ne[0], g->ne[1]);
-        // if(!ggml_is_contiguous(g))
-        //     printf("tensor %s is not contiguous \n", g->name);
-        // else   
-        //     printf("tensor %s is contiguous \n", g->name);
-        // if(!ggml_is_transposed(g))
-        //     printf("tensore %s is not transposed \n", g->name);
-        // else   
-        //     printf("tensore %s is transposed \n", g->name);
-
-        // if(ggml_is_matrix(g))
-        //     print_matrix(g);
-        // else
-        //     print_row(g, 0);        
-        // exit(1);
-
-
-        // int k = 0; 
-        // for(int i = (gb->n_nodes)-1; i >= 0; i--){
-        //     struct ggml_tensor * t = gb->nodes[i];
-        //     if(t->grad){
-        //         k++;
-        //         struct ggml_tensor * g = t->grad;
-        //         printf("%s grad==========================\n", t->name);
-        //         if(ggml_is_matrix(g))
-        //             print_matrix(g);
-        //         else
-        //             print_row(g, 0);
-        //     }
-        //     if(k > 50)
-        //        break;
-        // }
-
-        // ggml_graph_compute_helper(work_buffer, gf_res, /*n_threads*/ 1);
-
-        struct ggml_tensor * err_kl = get_tensor_from_graph(gf, "klloss");
-        struct ggml_tensor * err_sig = get_tensor_from_graph(gf, "sigloss");
-        // struct ggml_tensor * err_tot = get_tensor_from_graph(gf, "totloss");
-        if(!err_kl){
-            fprintf(stderr, "something wrong with graph compute \n");
-            exit(1);
-        }
-        if(!err_sig){
-            fprintf(stderr, "something wrong with graph compute \n");
-            exit(1);
-        }
-        if(!err_tot){
-            fprintf(stderr, "something wrong with graph compute \n");
-            exit(1);
-        }
-
-        // int64_t *ne = err_kl->ne;
-        // printf(" loss ne = (%d, %d, %d, %d)\n", ne[0], ne[1], ne[2], ne[3]);
-        float error_before_opt0,  error_before_opt1,  error_before_optt;
-        if (ggml_backend_is_cpu(model.backend)) {
-            error_before_opt0 = ggml_get_f32_1d(err_kl, 0);
-            error_before_opt1 = ggml_get_f32_1d(err_sig, 0);
-            error_before_optt = ggml_get_f32_1d(err_tot, 0);
-        }
-        else{        
-            ggml_backend_tensor_get(err_kl, &error_before_opt0, 0, ggml_nbytes(err_kl));
-            ggml_backend_tensor_get(err_sig, &error_before_opt1, 0, ggml_nbytes(err_sig));
-            ggml_backend_tensor_get(err_tot, &error_before_optt, 0, ggml_nbytes(err_tot));
-        }
-        printf("At %05.2f%%, KLD, BCE, TOTAL loss: (%f, %f, %f) \n",  100. * ex / num_batches,
-               error_before_opt0/(float)n_batch, error_before_opt1/(float)n_batch,
-               error_before_optt/(float)n_batch);
-
-        // exit(1);
-        }
-        
-
-        struct ggml_opt_params opt_params = ggml_opt_default_params(GGML_OPT_ADAM);
-        // struct ggml_opt_params opt_params = ggml_opt_default_params(GGML_OPT_LBFGS);
-        opt_params.print_backward_graph = false;
-        opt_params.print_forward_graph = false;
-        opt_params.adam.n_iter = 2;
-        opt_params.adam.gclip = 1.f;
-        // opt_params.lbfgs.n_iter = 16;
-        // opt_params.lbfgs.max_linesearch = 50;
-        opt_params.gf = gf;
-        opt_params.gb = gb;
-        
-
-        // printf(" before opt  \n");
-        // int ret = ggml_opt(ctx0, opt_params, err_kl);        
-        // ggml_opt(ctx0, opt_params, err_kl);
-        // fprintf(stderr, "begin optimize \n");
-        int ret = ggml_opt(ctx0, opt_params, err_tot);
-        // fprintf(stderr, "done optimize \n");
-        // if (ret == GGML_OPT_DID_NOT_CONVERGE)
-        //     printf(" klloss did not  converge  \n");
-
-        // ggml_opt(ctx0, opt_params, err_sig);        
-        // ret = ggml_opt(ctx0, opt_params, err_sig);        
-        // if (ret == GGML_OPT_DID_NOT_CONVERGE)
-        //     printf(" sigloss did not  converge  \n");
-
-        // exit(1);
-            
-
-     
-
-        //
-        // ggml_build_forward_expand(gf, e);        
-
-        // float error_after_opt = ggml_get_f32_1d(e, 0);
-
-        ggml_free(ctx0);
-        
-    }
-
-    printf("epoch %d training done\n", epoch);
-
-
    
+        
 
-    buf = test_data;
-
-    num_batches = COUNT_TEST / n_batch;
+    struct ggml_opt_params opt_params = ggml_opt_default_params(GGML_OPT_ADAM);
+    // struct ggml_opt_params opt_params = ggml_opt_default_params(GGML_OPT_LBFGS);
+    opt_params.print_backward_graph = false;
+    opt_params.print_forward_graph = false;
+    opt_params.adam.n_iter = n_epochs * num_batches;
+    // opt_params.adam.gclip = 1.f;
+    opt_params.max_no_improvement = 0;
+    // opt_params.lbfgs.n_iter = 16;
+    // opt_params.lbfgs.max_linesearch = 50;
+    opt_params.gf = gf;
+    opt_params.gb = gb;
     
-    // num_batches = 5;  
-    float loss_sofar = FLT_MAX;
-
-    struct ggml_tensor *rec = ggml_get_tensor(model.ctx, "reconstructed");
-    float* out_data = new float[ggml_nelements(rec)];    
-    float *orig_data = new float[ggml_nelements(rec)];
-    for (int ex=0; ex<num_batches; ++ex) {
-                
-
-        for (int ib = 0; ib < n_batch; ib++) 
-            for (int row = 0; row < 28; row++) {
-                for (int col = 0; col < 28; col++) {
-                    digit[ib*28*28 + row*28 + col] = ((float)buf[ib*28*28 + row*28 + col])/255.f;
-                    // printf(" %.2f,  ", digit[ib*28*28 + row*28 + col]);
-                }
-                // printf("\n");
-            }
-
-        if(ex == 0){
-            std::string filename = "mnist-test-" + std::to_string(ex) + ".png";
-            uint8 *pixels = new uint8[28*28];
-            for (int row = 0; row < 28; row++)
-                for (int col = 0; col < 28; col++)
-                    pixels[row*28 + col] = float2pixel(digit[row*28 + col]);
-            if (!stbi_write_png(filename.c_str(), 28, 28, 1, pixels, 28)) {
-                // if (!stbi_write_png(filename.c_str(), 28, 28, 1, pixels, 28*sizeof(float))) {
-                printf("%s: failed to write mask %s\n", __func__, filename.c_str());
-                return false;
-            }
-            delete pixels;
-        }    
-
-
-        buf += n_batch*28*28;  
-        
-        
-        struct ggml_tensor * input_batch = ggml_get_tensor(model.ctx, "input");
-        struct ggml_tensor * noise_batch = ggml_get_tensor(model.ctx, "noise");
-        
-        // float mi = FLT_MAX, mx = -FLT_MAX;  
-        for(int i = 0; i < model.hparams.n_latent*n_batch; i++){            
-            rnds[i] = frand_normal(rnd);
-            // if(mi > rnds[i])
-            //     mi = rnds[i];
-            // if(mx < rnds[i])
-            //     mx = rnds[i];
-            // printf(" %f, ", rnds[i]);
-            // if((i+1)%model.hparams.n_latent == 0)
-            //    printf("\n");
-        }
-        // printf("min,max of noise %f, %f\n", mi, mx);
-        
-        
-        
-        // load input and noise data  
-        if(ggml_backend_is_cpu(model.backend)
-#ifdef GGML_USE_METAL
-                || ggml_backend_is_metal(model.backend)
-#endif
-        ) {
-            memcpy(input_batch->data, digit.data(), ggml_nbytes(input_batch));
-            memcpy(noise_batch->data, rnds, ggml_nbytes(noise_batch));
-            // memcpy(model.b->data, b, ggml_nbytes(model.b));
-        } else {
-            ggml_backend_tensor_set(input_batch, digit.data(), 0, ggml_nbytes(input_batch));  // cuda requires copy the data directly to device
-            ggml_backend_tensor_set(noise_batch, rnds, 0, ggml_nbytes(noise_batch));  // cuda requires copy the data directly to device
-        } 
-        // printf("copy to input \n", ex);
-
-        
-        
-        
-        // struct ggml_cgraph * gf_res = compute_graph_batch(&model, allocr, n_batch);
-        // print_model_data_addr(&model);
-        // ggml_graph_dump_dot(gf_res, NULL, "mnist-vae-forward.dot");
-        struct ggml_tensor * err_tot = get_tensor_from_graph(gf, "totloss");
-
-        
-        if (ggml_backend_is_cpu(model.backend)) {
-            ggml_backend_cpu_set_n_threads(model.backend, n_threads);
-        }
-        GGML_ASSERT(gf != NULL);
-        ggml_backend_graph_compute(model.backend, gf);
-        
-
-        struct ggml_tensor * err_kl = get_tensor_from_graph(gf, "klloss");
-        struct ggml_tensor * err_sig = get_tensor_from_graph(gf, "sigloss");
-        if(!err_kl){
-            fprintf(stderr, "something wrong with graph compute \n");
-            exit(1);
-        }
-        if(!err_sig){
-            fprintf(stderr, "something wrong with graph compute \n");
-            exit(1);
-        }
-        if(!err_tot){
-            fprintf(stderr, "something wrong with graph compute \n");
-            exit(1);
-        }
-
-        // int64_t *ne = err_kl->ne;
-        // printf(" loss ne = (%d, %d, %d, %d)\n", ne[0], ne[1], ne[2], ne[3]);
-        float error_before_opt0,  error_before_opt1,  error_before_optt;
-        if (ggml_backend_is_cpu(model.backend)) {
-            error_before_opt0 = ggml_get_f32_1d(err_kl, 0);
-            error_before_opt1 = ggml_get_f32_1d(err_sig, 0);
-            error_before_optt = ggml_get_f32_1d(err_tot, 0);
-        }
-        else{        
-            ggml_backend_tensor_get(err_kl, &error_before_opt0, 0, ggml_nbytes(err_kl));
-            ggml_backend_tensor_get(err_sig, &error_before_opt1, 0, ggml_nbytes(err_sig));
-            ggml_backend_tensor_get(err_tot, &error_before_optt, 0, ggml_nbytes(err_tot));
-        }
-
-        if (error_before_optt < loss_sofar){
-            loss_sofar = error_before_optt;
-
-            ggml_build_forward_expand(gf, rec);
-            ggml_backend_graph_compute(model.backend, gf);
-            // struct ggml_tensor * recon = get_tensor_from_graph(gf, "reconstructed");
-            memcpy(orig_data, digit.data(), ggml_nbytes(rec));
-            ggml_backend_tensor_get(rec, out_data, 0, ggml_nbytes(rec));
-            ggml_build_forward_expand(gf, err_tot);
-        }
-        if (ex % log_interval == 0){
-            printf("At %05.2f%%, KLD, BCE, TOTAL loss: (%f, %f, %f) \n",  100. * ex / num_batches,
-                error_before_opt0/(float)n_batch, error_before_opt1/(float)n_batch,
-                error_before_optt/(float)n_batch);
-        }
-
-           
-        
+    printf("begin opt \n");            
+  
+    int ret = ggml_opt(ctx0, opt_params, err_tot, opt_callback, digit);
+    if(ret == GGML_OPT_OK)
+        printf("opt ok\n");            
+    else{
+        printf("opt not ok\n");            
     }
 
-    std::string filename = "mnist-test-e_" +std::to_string(epoch)+".png";
-    output_images(filename, orig_data, 10, 10);
-    filename = "mnist-recon-e_" + std::to_string(epoch)+ ".png";
-    output_images(filename, out_data, 10, 10);
+
     
-    delete orig_data;
-    
-    printf("epoch %d: test done\n", epoch);
-
-    {
-        struct ggml_init_params sparams {
-            // /*.mem_size   =*/ ggml_tensor_overhead() * (num_tensors + 2),
-            /*.mem_size   =*/ ggml_tensor_overhead() * 1024 + ggml_graph_overhead(),
-            /*.mem_buffer =*/ NULL,
-            /*.no_alloc   =*/ true,
-        };
-        struct ggml_context * ctxs = ggml_init(sparams);
-        struct ggml_cgraph* gs = build_sample_graph_batch(&model, ctxs, n_batch); 
-        ggml_backend_buffer_t sample_buffer = ggml_backend_alloc_ctx_tensors(ctxs, model.backend);
-
-        for(int i = 0; i < model.hparams.n_latent*n_batch; i++){            
-            rnds[i] = frand_normal(rnd);         
-        }
-        struct ggml_tensor * noise_batch = ggml_get_tensor(model.ctx, "noise");
-          // load noise data  
-        if(ggml_backend_is_cpu(model.backend)
-#ifdef GGML_USE_METAL
-                || ggml_backend_is_metal(model.backend)
-#endif
-        ) {
-            memcpy(noise_batch->data, rnds, ggml_nbytes(noise_batch));
-            // memcpy(model.b->data, b, ggml_nbytes(model.b));
-        } else {
-            ggml_backend_tensor_set(noise_batch, rnds, 0, ggml_nbytes(noise_batch));  // cuda requires copy the data directly to device
-        } 
-
-        if (ggml_backend_is_cpu(model.backend)) {
-            ggml_backend_cpu_set_n_threads(model.backend, n_threads);
-        }
-        GGML_ASSERT(gs != NULL);
-        ggml_backend_graph_compute(model.backend, gs);
-        struct ggml_tensor * sample = get_tensor_from_graph(gs, "sample");
-        ggml_backend_tensor_get(sample, out_data, 0, ggml_nbytes(sample));
-
-        std::string filename = "mnist-sample-e_" + std::to_string(epoch)+ ".png";
-        output_images(filename, out_data, 10, 10);
-        ggml_graph_clear(gs);
-        ggml_free(ctxs);   
-    }
-
-    delete out_data;
-
-    }
+    ggml_free(ctx0);
 
 
 
     // ggml_free(kv_self.ctx);
     // ggml_free(model_lora.ctx);
     delete indices;
-    free(train_data);
-    free(test_data);
+    free(digit);
+    // free(test_data);
     ggml_free(model.ctx);
     free_random_normal_distribution(rnd);
 

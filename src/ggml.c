@@ -18056,7 +18056,10 @@ static enum ggml_opt_result ggml_opt_adam(
         struct ggml_cgraph * gb,
         ggml_opt_callback callback,
         void * callback_data) {
+    GGML_ASSERT(f != NULL);        
     GGML_ASSERT(ggml_is_scalar(f));
+
+    fprintf(stderr, "AA to here\n ");  
 
     // these will store the parameters we want to optimize
     struct ggml_tensor * ps[GGML_MAX_PARAMS];
@@ -18083,6 +18086,8 @@ static enum ggml_opt_result ggml_opt_adam(
         ggml_opt_init(opt->ctx, opt, params, nx);
         opt->iter = iter;
     }
+
+    fprintf(stderr, " to here\n ");    
 
     // constants
     float sched = params.adam.sched;
@@ -18248,13 +18253,13 @@ static enum ggml_opt_result ggml_opt_adam(
 
         opt->loss_after = fx;
 
-        // printf("%d iter f, prev_f      = %16.6f, %16.6f\n", t, fx, fx_prev[0]);
+        printf("%d iter f, prev_f      = %16.6f, %16.6f, %d\n", t, fx, fx_prev[0], opt->iter);
 
         // check convergence
         if (fabsf(fx - fx_prev[0])/fx < params.adam.eps_f) {
             GGML_PRINT_DEBUG("converged\n");
 
-            return GGML_OPT_OK;
+            // return GGML_OPT_OK;
         }
 
         // delta-based convergence test
@@ -18264,6 +18269,7 @@ static enum ggml_opt_result ggml_opt_adam(
                 const float rate = (pf[(iter0 + t)%params.past] - fx)/fx;
 
                 if (fabsf(rate) < params.delta) {
+                    fprintf(stderr,"%s: delta-based converged\n", __func__);
                     return GGML_OPT_OK;
                 }
             }
@@ -18280,6 +18286,7 @@ static enum ggml_opt_result ggml_opt_adam(
                 ++n_no_improvement[0];
 
                 if (n_no_improvement[0] >= params.max_no_improvement) {
+                    fprintf(stderr,"%s: improvement converged %d \n", __func__,params.max_no_improvement);
                     return GGML_OPT_OK;
                 }
             }
@@ -18883,7 +18890,9 @@ GGML_API void ggml_opt_init(
 enum ggml_opt_result ggml_opt(
         struct ggml_context * ctx,
         struct ggml_opt_params params,
-        struct ggml_tensor * f) {
+        struct ggml_tensor * f,
+        ggml_opt_callback callback,
+        void *callback_data) {
     bool free_ctx = false;
     if (ctx == NULL) {
         struct ggml_init_params params_ctx = {
@@ -18901,11 +18910,13 @@ enum ggml_opt_result ggml_opt(
     }
 
     enum ggml_opt_result result = GGML_OPT_OK;
+    fprintf(stderr, "%s, AA to here\n ", __func__);  
 
     struct ggml_opt_context * opt = (struct ggml_opt_context *) alloca(sizeof(struct ggml_opt_context));
 
     ggml_opt_init(ctx, opt, params, 0);
-    result = ggml_opt_resume(ctx, opt, f);
+    fprintf(stderr, "%s, BB to here\n ", __func__);  
+    result = ggml_opt_resume(ctx, opt, f, callback, callback_data);
 
     if (free_ctx) {
         ggml_free(ctx);
@@ -18917,10 +18928,13 @@ enum ggml_opt_result ggml_opt(
 enum ggml_opt_result ggml_opt_resume(
         struct ggml_context * ctx,
         struct ggml_opt_context * opt,
-        struct ggml_tensor * f) {
+        struct ggml_tensor * f,
+        ggml_opt_callback callback,
+        void *callback_data) {
 
     if (opt->params.gf != NULL){
-        return ggml_opt_resume_g(ctx, opt, f, opt->params.gf, opt->params.gb, NULL, NULL);
+        fprintf(stderr, "%s, AA to here\n ", __func__);  
+        return ggml_opt_resume_g(ctx, opt, f, opt->params.gf, opt->params.gb, callback, callback_data);
     }  
     // build forward + backward compute graphs
     struct ggml_cgraph * gf = ggml_new_graph_custom(ctx, opt->params.graph_size, true);
@@ -18957,6 +18971,7 @@ enum ggml_opt_result ggml_opt_resume_g(
     switch (opt->params.type) {
         case GGML_OPT_ADAM:
             {
+                fprintf(stderr, "%s, AA to here\n ", __func__);  
                 result = ggml_opt_adam(ctx, opt, opt->params, f, gf, gb, callback, callback_data);
             } break;
         case GGML_OPT_LBFGS:
