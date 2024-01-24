@@ -816,7 +816,7 @@ int read_test_data(uint8 *data, const unsigned long count)
     return 0;
 }
 
-
+static int log_interval = 0;
 static int64_t counter = 0;
 static int num_batches = 0;
 static int64_t *indices = NULL;
@@ -826,6 +826,17 @@ struct ggml_tensor * noise_batch = NULL;
 
 
 struct random_normal_distribution * rnd = NULL;
+
+
+void loss_print(int iter, float loss){
+    int n_bat = COUNT_TRAIN / num_batches;
+    if((iter-1) % log_interval == 0)
+        printf("Epoch: %d [ %d/%ld (%05.2f%%)], TOTAL Loss: %f \n",  iter/num_batches+1,
+                        ((iter-1) % num_batches)*n_bat, COUNT_TRAIN,
+                    100. * ((iter-1) % num_batches)/num_batches,
+                    loss/(float)n_bat);
+
+}
 
 void opt_callback(void * data, int accum_step, float * sched, bool * cancel){
     int n_bat = COUNT_TRAIN / num_batches;
@@ -868,8 +879,6 @@ void opt_callback(void * data, int accum_step, float * sched, bool * cancel){
     // fprintf(stderr, "%s, counter ,cnt = %d, %d \n", __func__, counter, cnt);
     delete rnds;
     counter++;
-
-
 }
 
 
@@ -934,7 +943,7 @@ int main(int argc, char ** argv) {
     bool use_gpu = true;
     int n_batch = 100;
     int n_threads = 1;
-    int log_interval = 10;
+    log_interval = 10;
     int n_epochs = 10;
     
     
@@ -1049,6 +1058,7 @@ int main(int argc, char ** argv) {
     opt_params.gb = gb;
     opt_params.customer_callback  = test_callback;
     opt_params.customer_data = (void *)&model;
+    opt_params.log_callback = loss_print;
     
     printf("begin opt \n");            
   
@@ -1063,56 +1073,6 @@ int main(int argc, char ** argv) {
     
     ggml_free(ctx0);
 
-
-    {
-        struct ggml_init_params sparams {
-            // /*.mem_size   =*/ ggml_tensor_overhead() * (num_tensors + 2),
-            /*.mem_size   =*/ ggml_tensor_overhead() * 1024 + ggml_graph_overhead(),
-            /*.mem_buffer =*/ NULL,
-            /*.no_alloc   =*/ true,
-        };
-        struct ggml_context * ctxs = ggml_init(sparams);
-        struct ggml_cgraph* gs = build_sample_graph_batch(&model, ctxs, n_batch); 
-        ggml_backend_buffer_t sample_buffer = ggml_backend_alloc_ctx_tensors(ctxs, model.backend);
-        float *rnds = new float[model.hparams.n_latent*n_batch];
-        for(int i = 0; i < model.hparams.n_latent*n_batch; i++){            
-            rnds[i] = frand_normal(rnd);         
-        }
-        struct ggml_tensor * noise_batch = ggml_get_tensor(model.ctx, "noise");
-          // load noise data  
-        if(ggml_backend_is_cpu(model.backend)
-#ifdef GGML_USE_METAL
-                || ggml_backend_is_metal(model.backend)
-#endif
-        ) {
-            memcpy(noise_batch->data, rnds, ggml_nbytes(noise_batch));
-            // memcpy(model.b->data, b, ggml_nbytes(model.b));
-        } else {
-            ggml_backend_tensor_set(noise_batch, rnds, 0, ggml_nbytes(noise_batch));  // cuda requires copy the data directly to device
-        } 
-
-        if (ggml_backend_is_cpu(model.backend)) {
-            ggml_backend_cpu_set_n_threads(model.backend, n_threads);
-        }
-        GGML_ASSERT(gs != NULL);
-        ggml_backend_graph_compute(model.backend, gs);
-        struct ggml_tensor * sample = get_tensor_from_graph(gs, "sample");
-        
-        float* out_data = new float[ggml_nelements(sample)];    
-        ggml_backend_tensor_get(sample, out_data, 0, ggml_nbytes(sample));
-
-        std::string filename = "mnist-sample-after.png";
-        output_images(filename, out_data, 10, 10);
-        ggml_graph_clear(gs);
-        ggml_free(ctxs);   
-        delete rnds;
-        delete out_data;
-    }
-
-
-
-    // ggml_free(kv_self.ctx);
-    // ggml_free(model_lora.ctx);
     delete indices;
     free(digit);
     // free(test_data);

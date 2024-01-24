@@ -18103,6 +18103,7 @@ static enum ggml_opt_result ggml_opt_adam(
 
     ggml_opt_customer_callback ccb =  params.customer_callback;
     void                * ccb_data =  params.customer_data;
+    ggml_opt_log_callback clog     =  params.log_callback;
 
     float * x  = opt->adam.x->data;  // current parameters
     float * g  = opt->adam.g->data;  // gradients
@@ -18179,17 +18180,7 @@ static enum ggml_opt_result ggml_opt_adam(
         const int64_t t_start_wall = ggml_time_us();
         const int64_t t_start_cpu = ggml_cycles();
         UNUSED(t_start_wall);
-        UNUSED(t_start_cpu);
-
-        // printf("before opti iter %d\n", t);
-        // for(int  i =0; i < 10; ++i){  
-        //    fprintf(stderr, "%f, ", x[i]);
-        // }
-        // fprintf(stderr, "\n ");    
-        // for(int  i =0; i < 10; ++i){  
-        //    fprintf(stderr, "%f, ", g[i]);
-        // }
-        // fprintf(stderr, "\n ");    
+        UNUSED(t_start_cpu);        
 
         {
             float gnorm = 1.0f;
@@ -18227,11 +18218,7 @@ static enum ggml_opt_result ggml_opt_adam(
                 }
             }
         }
-        // printf("after opti iter %d\n", t);
-        // for(int  i =0; i < 10; ++i){  
-        //    fprintf(stderr, "%f, ", x[i]);
-        // }
-        // fprintf(stderr, "\n ");    
+        
 
         ggml_opt_set_params(np, ps, x);
 
@@ -18255,12 +18242,12 @@ static enum ggml_opt_result ggml_opt_adam(
         fx *= accum_norm;
 
         opt->loss_after = fx;
+        
+        if(clog)
+           clog(opt->iter, fx);
 
-        printf("%d iter f, prev_f      = %16.6f, %16.6f, %d\n", t, fx, fx_prev[0], opt->iter);
-
-        if (ccb){
+        if (ccb)
             ccb(opt->iter, ccb_data);
-        }
 
         // check convergence
         if (fabsf(fx - fx_prev[0])/fx < params.adam.eps_f) {
@@ -18760,10 +18747,13 @@ struct ggml_opt_params ggml_opt_default_params(enum ggml_opt_type type) {
                     .print_backward_graph = true,
 
                     .n_gradient_accumulation = 1,
+
                     .gf        = NULL,
                     .gb        = NULL,
                     .customer_callback = NULL,
                     .customer_data = NULL,
+                    .log_callback = NULL,
+
                     .adam = {
                         .n_iter = 10000,
                         .sched  = 1.000f,
