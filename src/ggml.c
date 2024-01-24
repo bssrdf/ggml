@@ -16278,7 +16278,17 @@ void ggml_graph_reset(struct ggml_cgraph * cgraph) {
         struct ggml_tensor * grad = cgraph->grads[i];
 
         if (grad) {
-            ggml_set_zero(grad);
+            if(grad->backend != GGML_BACKEND_CPU){
+                // TODO: improve here by allocating from buffers
+                int64_t nbytes = ggml_nbytes(grad);
+                float *zeros = malloc(nbytes);
+                memset(zeros, 0, nbytes);
+                ggml_backend_tensor_set(grad, zeros, 0, nbytes);
+                free(zeros);
+            }
+            else{
+                ggml_set_zero(grad);
+            }
         }
     }
 }
@@ -18110,7 +18120,7 @@ static enum ggml_opt_result ggml_opt_adam(
                 return GGML_OPT_CANCEL;
             }
         }
-        // ggml_graph_reset  (gf);
+        ggml_graph_reset  (gf);
         // ggml_set_f32      (f->grad, 1.0f);
         ggml_opt_set_grad_to_one(f);
         ggml_graph_compute(gb, &cplan);
@@ -18226,7 +18236,7 @@ static enum ggml_opt_result ggml_opt_adam(
                     return GGML_OPT_CANCEL;;
                 }
             }
-            // ggml_graph_reset  (gf);
+            ggml_graph_reset  (gf);
             // ggml_set_f32      (f->grad, 1.0f);
             ggml_opt_set_grad_to_one(f);
             ggml_graph_compute(gb, &cplan);

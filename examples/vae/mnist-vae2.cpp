@@ -1254,7 +1254,6 @@ int main(int argc, char ** argv) {
 
         struct ggml_tensor * err_kl = get_tensor_from_graph(gf, "klloss");
         struct ggml_tensor * err_sig = get_tensor_from_graph(gf, "sigloss");
-        // struct ggml_tensor * err_tot = get_tensor_from_graph(gf, "totloss");
         if(!err_kl){
             fprintf(stderr, "something wrong with graph compute \n");
             exit(1);
@@ -1285,12 +1284,12 @@ int main(int argc, char ** argv) {
         if (error_before_optt < loss_sofar){
             loss_sofar = error_before_optt;
 
-            ggml_build_forward_expand(gf, ggml_get_tensor(model.ctx, "reconstructed"));
+            ggml_build_forward_expand(gf, rec);
             ggml_backend_graph_compute(model.backend, gf);
-            struct ggml_tensor * recon = get_tensor_from_graph(gf, "reconstructed");
-            memcpy(orig_data, digit.data(), ggml_nbytes(recon));
-            ggml_backend_tensor_get(recon, out_data, 0, ggml_nbytes(recon));
-            ggml_build_forward_expand(gf, ggml_get_tensor(model.ctx, "totloss"));
+            // struct ggml_tensor * recon = get_tensor_from_graph(gf, "reconstructed");
+            memcpy(orig_data, digit.data(), ggml_nbytes(rec));
+            ggml_backend_tensor_get(rec, out_data, 0, ggml_nbytes(rec));
+            ggml_build_forward_expand(gf, err_tot);
         }
         if (ex % log_interval == 0){
             printf("At %05.2f%%, KLD, BCE, TOTAL loss: (%f, %f, %f) \n",  100. * ex / num_batches,
@@ -1341,14 +1340,14 @@ int main(int argc, char ** argv) {
         if (ggml_backend_is_cpu(model.backend)) {
             ggml_backend_cpu_set_n_threads(model.backend, n_threads);
         }
-        GGML_ASSERT(gf != NULL);
+        GGML_ASSERT(gs != NULL);
         ggml_backend_graph_compute(model.backend, gs);
         struct ggml_tensor * sample = get_tensor_from_graph(gs, "sample");
         ggml_backend_tensor_get(sample, out_data, 0, ggml_nbytes(sample));
 
         std::string filename = "mnist-sample-e_" + std::to_string(epoch)+ ".png";
         output_images(filename, out_data, 10, 10);
-
+        ggml_graph_clear(gs);
         ggml_free(ctxs);   
     }
 

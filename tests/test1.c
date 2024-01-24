@@ -50,7 +50,7 @@ int main(int argc, const char ** argv) {
 
         ggml_set_f32(x, 3.0f);
 
-        ggml_graph_reset(gf);
+        // ggml_graph_reset(gf);
         ggml_set_f32(f->grad, 1.0f);
 
         ggml_graph_compute_with_ctx(ctx0, gb, n_threads);
@@ -65,6 +65,8 @@ int main(int argc, const char ** argv) {
         ggml_graph_dump_dot(gb, gf,   "test1-1-backward.dot");
     }
 
+#if 0
+
     {
         struct ggml_tensor * x = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, 1);
 
@@ -77,7 +79,7 @@ int main(int argc, const char ** argv) {
         // a*x*exp(x)
         // 2*a*x
 
-        ggml_print_objects(ctx0);
+        // ggml_print_objects(ctx0);
 
         struct ggml_cgraph * gf = ggml_new_graph_custom(ctx0, GGML_DEFAULT_GRAPH_SIZE, true);
         ggml_build_forward_expand(gf, f);
@@ -87,7 +89,7 @@ int main(int argc, const char ** argv) {
         ggml_set_f32(x, 2.0f);
         ggml_set_f32(a, 3.0f);
 
-        ggml_graph_reset(gf);
+        // ggml_graph_reset(gf);
         ggml_set_f32(f->grad, 1.0f);
 
         ggml_graph_compute_with_ctx(ctx0, gb, n_threads);
@@ -98,7 +100,7 @@ int main(int argc, const char ** argv) {
 
     }
     ///////////////////////////////////////////////////////////////
-//#if 0
+
     {
         struct ggml_tensor * x1 = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, 1);
         struct ggml_tensor * x2 = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, 1);
@@ -253,7 +255,6 @@ int main(int argc, const char ** argv) {
         ggml_graph_dump_dot(gf, NULL, "test1-4-forward.dot");
         ggml_graph_dump_dot(gb, gf,   "test1-4-backward.dot");
     }
-
     ///////////////////////////////////////////////////////////////
 
     {
@@ -579,7 +580,7 @@ int main(int argc, const char ** argv) {
         }
         printf("\n");
     }
-//#endif    
+#endif    
 
     ggml_free(ctx0);
 
