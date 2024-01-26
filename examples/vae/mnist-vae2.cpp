@@ -932,6 +932,67 @@ void test_callback(int cnt, void *cc_data) {
 
 }
 
+
+struct run_params {
+
+    int n_epoch;
+
+    // float f_norm_rms_eps;
+    // float rope_freq_base;
+    // float rope_freq_scale;
+};
+
+
+static struct run_params get_default_run_params() {
+    struct run_params params;
+    params.n_epoch    =  10;
+    return params;
+}
+
+static void run_print_usage(int argc, char ** argv, const struct run_params * params) {
+    fprintf(stderr, "usage: %s [options]\n", argv[0]);
+    fprintf(stderr, "\n");
+    fprintf(stderr, "options:\n");
+    fprintf(stderr, "  -h, --help                 show this help message and exit\n");
+    fprintf(stderr, "  --epochs N                number of epochs to train (default %d)\n", params->n_epoch);
+}
+
+
+
+static bool run_params_parse(int argc, char ** argv, struct run_params * params) {
+    bool invalid_param = false;
+    std::string arg;
+    struct run_params default_params = get_default_run_params();
+    const std::string arg_prefix = "--";
+
+    for (int i = 1; i < argc; i++) {
+        arg = argv[i];
+        if (arg.compare(0, arg_prefix.size(), arg_prefix) == 0) {
+            std::replace(arg.begin(), arg.end(), '_', '-');
+        }
+
+        if (arg == "--epochs") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            params->n_epoch = std::stoi(argv[i]);
+        } else {
+            fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
+            run_print_usage(argc, argv, &default_params);
+            exit(1);
+        }
+    }
+    if (invalid_param) {
+        fprintf(stderr, "error: invalid parameter for argument: %s\n", arg.c_str());
+        run_print_usage(argc, argv, &default_params);
+        exit(1);
+    }
+
+    return true;
+}
+
+
 int main(int argc, char ** argv) {
     
 
@@ -939,8 +1000,12 @@ int main(int argc, char ** argv) {
     int n_batch = 100;
     int n_threads = 1;
     log_interval = 10;
-    int n_epochs = 10;
-    
+
+    struct run_params rparams = get_default_run_params();
+
+    if (!run_params_parse(argc, argv, &rparams)) {
+        return 1;
+    }
     
 
 
@@ -1046,7 +1111,7 @@ int main(int argc, char ** argv) {
     // struct ggml_opt_params opt_params = ggml_opt_default_params(GGML_OPT_LBFGS);
     opt_params.print_backward_graph = false;
     opt_params.print_forward_graph = false;
-    opt_params.adam.n_iter = n_epochs * num_batches;
+    opt_params.adam.n_iter = rparams.n_epoch * num_batches;
     // opt_params.adam.gclip = 1.f;
     opt_params.max_no_improvement = 0;
     // opt_params.lbfgs.n_iter = 16;
@@ -1059,6 +1124,7 @@ int main(int argc, char ** argv) {
     
   
     int ret = ggml_opt(ctx0, opt_params, err_tot, opt_callback, digit);
+    ggml_graph_print(gb);
 
 
 

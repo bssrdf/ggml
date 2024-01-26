@@ -8380,7 +8380,7 @@ static void ggml_cuda_op_sum(
     else{        
         sum_rows.alloc(ncols);
         CUDA_CHECK(cudaMemcpyAsync(sum_rows.get(), src0_dd, sizeof(float)*ncols, cudaMemcpyDeviceToDevice, main_stream));
-        CUDA_CHECK(cudaStreamSynchronize(main_stream));
+        // CUDA_CHECK(cudaStreamSynchronize(main_stream));
         // to_fp32_cuda(src0_dd, sum_rows.get(), ncols, main_stream);
     }
     dy.alloc(blocks);   
@@ -8392,7 +8392,7 @@ static void ggml_cuda_op_sum(
 	reduce_sum_f32<<<     1,blocks,blocks*sizeof(float),   main_stream>>>(src0_dd_i, dy.get(), blocks);
 
     CUDA_CHECK(cudaMemcpyAsync(dst_dd, src0_dd_i, sizeof(float), cudaMemcpyDeviceToDevice, main_stream));
-    CUDA_CHECK(cudaStreamSynchronize(main_stream));
+    // CUDA_CHECK(cudaStreamSynchronize(main_stream));
 
     (void) src1;
     (void) dst;
