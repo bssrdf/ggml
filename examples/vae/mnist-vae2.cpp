@@ -924,6 +924,7 @@ void test_callback(int cnt, void *cc_data) {
             std::string filename = "mnist-sample-epoch_" + std::to_string(epoch) + ".png";
             output_images(filename, out_data, 10, 10);
             ggml_graph_clear(gs);
+            ggml_backend_buffer_free(sample_buffer);
             ggml_free(ctxs);   
             delete out_data;
         }

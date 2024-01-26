@@ -8599,7 +8599,7 @@ static void ggml_cuda_op_flatten(const ggml_tensor * src0, const ggml_tensor * s
     if (use_src1) {
         if (src1_on_device) {
             src1_ddf = (float *) src1_extra->data_device[g_main_device];
-        } else {
+        } else if(!ggml_is_scalar(src1)) {
             src1_ddf = src1_f.alloc(ggml_nelements(src1));
             CUDA_CHECK(ggml_cuda_cpy_tensor_2d(src1_ddf, src1, 0, 0, 0, nrows1, main_stream));
         }
