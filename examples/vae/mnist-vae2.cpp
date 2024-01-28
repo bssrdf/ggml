@@ -868,10 +868,10 @@ void opt_callback(void * data, int accum_step, float * sched, bool * cancel){
             || ggml_backend_is_metal(model.backend)
 #endif
     ) {
-        memcpy(input_batch->data, data+indices[cnt], ggml_nbytes(input_batch));
+        memcpy(input_batch->data, (char *)data+indices[cnt], ggml_nbytes(input_batch));
         memcpy(noise_batch->data, rnds, ggml_nbytes(noise_batch));
     } else {
-        ggml_backend_tensor_set(input_batch, data+indices[cnt], 0, ggml_nbytes(input_batch));  // cuda requires copy the data directly to device
+        ggml_backend_tensor_set(input_batch, (char *)data+indices[cnt], 0, ggml_nbytes(input_batch));  // cuda requires copy the data directly to device
         ggml_backend_tensor_set(noise_batch, rnds, 0, ggml_nbytes(noise_batch));  // cuda requires copy the data directly to device
     } 
     counter++;
