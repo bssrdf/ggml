@@ -825,6 +825,8 @@ struct mnist_vae_model model;
 struct ggml_tensor * input_batch = NULL;
 struct ggml_tensor * noise_batch = NULL;
 
+static double time_us = 0.f;
+
 
 
 struct random_normal_distribution * rnd = NULL;
@@ -843,6 +845,7 @@ void loss_print(int iter, float loss){
 void opt_callback(void * data, int accum_step, float * sched, bool * cancel){
     int n_bat = COUNT_TRAIN / num_batches;
     int cnt = counter % num_batches;
+    // const int64_t t_start_us = ggml_time_us();
     if(counter % num_batches == 0){
         for(int i = 0; i < num_batches; i++){
            indices[i] = i*n_bat*28*28;
@@ -871,10 +874,19 @@ void opt_callback(void * data, int accum_step, float * sched, bool * cancel){
         memcpy(input_batch->data, (char *)data+indices[cnt], ggml_nbytes(input_batch));
         memcpy(noise_batch->data, rnds, ggml_nbytes(noise_batch));
     } else {
-        ggml_backend_tensor_set(input_batch, (char *)data+indices[cnt], 0, ggml_nbytes(input_batch));  // cuda requires copy the data directly to device
-        ggml_backend_tensor_set(noise_batch, rnds, 0, ggml_nbytes(noise_batch));  // cuda requires copy the data directly to device
-    } 
+        // ggml_backend_tensor_set(input_batch, (char *)data+indices[cnt], 0, ggml_nbytes(input_batch));  // cuda requires copy the data directly to device
+        // ggml_backend_tensor_set(noise_batch, rnds, 0, ggml_nbytes(noise_batch));  // cuda requires copy the data directly to device
+        ggml_backend_tensor_set_async(model.backend, input_batch, (char *)data+indices[cnt], 0, ggml_nbytes(input_batch));  // cuda requires copy the data directly to device
+        ggml_backend_tensor_set_async(model.backend,  noise_batch, rnds, 0, ggml_nbytes(noise_batch));  // cuda requires copy the data directly to device
+    }
+    const int64_t t_feed_us = ggml_time_us() ;
+    // time_us = t_feed_us - t_start_us;
+    // if (counter % 10 == 0){
+    //   printf("  counter:  %d  %8.2f \n", counter, time_us/10);
+    //   time_us = 0.f;
+    // }
     counter++;
+
 }
 
 
