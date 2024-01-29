@@ -766,7 +766,8 @@ static bool output_images(const std::string &filename, const float *data, int nr
                 for (int col = 0; col < 28; col++){
                     int idx = (i*nc+j)*28*28+row*28 + col;
                     int idx0 = (i*28+row)*28*nc+ j*28+col; 
-                    // printf("accessing %d, %d, %d, %d - %d \n", i, j, row, col, idx);
+                    // if(i == 0 && j == 1)
+                    //     printf("accessing %d, %d, %d, %d - %d : %d \n", i, j, row, col, idx0, idx);
                     pixels[idx0] = float2pixel(data[idx]);
                 }
             }
@@ -918,7 +919,6 @@ void test_callback(int cnt, void *cc_data) {
     #endif
             ) {
                 memcpy(noise_batch->data, rnds, ggml_nbytes(noise_batch));
-                // memcpy(model.b->data, b, ggml_nbytes(model.b));
             } else {
                 ggml_backend_tensor_set(noise_batch, rnds, 0, ggml_nbytes(noise_batch));  // cuda requires copy the data directly to device
             } 
@@ -934,7 +934,7 @@ void test_callback(int cnt, void *cc_data) {
             ggml_backend_tensor_get(sample, out_data, 0, ggml_nbytes(sample));
 
             std::string filename = "mnist-sample-epoch_" + std::to_string(epoch) + ".png";
-            output_images(filename, out_data, 10, 10);
+            output_images(filename, out_data, 4, 16);
             ggml_graph_clear(gs);
             ggml_backend_buffer_free(sample_buffer);
             ggml_free(ctxs);   
@@ -949,6 +949,7 @@ void test_callback(int cnt, void *cc_data) {
 struct run_params {
 
     int n_epoch;
+    int n_batch;
 
     // float f_norm_rms_eps;
     // float rope_freq_base;
@@ -959,6 +960,8 @@ struct run_params {
 static struct run_params get_default_run_params() {
     struct run_params params;
     params.n_epoch    =  10;
+    params.n_batch    =  64;
+
     return params;
 }
 
@@ -967,7 +970,8 @@ static void run_print_usage(int argc, char ** argv, const struct run_params * pa
     fprintf(stderr, "\n");
     fprintf(stderr, "options:\n");
     fprintf(stderr, "  -h, --help                 show this help message and exit\n");
-    fprintf(stderr, "  --epochs N                number of epochs to train (default %d)\n", params->n_epoch);
+    fprintf(stderr, "  --epochs N                 number of epochs to train (default %d)\n", params->n_epoch);
+    fprintf(stderr, "  --batch_size N             number of epochs to train (default %d)\n", params->n_batch);
 }
 
 
@@ -990,6 +994,12 @@ static bool run_params_parse(int argc, char ** argv, struct run_params * params)
                 break;
             }
             params->n_epoch = std::stoi(argv[i]);
+        }else if(arg == "--batch-size") {
+            if (++i >= argc) {
+                invalid_param = true;
+                break;
+            }
+            params->n_batch = std::stoi(argv[i]);
         } else {
             fprintf(stderr, "error: unknown argument: %s\n", arg.c_str());
             run_print_usage(argc, argv, &default_params);
@@ -1010,7 +1020,7 @@ int main(int argc, char ** argv) {
     
 
     bool use_gpu = true;
-    int n_batch = 100;
+    // int n_batch = 64;
     int n_threads = 1;
     log_interval = 10;
 
@@ -1019,6 +1029,8 @@ int main(int argc, char ** argv) {
     if (!run_params_parse(argc, argv, &rparams)) {
         return 1;
     }
+
+    int n_batch = rparams.n_batch;
     
 
 
@@ -1105,10 +1117,8 @@ int main(int argc, char ** argv) {
 
     indices = new int64_t[num_batches];
 
-    num_batches = COUNT_TRAIN / n_batch;    
-  
     
-     rnd = init_random_normal_distribution(1337, 0, 1.f, -FLT_MAX, FLT_MAX);     
+    rnd = init_random_normal_distribution(1337, 0, 1.f, -FLT_MAX, FLT_MAX);     
 
 
                 

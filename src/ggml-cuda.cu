@@ -6955,7 +6955,7 @@ struct scoped_spin_lock {
 
 static std::atomic_flag g_cuda_pool_lock = ATOMIC_FLAG_INIT;
 
-// #define DEBUG_CUDA_MALLOC
+//#define DEBUG_CUDA_MALLOC
 struct ggml_cuda_buffer {
     void * ptr = nullptr;
     size_t size = 0;
@@ -6969,6 +6969,7 @@ static void * ggml_cuda_pool_malloc_leg(int device, size_t size, size_t * actual
 #ifdef DEBUG_CUDA_MALLOC
     int nnz = 0;
     size_t max_size = 0;
+    int id = device;
 #endif
     size_t best_diff = 1ull << 36;
     int ibest = -1;
@@ -7013,6 +7014,7 @@ static void * ggml_cuda_pool_malloc_leg(int device, size_t size, size_t * actual
 #ifdef DEBUG_CUDA_MALLOC
     fprintf(stderr, "%s[%d]: %d buffers, max_size = %u MB, pool_size = %u MB, requested %u MB\n", __func__, id, nnz,
             (uint32_t)(max_size/1024/1024), (uint32_t)(g_cuda_pool_size[id]/1024/1024), (uint32_t)(size/1024/1024));
+
 #endif
     return ptr;
 }
@@ -7098,6 +7100,7 @@ static void * ggml_cuda_pool_malloc_vmm(int device, size_t size, size_t * actual
     g_cuda_pool_used[device] += size;
 
 #ifdef DEBUG_CUDA_MALLOC
+    int id = device;
     printf("cuda pool[%d]: allocated %llu bytes at %llx [%s]\n", id, (unsigned long long) size, ptr);
 #endif
 
@@ -7108,6 +7111,7 @@ static void ggml_cuda_pool_free_vmm(int device, void * ptr, size_t size) {
     scoped_spin_lock lock(g_cuda_pool_lock);
 
 #ifdef DEBUG_CUDA_MALLOC
+    int id = device;
     printf("cuda pool[%d]: freed %llu bytes at %llx\n", id, (unsigned long long) size, ptr);
 #endif
 
@@ -10424,9 +10428,9 @@ static void ggml_backend_cuda_buffer_set_tensor(ggml_backend_buffer_t buffer, gg
     ggml_backend_buffer_context_cuda * ctx = (ggml_backend_buffer_context_cuda *)buffer->context;
 
     ggml_cuda_set_device(ctx->device);
-    CUDA_CHECK(cudaDeviceSynchronize());
+    // CUDA_CHECK(cudaDeviceSynchronize());
     CUDA_CHECK(cudaMemcpy((char *)tensor->data + offset, data, size, cudaMemcpyHostToDevice));
-    CUDA_CHECK(cudaDeviceSynchronize());
+    // CUDA_CHECK(cudaDeviceSynchronize());
 }
 
 static void ggml_backend_cuda_buffer_get_tensor(ggml_backend_buffer_t buffer, const ggml_tensor * tensor, void * data, size_t offset, size_t size) {
@@ -10435,7 +10439,7 @@ static void ggml_backend_cuda_buffer_get_tensor(ggml_backend_buffer_t buffer, co
     ggml_backend_buffer_context_cuda * ctx = (ggml_backend_buffer_context_cuda *)buffer->context;
 
     ggml_cuda_set_device(ctx->device);
-    CUDA_CHECK(cudaDeviceSynchronize());
+    // CUDA_CHECK(cudaDeviceSynchronize());
 
     CUDA_CHECK(cudaMemcpy(data, (const char *)tensor->data + offset, size, cudaMemcpyDeviceToHost));
 }
@@ -10444,7 +10448,7 @@ static void ggml_backend_cuda_buffer_clear(ggml_backend_buffer_t buffer, uint8_t
     ggml_backend_buffer_context_cuda * ctx = (ggml_backend_buffer_context_cuda *)buffer->context;
 
     ggml_cuda_set_device(ctx->device);
-    CUDA_CHECK(cudaDeviceSynchronize());
+    // CUDA_CHECK(cudaDeviceSynchronize());
 
     CUDA_CHECK(cudaMemset(ctx->dev_ptr, value, buffer->size));
 }

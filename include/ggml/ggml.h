@@ -1882,6 +1882,7 @@ extern "C" {
 
     // print info and performance information for the graph
     GGML_API void ggml_graph_print(const struct ggml_cgraph * cgraph);
+    GGML_API void ggml_graph_print_agg(const struct ggml_cgraph * cgraph);
 
     // dump the graph into a file using the dot format
     GGML_API void ggml_graph_dump_dot(const struct ggml_cgraph * gb, const struct ggml_cgraph * gf, const char * filename);

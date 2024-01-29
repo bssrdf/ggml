@@ -17724,6 +17724,29 @@ void ggml_graph_print(const struct ggml_cgraph * cgraph) {
     GGML_PRINT("========================================\n");
 }
 
+
+void ggml_graph_print_agg(const struct ggml_cgraph * cgraph) {
+    int64_t perf_total_per_op_us[GGML_OP_COUNT] = {0};
+
+
+    for (int i = 0; i < cgraph->n_nodes; i++) {
+        struct ggml_tensor * node = cgraph->nodes[i];
+
+        perf_total_per_op_us[node->op] += MAX(1, node->perf_time_us);
+
+    }
+
+    for (int i = 0; i < GGML_OP_COUNT; i++) {
+        if (perf_total_per_op_us[i] == 0) {
+            continue;
+        }
+
+        GGML_PRINT("perf_total_per_op_us[%16s] = %7.3f ms\n", ggml_op_name(i), (double) perf_total_per_op_us[i] / 1000.0);
+    }
+
+    GGML_PRINT("========================================\n");
+}
+
 // check if node is part of the graph
 static bool ggml_graph_find(const struct ggml_cgraph * cgraph, const struct ggml_tensor * node) {
     if (cgraph == NULL) {
@@ -18292,6 +18315,8 @@ static enum ggml_opt_result ggml_opt_adam(
             GGML_PRINT_DEBUG("wall time iter: %5.3f s\n", (t_end_wall - t_start_wall)/1e6);
             UNUSED(t_end_wall);
         }
+        // if(opt->iter % 10 == 0)
+        //     ggml_graph_print_agg(gb);
 
                
 
