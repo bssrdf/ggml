@@ -874,10 +874,10 @@ void opt_callback(void * data, int accum_step, float * sched, bool * cancel){
         memcpy(input_batch->data, (char *)data+indices[cnt], ggml_nbytes(input_batch));
         memcpy(noise_batch->data, rnds, ggml_nbytes(noise_batch));
     } else {
-        // ggml_backend_tensor_set(input_batch, (char *)data+indices[cnt], 0, ggml_nbytes(input_batch));  // cuda requires copy the data directly to device
-        // ggml_backend_tensor_set(noise_batch, rnds, 0, ggml_nbytes(noise_batch));  // cuda requires copy the data directly to device
-        ggml_backend_tensor_set_async(model.backend, input_batch, (char *)data+indices[cnt], 0, ggml_nbytes(input_batch));  // cuda requires copy the data directly to device
-        ggml_backend_tensor_set_async(model.backend,  noise_batch, rnds, 0, ggml_nbytes(noise_batch));  // cuda requires copy the data directly to device
+        ggml_backend_tensor_set(input_batch, (char *)data+indices[cnt], 0, ggml_nbytes(input_batch));  // cuda requires copy the data directly to device
+        ggml_backend_tensor_set(noise_batch, rnds, 0, ggml_nbytes(noise_batch));  // cuda requires copy the data directly to device
+        // ggml_backend_tensor_set_async(model.backend, input_batch, (char *)data+indices[cnt], 0, ggml_nbytes(input_batch));  // cuda requires copy the data directly to device
+        // ggml_backend_tensor_set_async(model.backend,  noise_batch, rnds, 0, ggml_nbytes(noise_batch));  // cuda requires copy the data directly to device
     }
     const int64_t t_feed_us = ggml_time_us() ;
     // time_us = t_feed_us - t_start_us;
