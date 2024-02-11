@@ -4351,6 +4351,23 @@ struct ggml_tensor * ggml_cpy_inplace(
     return ggml_cpy_impl(ctx, a, b, true);
 }
 
+struct ggml_tensor * ggml_cast(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        enum   ggml_type      type) {
+    bool is_node = false;
+
+    struct ggml_tensor * result = ggml_new_tensor(ctx, type, GGML_MAX_DIMS, a->ne);
+    ggml_format_name(result, "%s (copy)", a->name);
+
+    result->op   = GGML_OP_CPY;
+    result->grad = is_node ? ggml_dup_tensor(ctx, result) : NULL;
+    result->src[0] = a;
+    result->src[1] = result;
+
+    return result;
+}
+
 // ggml_cont
 
 static struct ggml_tensor * ggml_cont_impl(
