@@ -1001,6 +1001,16 @@ int main(int argc, const char ** argv) {
 
                 const int max_offset = MAX(0, ggml_nelements(x[0]) - ggml_nelements(x[1]));
                 const int offset = irand(max_offset) * ggml_element_size(x[0]);
+                int64_t *ne = x[0]->ne;
+
+                printf("x0: (%ld, %ld, %ld, %ld) \n ", ne[0], ne[1], ne[2], ne[3]);
+                ne = x[1]->ne;
+                printf("x1: (%ld, %ld, %ld, %ld) \n ", ne[0], ne[1], ne[2], ne[3]);
+                size_t *nb = x[0]->nb;
+                printf("x0 nb: (%ld, %ld, %ld, %ld) \n ", nb[0], nb[1], nb[2], nb[3]);
+                printf("offset: %d \n ", offset);
+
+
 
                 struct ggml_tensor * f = ggml_sum(ctx0, ggml_acc(ctx0, x[0], x[1], x[0]->nb[1], x[0]->nb[2], x[0]->nb[3], offset));
 
