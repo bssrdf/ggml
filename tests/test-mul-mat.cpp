@@ -141,7 +141,8 @@ struct ggml_cgraph * build_graph(const test_model& model, struct ggml_allocr * a
     struct ggml_cgraph * gf = ggml_new_graph(ctx0);
 
     // zT = x @ yT
-    struct ggml_tensor * result = ggml_mul_mat(ctx0, model.a, ggml_cont(ctx0, model.b));
+    // struct ggml_tensor * result = ggml_mul_mat(ctx0, model.a, ggml_cont(ctx0, model.b));
+    struct ggml_tensor * result = ggml_mul_mat(ctx0, model.a, model.b);
 
     struct ggml_tensor * h = model.a;
     int64_t *ne = h->ne;
