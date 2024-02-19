@@ -5414,8 +5414,26 @@ struct ggml_tensor * ggml_conv_2d(
                 ggml_reshape_2d(ctx, im2col, im2col->ne[0],  im2col->ne[3] * im2col->ne[2] * im2col->ne[1]), // [N, OH, OW, IC * KH * KW] => [N*OH*OW, IC * KH * KW]
                 ggml_reshape_2d(ctx, a, (a->ne[0] * a->ne[1] * a->ne[2]),  a->ne[3]));                       // [OC，IC, KH, KW] => [OC, IC * KH * KW]
 
-    result = ggml_reshape_4d(ctx, result, im2col->ne[1], im2col->ne[2], a->ne[3], im2col->ne[3]); // [N, OC, OH, OW]
+    // ggml_set_name(im2col, "im2col_as_input"); 
+    // printf("im2col_as_input type is [%s] \n ", ggml_type_name(im2col->type));
+    // struct ggml_tensor * src0 =  ggml_reshape_2d(ctx, im2col, im2col->ne[0],  im2col->ne[3] * im2col->ne[2] * im2col->ne[1]);
+    // ggml_set_name(src0, "im2col_as_src0_mul_mat"); 
+    // printf("im2col_as_src0_mul_mat type is [%s]\n ", ggml_type_name(src0->type));
+    // struct ggml_tensor * src1 =  ggml_reshape_2d(ctx, a, (a->ne[0] * a->ne[1] * a->ne[2]),  a->ne[3]);
+    // ggml_set_name(src1, "im2col_as_src1_mul_mat"); 
+    // printf("im2col_as_src1_mul_mat type is [%s]\n ", ggml_type_name(src1->type));
+    // struct ggml_tensor * result =
+    //     ggml_mul_mat(ctx,
+    //             src0,  // [N, OH, OW, IC * KH * KW] => [N*OH*OW, IC * KH * KW]
+    //             src1);                       // [OC，IC, KH, KW] => [OC, IC * KH * KW]
+    // ggml_set_name(result, "conv2d_result");  
+    // printf("conv2d_result type is [%s]\n ", ggml_type_name(result->type));
 
+    // result = ggml_reshape_4d(ctx, result, im2col->ne[1], im2col->ne[2], a->ne[3], im2col->ne[3]); // [N, OC, OH, OW]
+    // ggml_set_name(result, "conv2d_result_reshaped");  
+
+    result = ggml_reshape_4d(ctx, result, im2col->ne[1], im2col->ne[2], im2col->ne[3], a->ne[3]); // [N, OC, OH, OW]
+    result = ggml_cont(ctx, ggml_permute(ctx, result, 0, 1, 3, 2)); // [N, OC, OH, OW]
     return result;
 }
 
