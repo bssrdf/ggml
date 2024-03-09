@@ -3385,6 +3385,13 @@ static struct ggml_tensor * ggml_add_impl(
         struct ggml_tensor * a,
         struct ggml_tensor * b,
         bool inplace) {
+    if(!ggml_can_repeat(b, a)){
+        int64_t *ne = a->ne;
+        printf(" a is [%zu, %zu, %zu, %zu] \n", ne[0], ne[1], ne[2], ne[3]);
+        ne= b->ne;
+        printf(" b is [%zu, %zu, %zu, %zu] \n", ne[0], ne[1], ne[2], ne[3]);
+    }
+
     GGML_ASSERT(ggml_can_repeat(b, a));
 
     bool is_node = false;
@@ -3925,6 +3932,10 @@ struct ggml_tensor * ggml_concat(
     struct ggml_context* ctx,
     struct ggml_tensor* a,
     struct ggml_tensor* b) {
+    if(a->ne[0] != b->ne[0] || a->ne[1] != b->ne[1] || a->ne[3] != b->ne[3]){
+        fprintf(stderr, "%s: a(%s) -> [%zu, %zu, %zu, %zu] \n", __func__, a->name, a->ne[0], a->ne[1], a->ne[2], a->ne[3]);
+        fprintf(stderr, "%s: b(%s) -> [%zu, %zu, %zu, %zu] \n", __func__,  b->name, b->ne[0], b->ne[1], b->ne[2], b->ne[3]);
+    }
     GGML_ASSERT(a->ne[0] == b->ne[0] && a->ne[1] == b->ne[1] && a->ne[3] == b->ne[3]);
 
     bool is_node = false;
