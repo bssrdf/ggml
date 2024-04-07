@@ -934,7 +934,7 @@ void test_callback(int cnt, void *cc_data) {
             ggml_backend_tensor_get(sample, out_data, 0, ggml_nbytes(sample));
 
             std::string filename = "mnist-sample-epoch_" + std::to_string(epoch) + ".png";
-            output_images(filename, out_data, 4, 16);
+            output_images(filename, out_data, 10, 10);
             ggml_graph_clear(gs);
             ggml_backend_buffer_free(sample_buffer);
             ggml_free(ctxs);   
