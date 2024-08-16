@@ -28,6 +28,7 @@ static void ggml_log_callback_default(ggml_log_level level, const char * text, v
 
 struct test_model {
     struct ggml_tensor * a;
+    struct ggml_tensor * b;
     ggml_backend_t backend = NULL;
     ggml_backend_buffer_t buffer;
     struct ggml_context * ctx;
@@ -36,7 +37,7 @@ struct test_model {
 void load_model(test_model & model, bool use_gpu = false) {
     // create data
     int KW = 3, KH = 3, IC = 15;
-
+    int OW = 2, OH = 3, OC = 12;
     // Initialize adata
     float * adata = new float[KW * KH * IC];
     for (int i = 0; i < KW * KH * (IC / 3) ; i++) {        
@@ -50,11 +51,17 @@ void load_model(test_model & model, bool use_gpu = false) {
         adata[i] = 4.5f;
     }
 
+    float * bdata = new float[OW * OH * OC];
+    for (int i = 0; i < OW * OH * OC; i++) {
+        bdata[i] = (float)i;
+    }
+
     
 
     size_t buffer_size = 0;
     {
         buffer_size += KW * KH * IC * ggml_type_size(GGML_TYPE_F32); // tensor a
+        buffer_size += OW * OH * OC * ggml_type_size(GGML_TYPE_F32); // tensor b
         buffer_size += 1024; // overhead
     }
 
@@ -102,18 +109,26 @@ void load_model(test_model & model, bool use_gpu = false) {
 
     // create tensors
     model.a = ggml_new_tensor_3d(model.ctx, GGML_TYPE_F32,  KW, KH, IC);
+    model.b = ggml_new_tensor_3d(model.ctx, GGML_TYPE_F32,  OW, OH, OC);
 
     // create a allocator
     struct ggml_tallocr alloc = ggml_tallocr_new(model.buffer);
 
     // alloc memory
     ggml_tallocr_alloc(&alloc, model.a);
+    ggml_tallocr_alloc(&alloc, model.b);
 
     // load data to buffer
     if(ggml_backend_is_cpu(model.backend)) {
         memcpy(model.a->data, adata, ggml_nbytes(model.a));
     } else {
         ggml_backend_tensor_set(model.a, adata, 0, ggml_nbytes(model.a));
+    }
+
+    if(ggml_backend_is_cpu(model.backend)) {
+        memcpy(model.b->data, bdata, ggml_nbytes(model.b));
+    } else {
+        ggml_backend_tensor_set(model.b, bdata, 0, ggml_nbytes(model.b));
     }
     
 }
@@ -136,6 +151,7 @@ struct ggml_cgraph * build_graph(const test_model& model) {
 
     // split conv2d in fundamental methods for test unit
     struct ggml_tensor *a = model.a;
+
     int64_t offset = a->nb[2] * a->ne[2] / 3;    
     struct ggml_tensor* half1 = ggml_view_3d(ctx0, a, a->ne[0], a->ne[1], a->ne[2]/3, a->nb[1], a->nb[2], offset * 0);
     ggml_set_name(half1, "half1_res");
@@ -149,6 +165,16 @@ struct ggml_cgraph * build_graph(const test_model& model) {
     struct ggml_tensor* half3 = ggml_view_3d(ctx0, a, a->ne[0], a->ne[1], a->ne[2]/3, a->nb[1], a->nb[2], offset * 2);
     ggml_set_name(half3, "half3_res");
     ggml_build_forward_expand(gf, half3);
+
+    struct ggml_tensor *b = model.b;
+    int heads = 4;
+    /*******************
+    example of getting a 4D view of a 3D tensor
+    ********************/
+    struct ggml_tensor* x = ggml_view_4d(ctx0, b, b->ne[0], b->ne[1], heads, b->ne[2]/heads, 
+                            b->nb[1], b->nb[2], b->nb[3], 0);
+    ggml_set_name(x, "r1_res");
+    ggml_build_forward_expand(gf, x);
 
     ggml_free(ctx0);
     return gf;
@@ -204,6 +230,7 @@ int main(void)
     struct ggml_tensor * h1_res = NULL;
     struct ggml_tensor * h2_res = NULL;
     struct ggml_tensor * h3_res = NULL;
+    struct ggml_tensor * r1_res = NULL;
 
     for(int i = 0; i < gf_res->n_nodes; i++) {
         if(strcmp(ggml_get_name(gf_res->nodes[i]), "half1_res") == 0) {
@@ -212,16 +239,20 @@ int main(void)
             h2_res = gf_res->nodes[i];
         } else if(strcmp(ggml_get_name(gf_res->nodes[i]), "half3_res") == 0) {
             h3_res = gf_res->nodes[i];
+        }else if(strcmp(ggml_get_name(gf_res->nodes[i]), "r1_res") == 0) {
+            r1_res = gf_res->nodes[i];
         }
     }
 
     float* h1_data = new float[ggml_nelements(h1_res)];
     float* h2_data = new float[ggml_nelements(h2_res)];
     float* h3_data = new float[ggml_nelements(h3_res)];
+    float* r1_data = new float[ggml_nelements(r1_res)];
 
     ggml_backend_tensor_get(h1_res, h1_data, 0, ggml_nbytes(h1_res));
     ggml_backend_tensor_get(h2_res, h2_data, 0, ggml_nbytes(h2_res));
     ggml_backend_tensor_get(h3_res, h3_data, 0, ggml_nbytes(h3_res));
+    ggml_backend_tensor_get(r1_res, r1_data, 0, ggml_nbytes(r1_res));
 
     for(int k = 0; k < 5; k++){
         for(int j = 0; j < 3; j++){
@@ -256,7 +287,20 @@ int main(void)
         }
         printf("==================\n");
     }       
-    
+
+    for(int l = 0; l < 2; l++){
+        for(int k = 0; k < 4; k++){
+            for(int j = 0; j < 3; j++){
+                for(int i = 0; i < 3; i++){
+                printf("%f, ", r1_data[i+3*j+k*3*3+l*4*3*3]);
+                }
+                printf("\n");
+            }
+            printf("==================\n");
+        }
+        printf("+++++++++++++++++++++++\n");
+
+    }
     
 
     
