@@ -29,6 +29,7 @@ static void ggml_log_callback_default(ggml_log_level level, const char * text, v
 struct test_model {
     struct ggml_tensor * a;
     struct ggml_tensor * b;
+    struct ggml_tensor * c;
     ggml_backend_t backend = NULL;
     ggml_backend_buffer_t buffer;
     struct ggml_context * ctx;
@@ -62,13 +63,14 @@ void load_model(test_model & model, bool use_gpu = false) {
     {
         buffer_size += KW * KH * IC * ggml_type_size(GGML_TYPE_F32); // tensor a
         buffer_size += OW * OH * OC * ggml_type_size(GGML_TYPE_F32); // tensor b
+        buffer_size += OW * OH * OC * ggml_type_size(GGML_TYPE_F32); // tensor c
         buffer_size += 1024; // overhead
     }
 
     printf("%s: ggml tensor size    = %d bytes\n", __func__, (int) sizeof(ggml_tensor));
     printf("%s: backend buffer size = %0.2f MB\n", __func__, (buffer_size/ 1024.f/ 1024.f));
 
-    int num_tensors = 2;
+    int num_tensors = 3;
     struct ggml_init_params params {
             /*.mem_size   =*/ ggml_tensor_overhead() * num_tensors,
             /*.mem_buffer =*/ NULL,
@@ -110,6 +112,7 @@ void load_model(test_model & model, bool use_gpu = false) {
     // create tensors
     model.a = ggml_new_tensor_3d(model.ctx, GGML_TYPE_F32,  KW, KH, IC);
     model.b = ggml_new_tensor_3d(model.ctx, GGML_TYPE_F32,  OW, OH, OC);
+    model.c = ggml_new_tensor_3d(model.ctx, GGML_TYPE_F32,  OC, OH, OW);
 
     // create a allocator
     struct ggml_tallocr alloc = ggml_tallocr_new(model.buffer);
@@ -117,6 +120,7 @@ void load_model(test_model & model, bool use_gpu = false) {
     // alloc memory
     ggml_tallocr_alloc(&alloc, model.a);
     ggml_tallocr_alloc(&alloc, model.b);
+    ggml_tallocr_alloc(&alloc, model.c);
 
     // load data to buffer
     if(ggml_backend_is_cpu(model.backend)) {
@@ -129,6 +133,12 @@ void load_model(test_model & model, bool use_gpu = false) {
         memcpy(model.b->data, bdata, ggml_nbytes(model.b));
     } else {
         ggml_backend_tensor_set(model.b, bdata, 0, ggml_nbytes(model.b));
+    }
+
+    if(ggml_backend_is_cpu(model.backend)) {
+        memcpy(model.c->data, bdata, ggml_nbytes(model.c));
+    } else {
+        ggml_backend_tensor_set(model.c, bdata, 0, ggml_nbytes(model.c));
     }
     
 }
@@ -175,6 +185,11 @@ struct ggml_cgraph * build_graph(const test_model& model) {
                             b->nb[1], b->nb[2], b->nb[3], 0);
     ggml_set_name(x, "r1_res");
     ggml_build_forward_expand(gf, x);
+
+    struct ggml_tensor *c = model.c;
+    struct ggml_tensor* y = ggml_soft_max(ctx0, c);
+    ggml_set_name(y, "s1_res");
+    ggml_build_forward_expand(gf, y);
 
     ggml_free(ctx0);
     return gf;
@@ -231,6 +246,7 @@ int main(void)
     struct ggml_tensor * h2_res = NULL;
     struct ggml_tensor * h3_res = NULL;
     struct ggml_tensor * r1_res = NULL;
+    struct ggml_tensor * s1_res = NULL;
 
     for(int i = 0; i < gf_res->n_nodes; i++) {
         if(strcmp(ggml_get_name(gf_res->nodes[i]), "half1_res") == 0) {
@@ -239,8 +255,10 @@ int main(void)
             h2_res = gf_res->nodes[i];
         } else if(strcmp(ggml_get_name(gf_res->nodes[i]), "half3_res") == 0) {
             h3_res = gf_res->nodes[i];
-        }else if(strcmp(ggml_get_name(gf_res->nodes[i]), "r1_res") == 0) {
+        } else if(strcmp(ggml_get_name(gf_res->nodes[i]), "r1_res") == 0) {
             r1_res = gf_res->nodes[i];
+        } else if(strcmp(ggml_get_name(gf_res->nodes[i]), "s1_res") == 0) {
+            s1_res = gf_res->nodes[i];
         }
     }
 
@@ -248,11 +266,13 @@ int main(void)
     float* h2_data = new float[ggml_nelements(h2_res)];
     float* h3_data = new float[ggml_nelements(h3_res)];
     float* r1_data = new float[ggml_nelements(r1_res)];
+    float* s1_data = new float[ggml_nelements(s1_res)];
 
     ggml_backend_tensor_get(h1_res, h1_data, 0, ggml_nbytes(h1_res));
     ggml_backend_tensor_get(h2_res, h2_data, 0, ggml_nbytes(h2_res));
     ggml_backend_tensor_get(h3_res, h3_data, 0, ggml_nbytes(h3_res));
     ggml_backend_tensor_get(r1_res, r1_data, 0, ggml_nbytes(r1_res));
+    ggml_backend_tensor_get(s1_res, s1_data, 0, ggml_nbytes(s1_res));
 
     for(int k = 0; k < 5; k++){
         for(int j = 0; j < 3; j++){
@@ -300,6 +320,17 @@ int main(void)
         }
         printf("+++++++++++++++++++++++\n");
 
+    }
+
+
+    for(int k = 0; k < 2; k++){
+        for(int j = 0; j < 3; j++){
+            for(int i = 0; i < 12; i++){
+               printf("%f, ", s1_data[i+12*j+k*3*12]);
+            }
+            printf("\n");
+        }
+        printf("==================\n");
     }
     
 
