@@ -130,9 +130,17 @@ struct ggml_cgraph * build_graph(const test_model& model) {
 
     // zT = x @ yT
     struct ggml_tensor * result = ggml_mul_mat(ctx0, model.a, ggml_cont(ctx0, model.b));
-
+    struct ggml_tensor * r = result;
+    result =  ggml_cont(ctx0, ggml_transpose(ctx0, result));
+    int64_t ne[4];
+    for(int i = 0; i < 4; i++)
+        ne[i] = result->ne[i];
+    printf("(%zu, %zu, %zu, %zu) \n", ne[0], ne[1], ne[2], ne[3]);    
+    for(int i = 0; i < 4; i++)
+        ne[i] = r->ne[i];
+    printf("(%zu, %zu, %zu, %zu) \n", ne[0], ne[1], ne[2], ne[3]);    
     // z = (zT)T
-    ggml_build_forward_expand(gf, ggml_cont(ctx0, ggml_transpose(ctx0, result)));
+    ggml_build_forward_expand(gf, result);
 
     // delete the temporally context used to build the graph
     ggml_free(ctx0);

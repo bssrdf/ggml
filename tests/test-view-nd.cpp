@@ -37,20 +37,20 @@ struct test_model {
 
 void load_model(test_model & model, bool use_gpu = false) {
     // create data
-    int KW = 3, KH = 3, IC = 15;
+    int KW = 3, KH = 3, IC = 10;
     int OW = 2, OH = 3, OC = 12;
     // Initialize adata
     float * adata = new float[KW * KH * IC];
-    for (int i = 0; i < KW * KH * (IC / 3) ; i++) {        
-        adata[i] = 2.5f;
+    for (int i = 0; i < KW * KH * IC  ; i++) {        
+        adata[i] = (float)i;
     }
-    for (int i = KW * KH * (IC / 3); i < KW * KH * IC * 2 / 3; i++) {        
-        adata[i] = 3.5f;
-    }
+    // for (int i = KW * KH * (IC / 2); i < KW * KH * IC; i++) {        
+    //     adata[i] = (float)i;
+    // }
 
-    for (int i = KW * KH * (IC * 2 / 3); i < KW * KH * IC; i++) {        
-        adata[i] = 4.5f;
-    }
+    // for (int i = KW * KH * (IC * 2 / 3); i < KW * KH * IC; i++) {        
+    //     adata[i] = 4.5f;
+    // }
 
     float * bdata = new float[OW * OH * OC];
     for (int i = 0; i < OW * OH * OC; i++) {
@@ -110,7 +110,7 @@ void load_model(test_model & model, bool use_gpu = false) {
     model.ctx = ggml_init(params);
 
     // create tensors
-    model.a = ggml_new_tensor_3d(model.ctx, GGML_TYPE_F32,  KW, KH, IC);
+    model.a = ggml_new_tensor_3d(model.ctx, GGML_TYPE_F32,  IC, KW, KH);
     model.b = ggml_new_tensor_3d(model.ctx, GGML_TYPE_F32,  OW, OH, OC);
     model.c = ggml_new_tensor_3d(model.ctx, GGML_TYPE_F32,  OC, OH, OW);
 
@@ -143,6 +143,32 @@ void load_model(test_model & model, bool use_gpu = false) {
     
 }
 
+std::vector<struct ggml_tensor*> chunk_half(struct ggml_context* ctx,
+                                struct ggml_tensor* x){
+        auto t = ggml_cont(ctx, ggml_permute(ctx, x, 2, 0, 1, 3));   
+        for(int i=0; i < 4; i++){
+           printf("chunk, %d, %d \n", t->ne[i], t->nb[i]);
+        }
+        int64_t n = t->ne[2] / 2;
+        int64_t offset = t->nb[2] * n; 
+        auto k = ggml_view_3d(ctx, t, t->ne[0], t->ne[1], n, t->nb[1], t->nb[2], offset*0);
+        auto v = ggml_view_3d(ctx, t, t->ne[0], t->ne[1], n, t->nb[1], t->nb[2], offset*1);
+        return {ggml_cont(ctx, ggml_permute(ctx, k, 1, 2, 0, 3)),
+                ggml_cont(ctx, ggml_permute(ctx, v, 1, 2, 0, 3))};  
+    }
+
+    std::vector<struct ggml_tensor*> chunk_half1(struct ggml_context* ctx,
+                                struct ggml_tensor* x){
+
+        // auto tlo = ggml_view_4d(ctx, x, x->ne[0]/2, x->ne[1], x->ne[2], x->ne[3], x->nb[1], x->nb[2], x->nb[3], 0);
+        // auto tli = ggml_view_4d(ctx, x, x->ne[0]/2, x->ne[1], x->ne[2], x->ne[3], x->nb[1], x->nb[2], x->nb[3], x->nb[0]*x->ne[0]/2);
+        auto tlo = ggml_view_4d(ctx, x, x->ne[0]/2, x->ne[1], x->ne[2], x->ne[3], x->nb[1]/2, x->nb[2]/2, x->nb[3]/2, 0);
+        auto tli = ggml_view_4d(ctx, x, x->ne[0]/2, x->ne[1], x->ne[2], x->ne[3], x->nb[1]/2, x->nb[2]/2, x->nb[3]/2, x->nb[0]*x->ne[0]/2);
+        return {ggml_cont(ctx, tlo),
+                ggml_cont(ctx, tli)};  
+    }
+
+
 struct ggml_cgraph * build_graph(const test_model& model) {
     static size_t buf_size = ggml_tensor_overhead()*GGML_DEFAULT_GRAPH_SIZE + ggml_graph_overhead();
     static std::vector<uint8_t> buf(buf_size);
@@ -161,20 +187,31 @@ struct ggml_cgraph * build_graph(const test_model& model) {
 
     // split conv2d in fundamental methods for test unit
     struct ggml_tensor *a = model.a;
-
-    int64_t offset = a->nb[2] * a->ne[2] / 3;    
-    struct ggml_tensor* half1 = ggml_view_3d(ctx0, a, a->ne[0], a->ne[1], a->ne[2]/3, a->nb[1], a->nb[2], offset * 0);
+    for(int i=0; i < 4; i++){
+        printf("%d, %d \n", a->ne[i], a->nb[i]);
+    }
+    int64_t offset = a->nb[0]*a->ne[0]/2 ;    
+    // struct ggml_tensor* half1 = ggml_view_3d(ctx0, a, a->ne[0]/2, a->ne[1], a->ne[2], 
+    //                            a->nb[1], a->nb[2], offset * 0);
+    std::vector<struct ggml_tensor*> chunks =  chunk_half(ctx0, a);
+    struct ggml_tensor* half1 = chunks[0];
+    a = half1;
+    for(int i=0; i < 4; i++){
+        printf("half1, %d, %d \n", a->ne[i], a->nb[i]);
+    }
     ggml_set_name(half1, "half1_res");
     ggml_build_forward_expand(gf, half1);
 
     // recalculate for avoid fragmentation
-    struct ggml_tensor* half2 = ggml_view_3d(ctx0, a, a->ne[0], a->ne[1], a->ne[2]/3, a->nb[1], a->nb[2], offset * 1);
+    // struct ggml_tensor* half2 = ggml_view_3d(ctx0, a, a->ne[0]/2, a->ne[1], a->ne[2], 
+    //                            a->nb[1], a->nb[2], offset * 1);
+    struct ggml_tensor* half2 = chunks[1];
     ggml_set_name(half2, "half2_res");
     ggml_build_forward_expand(gf, half2);
 
-    struct ggml_tensor* half3 = ggml_view_3d(ctx0, a, a->ne[0], a->ne[1], a->ne[2]/3, a->nb[1], a->nb[2], offset * 2);
-    ggml_set_name(half3, "half3_res");
-    ggml_build_forward_expand(gf, half3);
+    // struct ggml_tensor* half3 = ggml_view_3d(ctx0, a, a->ne[0], a->ne[1], a->ne[2]/3, a->nb[1], a->nb[2], offset * 2);
+    // ggml_set_name(half3, "half3_res");
+    // ggml_build_forward_expand(gf, half3);
 
     struct ggml_tensor *b = model.b;
     int heads = 4;
@@ -190,6 +227,15 @@ struct ggml_cgraph * build_graph(const test_model& model) {
     struct ggml_tensor* y = ggml_soft_max(ctx0, c);
     ggml_set_name(y, "s1_res");
     ggml_build_forward_expand(gf, y);
+
+
+    struct ggml_tensor* xdup = ggml_cont(ctx0, x); 
+    ggml_set_name(xdup, "x1_res");
+    ggml_build_forward_expand(gf, xdup);
+
+    struct ggml_tensor* z = ggml_cont(ctx0, ggml_view_2d(ctx0, c, c->ne[0], c->ne[2], c->nb[2], 0));
+    ggml_set_name(z, "z1_res");
+    ggml_build_forward_expand(gf, z);
 
     ggml_free(ctx0);
     return gf;
@@ -240,6 +286,7 @@ int main(void)
         fprintf(stderr, "%s: compute buffer size: %.2f MB\n", __func__, mem_size/1024.0f/1024.0f);
     }
 
+
     struct ggml_cgraph * gf_res = compute_graph(model, allocr);
 
     struct ggml_tensor * h1_res = NULL;
@@ -247,37 +294,52 @@ int main(void)
     struct ggml_tensor * h3_res = NULL;
     struct ggml_tensor * r1_res = NULL;
     struct ggml_tensor * s1_res = NULL;
+    struct ggml_tensor * x1_res = NULL;
+    struct ggml_tensor * z1_res = NULL;
 
     for(int i = 0; i < gf_res->n_nodes; i++) {
         if(strcmp(ggml_get_name(gf_res->nodes[i]), "half1_res") == 0) {
             h1_res = gf_res->nodes[i];
         } else if(strcmp(ggml_get_name(gf_res->nodes[i]), "half2_res") == 0) {
             h2_res = gf_res->nodes[i];
-        } else if(strcmp(ggml_get_name(gf_res->nodes[i]), "half3_res") == 0) {
-            h3_res = gf_res->nodes[i];
+        // } else if(strcmp(ggml_get_name(gf_res->nodes[i]), "half3_res") == 0) {
+        //     h3_res = gf_res->nodes[i];
         } else if(strcmp(ggml_get_name(gf_res->nodes[i]), "r1_res") == 0) {
             r1_res = gf_res->nodes[i];
         } else if(strcmp(ggml_get_name(gf_res->nodes[i]), "s1_res") == 0) {
             s1_res = gf_res->nodes[i];
+        } else if(strcmp(ggml_get_name(gf_res->nodes[i]), "x1_res") == 0) {
+            x1_res = gf_res->nodes[i];
+        }   else if(strcmp(ggml_get_name(gf_res->nodes[i]), "z1_res") == 0) {
+            z1_res = gf_res->nodes[i];
         }
     }
+
 
     float* h1_data = new float[ggml_nelements(h1_res)];
     float* h2_data = new float[ggml_nelements(h2_res)];
-    float* h3_data = new float[ggml_nelements(h3_res)];
+    // float* h3_data = new float[ggml_nelements(h3_res)];
     float* r1_data = new float[ggml_nelements(r1_res)];
     float* s1_data = new float[ggml_nelements(s1_res)];
+    float* x1_data = new float[ggml_nelements(x1_res)];
+    float* z1_data = new float[ggml_nelements(z1_res)];
 
     ggml_backend_tensor_get(h1_res, h1_data, 0, ggml_nbytes(h1_res));
+
     ggml_backend_tensor_get(h2_res, h2_data, 0, ggml_nbytes(h2_res));
-    ggml_backend_tensor_get(h3_res, h3_data, 0, ggml_nbytes(h3_res));
+
+    // ggml_backend_tensor_get(h3_res, h3_data, 0, ggml_nbytes(h3_res));
     ggml_backend_tensor_get(r1_res, r1_data, 0, ggml_nbytes(r1_res));
     ggml_backend_tensor_get(s1_res, s1_data, 0, ggml_nbytes(s1_res));
+    ggml_backend_tensor_get(x1_res, x1_data, 0, ggml_nbytes(x1_res));
+    ggml_backend_tensor_get(z1_res, z1_data, 0, ggml_nbytes(z1_res));
+    
+    printf("==================\n");
 
-    for(int k = 0; k < 5; k++){
+    for(int k = 0; k < 3; k++){
         for(int j = 0; j < 3; j++){
-            for(int i = 0; i < 3; i++){
-               printf("%f, ", h1_data[i+3*j+k*3*3]);
+            for(int i = 0; i < 5; i++){
+               printf("%f, ", h1_data[i+5*j+k*5*3]);
             }
             printf("\n");
         }
@@ -286,10 +348,10 @@ int main(void)
 
     printf("*************************\n");
 
-    for(int k = 0; k < 5; k++){
+    for(int k = 0; k < 3; k++){
         for(int j = 0; j < 3; j++){
-            for(int i = 0; i < 3; i++){
-               printf("%f, ", h2_data[i+3*j+k*3*3]);
+            for(int i = 0; i < 5; i++){
+               printf("%f, ", h2_data[i+5*j+k*5*3]);
             }
             printf("\n");
         }
@@ -298,29 +360,34 @@ int main(void)
 
     printf("*************************\n");
 
-    for(int k = 0; k < 5; k++){
-        for(int j = 0; j < 3; j++){
-            for(int i = 0; i < 3; i++){
-               printf("%f, ", h3_data[i+3*j+k*3*3]);
-            }
-            printf("\n");
-        }
-        printf("==================\n");
-    }       
+    // for(int k = 0; k < 5; k++){
+    //     for(int j = 0; j < 3; j++){
+    //         for(int i = 0; i < 3; i++){
+    //            printf("%f, ", h3_data[i+3*j+k*3*3]);
+    //         }
+    //         printf("\n");
+    //     }
+    //     printf("==================\n");
+    // }     
 
-    for(int l = 0; l < 2; l++){
-        for(int k = 0; k < 4; k++){
-            for(int j = 0; j < 3; j++){
-                for(int i = 0; i < 3; i++){
-                printf("%f, ", r1_data[i+3*j+k*3*3+l*4*3*3]);
-                }
-                printf("\n");
-            }
-            printf("==================\n");
-        }
-        printf("+++++++++++++++++++++++\n");
+    for(int i = 0; i < ggml_nelements(x1_res); i++){
+           printf("%f, ", x1_data[i]);
+    }  
+    printf("\n");
 
-    }
+    // for(int l = 0; l < 2; l++){
+    //     for(int k = 0; k < 4; k++){
+    //         for(int j = 0; j < 3; j++){
+    //             for(int i = 0; i < 3; i++){
+    //             printf("%f, ", r1_data[i+3*j+k*3*3+l*4*3*3]);
+    //             }
+    //             printf("\n");
+    //         }
+    //         printf("==================\n");
+    //     }
+    //     printf("+++++++++++++++++++++++\n");
+
+    // }
 
 
     for(int k = 0; k < 2; k++){
@@ -332,7 +399,16 @@ int main(void)
         }
         printf("==================\n");
     }
+
+    printf("+++++++++++++++++++++++\n");
     
+        for(int j = 0; j < 2; j++){
+            for(int i = 0; i < 12; i++){
+               printf("%f, ", z1_data[i+12*j]);
+            }
+            printf("\n");
+        }
+    printf("==================\n");
 
     
     ggml_free(model.ctx);

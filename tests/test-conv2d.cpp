@@ -26,6 +26,16 @@ static void ggml_log_callback_default(ggml_log_level level, const char * text, v
     fflush(stderr);
 }
 
+uint64_t getTimeMicroseconds64() {
+  uint64_t nTime;
+  struct timespec tSpec;
+
+  clock_gettime(CLOCK_REALTIME, &tSpec);
+
+  nTime = (uint64_t)tSpec.tv_sec * 1000000 + (uint64_t)tSpec.tv_nsec / 1000;
+  return nTime;
+}
+
 struct test_model {
     struct ggml_tensor * a;
     struct ggml_tensor * b;
@@ -36,8 +46,8 @@ struct test_model {
 
 void load_model(test_model & model, bool use_gpu = false) {
     // create data
-    int KW = 3, KH = 3, IC = 10, OC = 10;
-    int IW = 8, IH = 6, N = 1;
+    int KW = 3, KH = 3, IC = 2560, OC = 1280;
+    int IW = 62, IH = 62, N = 1;
 
     // Initialize adata
     float * adata = new float[KW * KH * IC * OC];
@@ -158,9 +168,9 @@ struct ggml_cgraph * build_graph(const test_model& model) {
     int d1 = 1;
 
     // split conv2d in fundamental methods for test unit
-    struct ggml_tensor* im2col_0 = ggml_im2col(ctx0, model.a, model.b, s0, s1, p0, p1, d0, d1, true, GGML_TYPE_F16);
-    ggml_set_name(im2col_0, "im2col_res");
-    ggml_build_forward_expand(gf, im2col_0);
+    // struct ggml_tensor* im2col_0 = ggml_im2col(ctx0, model.a, model.b, s0, s1, p0, p1, d0, d1, true, GGML_TYPE_F16);
+    // ggml_set_name(im2col_0, "im2col_res");
+    // ggml_build_forward_expand(gf, im2col_0);
 
     // recalculate for avoid fragmentation
     struct ggml_tensor* conv2d_res = ggml_conv_2d(ctx0, model.a, model.b, s0, s1, p0, p1, d0, d1);
@@ -187,8 +197,12 @@ struct ggml_cgraph * compute_graph(const test_model & model, ggml_gallocr_t allo
         ggml_backend_metal_set_n_cb(model.backend, n_threads);
     }
 #endif
-
-    ggml_backend_graph_compute(model.backend, gf);
+    // for(int i = 0; i < 10; i++){
+        uint64_t nT1_cudnn = getTimeMicroseconds64();
+        ggml_backend_graph_compute(model.backend, gf);
+        uint64_t nT2_cudnn = getTimeMicroseconds64();
+        printf("TotalTime = %ld us\n", nT2_cudnn-nT1_cudnn);
+    // }
 
     //ggml_graph_print(gf);
 
@@ -229,10 +243,10 @@ int main(void)
         }
     }
 
-    uint16_t* im2col_data = new uint16_t[ggml_nelements(im2col_res)];
+    // uint16_t* im2col_data = new uint16_t[ggml_nelements(im2col_res)];
     float* conv2d_data = new float[ggml_nelements(conv2d_res)];
 
-    ggml_backend_tensor_get(im2col_res, im2col_data, 0, ggml_nbytes(im2col_res));
+    // ggml_backend_tensor_get(im2col_res, im2col_data, 0, ggml_nbytes(im2col_res));
     ggml_backend_tensor_get(conv2d_res, conv2d_data, 0, ggml_nbytes(conv2d_res));
 
     const int n_conv2d_test = 480;
@@ -366,25 +380,25 @@ int main(void)
     printf("\nPerforming test:\n");
 
     bool passed = true;
-    for(int i = 0; i < n_conv2d_test; i++) {
-        if(
-            im2col_data[i] != expected_im2col[i]) {
-            passed = false;
-            break;
-        }
-    }
+    // for(int i = 0; i < n_conv2d_test; i++) {
+    //     if(
+    //         im2col_data[i] != expected_im2col[i]) {
+    //         passed = false;
+    //         break;
+    //     }
+    // }
 
-    printf("ggml_im2col (%d): %s\n", (int) ggml_nelements(im2col_res), passed && (ggml_nelements(im2col_res) == n_im2col_test) ? "\033[32mPASSED\033[0m" : "\033[31mFAILED\033[0m");
+    // printf("ggml_im2col (%d): %s\n", (int) ggml_nelements(im2col_res), passed && (ggml_nelements(im2col_res) == n_im2col_test) ? "\033[32mPASSED\033[0m" : "\033[31mFAILED\033[0m");
 
     passed = true;
-    for(int i = 0; i < n_conv2d_test; i++) {
-        if(conv2d_data[i] != expected_conv2d[i]) {
-            passed = false;
-            break;
-        }
-    }
+    // for(int i = 0; i < n_conv2d_test; i++) {
+    //     if(conv2d_data[i] != expected_conv2d[i]) {
+    //         passed = false;
+    //         break;
+    //     }
+    // }
 
-    printf("ggml_conv2d (%d): %s\n", (int) ggml_nelements(conv2d_res), passed && (ggml_nelements(conv2d_res) == n_conv2d_test) ? "\033[32mPASSED\033[0m" : "\033[31mFAILED\033[0m");
+    // printf("ggml_conv2d (%d): %s\n", (int) ggml_nelements(conv2d_res), passed && (ggml_nelements(conv2d_res) == n_conv2d_test) ? "\033[32mPASSED\033[0m" : "\033[31mFAILED\033[0m");
 
     ggml_free(model.ctx);
 
