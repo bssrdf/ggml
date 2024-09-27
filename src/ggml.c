@@ -2825,6 +2825,8 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "TIMESTEP_EMBEDDING",
     "ARGSORT",
     "LEAKY_RELU",
+    "WINOGRAD_STAGE0",
+    "WINOGRAD_STAGE1",
 
     "FLASH_ATTN_EXT",
     "FLASH_ATTN_BACK",
@@ -2852,7 +2854,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "CROSS_ENTROPY_LOSS_BACK",
 };
 
-static_assert(GGML_OP_COUNT == 78, "GGML_OP_COUNT != 78");
+static_assert(GGML_OP_COUNT == 80, "GGML_OP_COUNT != 80");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -2917,6 +2919,8 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "timestep_embedding(timesteps, dim, max_period)",
     "argsort(x)",
     "leaky_relu(x)",
+    "winograd_stage0(x)",
+    "winograd_stage1(x)",
 
     "flash_attn_ext(x)",
     "flash_attn_back(x)",
@@ -2944,7 +2948,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "cross_entropy_loss_back(x,y)",
 };
 
-static_assert(GGML_OP_COUNT == 78, "GGML_OP_COUNT != 78");
+static_assert(GGML_OP_COUNT == 80, "GGML_OP_COUNT != 80");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -6962,6 +6966,72 @@ struct ggml_tensor * ggml_conv_transpose_2d_p0(
 
     return result;
 }
+
+// ggml_winograd
+
+// a: [OC，IC, 3, 3]
+// result: [OC, IC, 16]
+struct ggml_tensor * ggml_winograd_stage0(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a) {
+    bool is_node = false;
+ 
+    if (a->grad) {
+        is_node = true;
+    }
+
+    struct ggml_tensor * result = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, a->ne[0], 4, 4, a->ne[3]);
+
+    result->op   = GGML_OP_WINOGRAD_STAGE0;
+    result->grad = is_node ? ggml_dup_tensor(ctx, result) : NULL;
+    result->src[0] = a;
+
+    return result;
+}
+
+// ggml_winograd
+// a: [OC, IC, 4, 4]
+// b: [1, IC, IH, IW]
+// result: [N, OC, OH, OW]
+struct ggml_tensor * ggml_winograd_stage1(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * b) {
+    bool is_node = false;
+    if (a->grad) {
+        is_node = true;
+    }
+
+    int OW = b->ne[0];
+    int OH = b->ne[1];
+    struct ggml_tensor * result = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, OW, OH, a->ne[0] /* OC */, 1);
+
+    result->op   = GGML_OP_WINOGRAD_STAGE1;
+    result->grad = is_node ? ggml_dup_tensor(ctx, result) : NULL;
+    result->src[0] = a;
+    result->src[1] = b;
+
+    return result;
+}
+
+struct ggml_tensor * ggml_conv_2d_3x3(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * b){
+    GGML_ASSERT(a->ne[0] == 3 && a->ne[1] == 3); // kernel should be 3x3
+    GGML_ASSERT(b->ne[3] == 1); // only works for 1 input image
+    GGML_ASSERT(b->ne[2] == a->ne[2]); // number of channels must match
+    if(a->ne[3] % 64 != 0 || a->ne[2] % 8 != 0)            // only works for the number of filters is a multiple of 64
+        return ggml_conv_2d(ctx, a, b, 1, 1, 1, 1, 1, 1);  // and the number of channels is a multiple of 8
+
+    struct ggml_tensor* ra =  ggml_cont(ctx, ggml_permute(ctx, a, 1, 2, 3, 0)); // [N, OC, OH, OW]
+    struct ggml_tensor* W = ggml_winograd_stage0(ctx, ra);
+    struct ggml_tensor * result = ggml_winograd_stage1(ctx, W, b);
+
+    return result;
+
+}
+
 
 // ggml_pool_*
 
@@ -14768,6 +14838,23 @@ static void ggml_compute_forward_conv_transpose_1d(
     }
 }
 
+static void ggml_compute_forward_winograd_stage0(
+        const struct ggml_compute_params * params,
+              struct ggml_tensor * dst) {
+
+    GGML_ASSERT(false && " CPU backend not implemented!");         
+    return;
+}
+
+static void ggml_compute_forward_winograd_stage1(
+        const struct ggml_compute_params * params,
+              struct ggml_tensor * dst) {
+
+    GGML_ASSERT(false && " CPU backend not implemented!");         
+    return;
+}
+
+
 // ggml_compute_forward_im2col_f32
 // src0: kernel [OC, IC, KH, KW]
 // src1: image [N, IC, IH, IW]
@@ -17282,6 +17369,14 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 ggml_compute_forward_conv_transpose_1d(params, tensor);
             } break;
+        case GGML_OP_WINOGRAD_STAGE0:
+            {
+                ggml_compute_forward_winograd_stage0(params, tensor);
+            } break;
+        case GGML_OP_WINOGRAD_STAGE1:
+            {
+                ggml_compute_forward_winograd_stage1(params, tensor);
+            } break;
         case GGML_OP_IM2COL:
             {
                 ggml_compute_forward_im2col(params, tensor);
@@ -18299,6 +18394,14 @@ static void ggml_compute_backward(struct ggml_context * ctx, struct ggml_tensor 
             {
                 GGML_ABORT("fatal error"); // TODO: not implemented
             }
+        case GGML_OP_WINOGRAD_STAGE0:
+            {
+                GGML_ABORT("fatal error"); // TODO: not implemented
+            }
+        case GGML_OP_WINOGRAD_STAGE1:
+            {
+                GGML_ABORT("fatal error"); // TODO: not implemented
+            }    
         case GGML_OP_POOL_1D:
             {
                 GGML_ABORT("fatal error"); // TODO: not implemented
