@@ -248,7 +248,7 @@ float4 *input_frag_mem, float4* filter_frag_mem){
   
   float2 *output_smem = (float2 *) shared_mem;
   float2 *accumulator = (float2 *) acumm_smem;
-  float2 *C_out = (float2*)C;
+  // float2 *C_out = (float2*)C;
 
   float2 *C_tile = (float2*) input_frag_mem;
   float2 *At = (float2*) filter_frag_mem;
@@ -295,12 +295,11 @@ float4 *input_frag_mem, float4* filter_frag_mem){
   //               blockIdx.x*BN + (threadIdx.x%16)*2+
   //               ((threadIdx.x/16)*16 + (threadIdx.y%4)*4 + threadIdx.y/4)*c_glb_offset;
 
-  int tx = TW, ty = TH;  
   // int c_tile = blockIdx.x * tx  + blockIdx.y * in_w * ty; 
   // int c_tensor = c_tile + (threadIdx.x % tw) * 2 + (threadIdx.x / tw) * in_w * 2 + 
   //               threadIdx.y*(in_h*in_w) - (in_w+1);
 
-  int c_tensor = blockIdx.z*c_glb_offset*BK + blockIdx.x * tx  + blockIdx.y * out_w * ty +
+  int c_tensor = blockIdx.z*c_glb_offset*BK + blockIdx.x * TW  + blockIdx.y * out_w * TH +
                 //  (threadIdx.x % tw) * 2 + (threadIdx.x / tw) * out_w * 2 + 
                  ((threadIdx.x/16)*16 + (threadIdx.y%4)*4 + threadIdx.y/4)*c_glb_offset;
 
@@ -402,8 +401,11 @@ __device__ float f_row1(float *G, int j){
     int Inx = threadIdx.x, Iny = threadIdx.y;
     int TileX = blockIdx.x, TileY = blockIdx.y;
   
-    int c_glb_offset = filt_k*filt_h*filt_w;
-    int c_kernel = TileY*BC*c_glb_offset + TileX*BK + Iny*c_glb_offset + Inx;
+    // int c_glb_offset = filt_k*filt_h*filt_w;
+    // int c_kernel = TileY*BC*c_glb_offset + TileX*BK + Iny*c_glb_offset + Inx;
+    int c_glb_offset = filt_h*filt_w;
+    // int c_kernel = TileY*BC*c_glb_offset + TileX*BK*filt_c*c_glb_offset + Iny*c_glb_offset+ Inx*filt_c*c_glb_offset;
+    int c_kernel = (TileY*BC + (TileX*BK+Inx)*filt_c + Iny)*c_glb_offset;
     int c_glb_offset_s = filt_k*4*4;
     int c_kernel_s = TileY*BC*c_glb_offset_s + TileX*BK + Iny*c_glb_offset_s + Inx;
   
@@ -418,7 +420,7 @@ __device__ float f_row1(float *G, int j){
       //   printf("[");
       // }
       for(int i=0; i<9; i++){
-        Gw[i] = t2f32(pInputs[c_kernel + i*filt_k]);
+        Gw[i] = t2f32(pInputs[c_kernel + i]);
         // if(blockIdx.x == 0 && blockIdx.y == 0 && Inx == 0 && Iny == 0){
         //     printf("(%f,%d) ", Gw[i], c_kernel + i*filt_k); 
         // }
@@ -450,7 +452,7 @@ __device__ float f_row1(float *G, int j){
         }
       }
   
-      c_kernel   += blockDim.x;
+      c_kernel   += blockDim.x*(filt_c*c_glb_offset);
       c_kernel_s += blockDim.x;
     }
   }
@@ -753,11 +755,7 @@ static void conv_winograd_stage0_f32_cuda(
         const T * src0, float * dst,
         cudaStream_t stream) {
 
-    
-    int64_t filt_k = src0_ne0;
-    int64_t filt_c = src0_ne3;
-
-    FX<<<dim3(filt_k/BK, filt_c/BC), dim3(32, BC), 0, stream>>>(src0, dst, filt_k, filt_c, src0_ne2, src0_ne1);
+    FX<<<dim3(src0_ne3/BK, src0_ne2/BC), dim3(32, BC), 0, stream>>>(src0, dst, src0_ne3, src0_ne2, src0_ne1, src0_ne0);
     
 }
 
@@ -779,12 +777,9 @@ static void conv_winograd_stage1_f32_f32_cuda(int tiles_dim_w, int tiles_dim_h, 
     int64_t out_w  = in_w;
     int smem_size = (16*BN*BC + 16*BC*BK)*4;
 
-    // printf("A %d, %d\n", filt_k, filt_c);
-    // printf("B %d, %d, %d \n", in_c, in_h, in_w);
-    // printf("C %d, %d, %d \n", out_c, out_h, out_w);
-
     Winograd_kernel<<<dim3((tiles_dim_w+X-1)/X, (tiles_dim_h+Y-1)/Y, filt_k/BK), dim3(BN, 8), smem_size, stream>>>(src1, src0, dst,
-     tiles_dim_w, tiles_dim_h, in_c, in_h, in_w, tile_size, X, Y, filt_k, filt_c, out_c, tile_2d_s, out_h, out_w);    
+               tiles_dim_w, tiles_dim_h, in_c, in_h, in_w, tile_size, X, Y, 
+               filt_k, filt_c, out_c, tile_2d_s, out_h, out_w);    
 }
 
 
