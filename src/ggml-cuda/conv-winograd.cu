@@ -166,8 +166,8 @@ __device__ void __inline__ outer_product(float4* input_frag, float4* filter_frag
     accumulator[1][15].w += input_frag[3].w*filter_frag[3].w;
   }
 
-extern "C"
-{
+// extern "C"
+// {
 
 __device__ __forceinline__ void  transform_output_tile(float *pOutputs, float2 *C_tile, float2 *At, 
     int round, int c_tensor, int c_glb_offset, int i1, int i2,
@@ -356,35 +356,46 @@ float4 *input_frag_mem, float4* filter_frag_mem){
 
 
 // Set of functions per row in Gw product
-__device__ float f_row1(float *Gw, int j){
-    return Gw[j];
+__device__ float f_row1(float *G, int j){
+    return G[j];
   }
-  __device__ float f_row2(float *Gw, int j){
-    return 0.5*(Gw[j] + Gw[6+j] + Gw[3+j]);
+  __device__ float f_row2(float *G, int j){
+    return 0.5*(G[j] + G[6+j] + G[3+j]);
   }
-  __device__ float f_row3(float *Gw, int j){
-    return 0.5*(Gw[j] + Gw[6+j] - Gw[3+j]);
+  __device__ float f_row3(float *G, int j){
+    return 0.5*(G[j] + G[6+j] - G[3+j]);
   }
-  __device__ float f_row4(float *Gw, int j){
-    return Gw[6+j];
+  __device__ float f_row4(float *G, int j){
+    return G[6+j];
   }
   // Set of functions per column in GwGt product
-  __device__ float f_col1(float *Gw, int j){
-    return Gw[j];
+  __device__ float f_col1(float *G, int j){
+    return G[j];
   }
-  __device__ float f_col2(float *Gw, int j){
-    return 0.5*(Gw[j] + Gw[j+2] + Gw[j+1]);
+  __device__ float f_col2(float *G, int j){
+    return 0.5*(G[j] + G[j+2] + G[j+1]);
   }
-  __device__ float f_col3(float *Gw, int j){
-    return 0.5*(Gw[j] + Gw[j+2] - Gw[j+1]);
+  __device__ float f_col3(float *G, int j){
+    return 0.5*(G[j] + G[j+2] - G[j+1]);
   }
-  __device__ float f_col4(float *Gw, int j){
-    return Gw[j+2];
+  __device__ float f_col4(float *G, int j){
+    return G[j+2];
   }
-  
+
+  template <typename T>
+  static __device__ __forceinline__ float t2f32(T val) {
+      return (float) val;
+  }
+
+  template <>
+  __device__ float __forceinline__ t2f32<half>(half val) {
+      return __half2float(val);
+  }
+
   typedef float(*pointFunction_t)(float *, int);
-  
-  __global__ void FX(const float *pInputs, float *pOutputs, int filt_k, 
+
+  template<typename T>
+  __global__ void FX(const T *pInputs, float *pOutputs, int filt_k, 
                       int filt_c, int filt_h, int filt_w){
 
     // assumes CHWK layout                    
@@ -403,9 +414,18 @@ __device__ float f_row1(float *Gw, int j){
     pointFunction_t func2[4] = {f_col1, f_col2, f_col3, f_col4};
   
     for(int bk=0; bk<BK; bk+=blockDim.x){
+      // if(blockIdx.x == 0 && blockIdx.y == 0 && Inx == 0 && Iny == 0){
+      //   printf("[");
+      // }
       for(int i=0; i<9; i++){
-        Gw[i] = pInputs[c_kernel + i*filt_k];
+        Gw[i] = t2f32(pInputs[c_kernel + i*filt_k]);
+        // if(blockIdx.x == 0 && blockIdx.y == 0 && Inx == 0 && Iny == 0){
+        //     printf("(%f,%d) ", Gw[i], c_kernel + i*filt_k); 
+        // }
       }
+      // if(blockIdx.x == 0 && blockIdx.y == 0 && Inx == 0 && Iny == 0){
+      //   printf("]\n");
+      // }
   
       int aux;
       for(int i=0; i<4; i++){
@@ -414,6 +434,13 @@ __device__ float f_row1(float *Gw, int j){
           Gw_buffer[j+aux] = (*func1[i])(Gw, j);
         }
       }
+      // if(blockIdx.x == 0 && blockIdx.y == 0 && Inx == 0 && Iny == 0){
+      //   printf("X[");
+      //   for(int kk = 0; kk < 21; kk++){
+      //     printf("%f, ", Gw[kk]);
+      //   } 
+      //   printf("]\n");
+      // }
   
       int aux2;
       for(int i=0; i<4; i++){
@@ -717,20 +744,20 @@ cudaError_t convolutionForward_32Tx64x8(float *k, int in_h, int in_w, float *w, 
   return cudaGetLastError();
 }
 
-}
+// }
 
-
-static void conv_winograd_stage0_f32_f32_cuda(        
+template<typename T>
+static void conv_winograd_stage0_f32_cuda(        
         const int src0_ne0, const int src0_ne1, const int src0_ne2, const int src0_ne3,        
         const int dst_ne0, const int dst_ne1, const int dst_ne2, const int dst_ne3,
-        const float * src0, float * dst,
+        const T * src0, float * dst,
         cudaStream_t stream) {
 
     
     int64_t filt_k = src0_ne0;
     int64_t filt_c = src0_ne3;
 
-    FX<<<dim3(filt_k/BK, filt_c/BC), dim3(32, BC)>>>(src0, dst, filt_k, filt_c, src0_ne2, src0_ne1);
+    FX<<<dim3(filt_k/BK, filt_c/BC), dim3(32, BC), 0, stream>>>(src0, dst, filt_k, filt_c, src0_ne2, src0_ne1);
     
 }
 
@@ -756,38 +783,47 @@ static void conv_winograd_stage1_f32_f32_cuda(int tiles_dim_w, int tiles_dim_h, 
     // printf("B %d, %d, %d \n", in_c, in_h, in_w);
     // printf("C %d, %d, %d \n", out_c, out_h, out_w);
 
-    Winograd_kernel<<<dim3((tiles_dim_w+X-1)/X, (tiles_dim_h+Y-1)/Y, filt_k/BK), dim3(BN, 8), smem_size>>>(src1, src0, dst,
+    Winograd_kernel<<<dim3((tiles_dim_w+X-1)/X, (tiles_dim_h+Y-1)/Y, filt_k/BK), dim3(BN, 8), smem_size, stream>>>(src1, src0, dst,
      tiles_dim_w, tiles_dim_h, in_c, in_h, in_w, tile_size, X, Y, filt_k, filt_c, out_c, tile_2d_s, out_h, out_w);    
 }
 
 
 void ggml_cuda_op_winograd_stage0(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
-    // const half * src0_d = (const float *)src0->data;
+    // const half * src0_d = (const half *)src0->data;
     
     float * dst_d = (float *)dst->data;
     cudaStream_t stream = ctx.stream();
-    int id = ggml_cuda_get_device();
+    // int id = ggml_cuda_get_device();
 
     // GGML_ASSERT(src0->type == GGML_TYPE_F16);
     GGML_ASSERT( dst->type == GGML_TYPE_F32);
 
-    ggml_cuda_pool_alloc<float> src0_ddq_as_f32(ctx.pool(id));
-    if (src0->type != GGML_TYPE_F32) {
-        const to_fp32_cuda_t to_fp32_cuda = ggml_get_to_fp32_cuda(src0->type);
-        GGML_ASSERT(to_fp32_cuda != nullptr);
-        int64_t nle = ggml_nelements(src0);
-        src0_ddq_as_f32.alloc(nle);
-        const half * src0_dd = (const half *)src0->data;
-        to_fp32_cuda(src0_dd, src0_ddq_as_f32.get(), nle, stream);
-    }
+    // ggml_cuda_pool_alloc<float> src0_ddq_as_f32(ctx.pool(id));
+    // if (src0->type != GGML_TYPE_F32) {
+    //     const to_fp32_cuda_t to_fp32_cuda = ggml_get_to_fp32_cuda(src0->type);
+    //     GGML_ASSERT(to_fp32_cuda != nullptr);
+    //     int64_t nle = ggml_nelements(src0);
+    //     src0_ddq_as_f32.alloc(nle);
+    //     const char * src0_dd = (char *)src0->data;
+    //     to_fp32_cuda(src0_dd, src0_ddq_as_f32.get(), nle, stream);
+    // }
 
-    // GGML_ASSERT(ggml_is_contiguous(src0));
-    const float * src0_ddf_i = src0->type == GGML_TYPE_F32 ? (const float *)src0->data : src0_ddq_as_f32.get();
-    
-    conv_winograd_stage0_f32_f32_cuda(src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3],
-        dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3],
-        src0_ddf_i, dst_d, stream);
+    // // GGML_ASSERT(ggml_is_contiguous(src0));
+    // const float * src0_ddf_i = src0->type == GGML_TYPE_F32 ? (const float *)src0->data : src0_ddq_as_f32.get();
+    if(src0->type == GGML_TYPE_F32){
+      const float* src0_d = (const float *)src0->data;
+      // conv_winograd_stage0_f32_f32_cuda(src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3],
+      conv_winograd_stage0_f32_cuda(src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3],
+          dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3],
+           src0_d, dst_d, stream);    
+    }else{
+      const half * src0_d = (const half *)src0->data;
+      // conv_winograd_stage0_f16_f32_cuda(src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3],
+      conv_winograd_stage0_f32_cuda(src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3],
+          dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3],
+           src0_d, dst_d, stream);    
+    }
 }
 
 
@@ -822,13 +858,14 @@ void ggml_cuda_op_winograd_stage1(ggml_backend_cuda_context & ctx, ggml_tensor *
     cudaMemcpyToSymbol(access_f_s, aux, 64*sizeof(int));
     cudaMemcpyToSymbol(access_s, aux2, 64*sizeof(int));  
     cudaMemcpyToSymbol(tileid, tid, 64*sizeof(int));
-    // printf(" %d, %d, %d \n", tiles_dim_w, tiles_dim_h, tile_size);
+
     conv_winograd_stage1_f32_f32_cuda(tiles_dim_w, tiles_dim_h, 4, 8, 
         tile_size, tile_2d_s,
         src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3],
         src1->ne[0], src1->ne[1], src1->ne[2], src1->ne[3],
         dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3],
         src0_d, src1_d, dst_d, stream);
+    
 }
 
 
