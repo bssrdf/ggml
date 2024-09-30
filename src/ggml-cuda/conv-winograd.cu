@@ -738,7 +738,7 @@ static void conv_winograd_stage0_f32_cuda(
         const int dst_ne0, const int dst_ne1, const int dst_ne2, const int dst_ne3,
         const T * src0, float * dst,
         cudaStream_t stream) {
-
+    // printf("doing FX\n");
     FX<<<dim3(src0_ne3/BK, src0_ne2/BC), dim3(32, BC), 0, stream>>>(src0, dst, src0_ne3, src0_ne2, src0_ne1, src0_ne0);
     
 }
@@ -770,7 +770,9 @@ static void conv_winograd_stage1_f32_f32_cuda(int tiles_dim_w, int tiles_dim_h, 
 void ggml_cuda_op_winograd_stage0(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
     // const half * src0_d = (const half *)src0->data;
-    
+    if(src0 == NULL){
+        return;
+    }
     float * dst_d = (float *)dst->data;
     cudaStream_t stream = ctx.stream();
     // int id = ggml_cuda_get_device();
