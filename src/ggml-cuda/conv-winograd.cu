@@ -1,6 +1,7 @@
 #include "conv-winograd.cuh"
 #include "convert.cuh"
 
+#if 0
 __device__ void __inline__ outer_product(float4* input_frag, float4* filter_frag, float4 accumulator[][16]){
     accumulator[0][0].x += input_frag[0].x*filter_frag[0].x;
     accumulator[0][0].y += input_frag[0].y*filter_frag[0].x;
@@ -164,6 +165,172 @@ __device__ void __inline__ outer_product(float4* input_frag, float4* filter_frag
     accumulator[1][15].y += input_frag[3].y*filter_frag[3].w;                                    
     accumulator[1][15].z += input_frag[3].z*filter_frag[3].w;                                    
     accumulator[1][15].w += input_frag[3].w*filter_frag[3].w;
+  }
+#endif
+
+template<typename T>
+__device__ void __inline__ outer_product(float4* input_frag, float4* filter_frag, float4 accumulator_in[][16]){
+    T *accumulator = (T *)accumulator_in;
+    T *x           = (T *)input_frag;
+    T *y           = (T *)filter_frag;
+
+    *(accumulator)        += (*(x+0)) * (*y);
+    *(accumulator+1)      += (*(x+1)) * (*(y));
+    *(accumulator+2)      += (*(x+2)) * (*(y));
+    *(accumulator+3)      += (*(x+3)) * (*(y));
+
+    *(accumulator+4)      += (*(x+4)) * (*(y));
+    *(accumulator+5)      += (*(x+5)) * (*(y));
+    *(accumulator+6)      += (*(x+6)) * (*(y));
+    *(accumulator+7)      += (*(x+7)) * (*(y));
+
+    *(accumulator+8)      += (*(x+0)) * (*(y+1));
+    *(accumulator+9)      += (*(x+1)) * (*(y+1));
+    *(accumulator+10)      += (*(x+2)) * (*(y+1));
+    *(accumulator+11)      += (*(x+3)) * (*(y+1));
+
+    *(accumulator+12)      += (*(x+4)) * (*(y+1));
+    *(accumulator+13)      += (*(x+5)) * (*(y+1));
+    *(accumulator+14)      += (*(x+6)) * (*(y+1));
+    *(accumulator+15)      += (*(x+7)) * (*(y+1));
+
+    *(accumulator+16)      += (*(x+0)) * (*(y+2));
+    *(accumulator+17)      += (*(x+1)) * (*(y+2));
+    *(accumulator+18)      += (*(x+2)) * (*(y+2));
+    *(accumulator+19)      += (*(x+3)) * (*(y+2));
+
+    *(accumulator+20)      += (*(x+4)) * (*(y+2));
+    *(accumulator+21)      += (*(x+5)) * (*(y+2));
+    *(accumulator+22)      += (*(x+6)) * (*(y+2));
+    *(accumulator+23)      += (*(x+7)) * (*(y+2));
+
+    *(accumulator+24)      += (*(x+0)) * (*(y+3));
+    *(accumulator+25)      += (*(x+1)) * (*(y+3));
+    *(accumulator+26)      += (*(x+2)) * (*(y+3));
+    *(accumulator+27)      += (*(x+3)) * (*(y+3));
+
+    *(accumulator+28)      += (*(x+4)) * (*(y+3));
+    *(accumulator+29)      += (*(x+5)) * (*(y+3));
+    *(accumulator+30)      += (*(x+6)) * (*(y+3));
+    *(accumulator+31)      += (*(x+7)) * (*(y+3));
+
+   //
+    *(accumulator+32)      += (*(x+0)) * (*(y+4));
+    *(accumulator+33)      += (*(x+1)) * (*(y+4));
+    *(accumulator+34)      += (*(x+2)) * (*(y+4));
+    *(accumulator+35)      += (*(x+3)) * (*(y+4));
+
+    *(accumulator+36)      += (*(x+4)) * (*(y+4));
+    *(accumulator+37)      += (*(x+5)) * (*(y+4));
+    *(accumulator+38)      += (*(x+6)) * (*(y+4));
+    *(accumulator+39)      += (*(x+7)) * (*(y+4));
+
+    *(accumulator+40)      += (*(x+0)) * (*(y+5));
+    *(accumulator+41)      += (*(x+1)) * (*(y+5));
+    *(accumulator+42)      += (*(x+2)) * (*(y+5));
+    *(accumulator+43)      += (*(x+3)) * (*(y+5));
+
+    *(accumulator+44)      += (*(x+4)) * (*(y+5));
+    *(accumulator+45)      += (*(x+5)) * (*(y+5));
+    *(accumulator+46)      += (*(x+6)) * (*(y+5));
+    *(accumulator+47)      += (*(x+7)) * (*(y+5));
+
+    *(accumulator+48)      += (*(x+0)) * (*(y+6));
+    *(accumulator+49)      += (*(x+1)) * (*(y+6));
+    *(accumulator+50)      += (*(x+2)) * (*(y+6));
+    *(accumulator+51)      += (*(x+3)) * (*(y+6));
+
+    *(accumulator+52)      += (*(x+4)) * (*(y+6));
+    *(accumulator+53)      += (*(x+5)) * (*(y+6));
+    *(accumulator+54)      += (*(x+6)) * (*(y+6));
+    *(accumulator+55)      += (*(x+7)) * (*(y+6));
+
+    *(accumulator+56)      += (*(x+0)) * (*(y+7));
+    *(accumulator+57)      += (*(x+1)) * (*(y+7));
+    *(accumulator+58)      += (*(x+2)) * (*(y+7));
+    *(accumulator+59)      += (*(x+3)) * (*(y+7));
+
+    *(accumulator+60)      += (*(x+4)) * (*(y+7));
+    *(accumulator+61)      += (*(x+5)) * (*(y+7));
+    *(accumulator+62)      += (*(x+6)) * (*(y+7));
+    *(accumulator+63)      += (*(x+7)) * (*(y+7));
+
+    //////
+
+    *(accumulator+64)      += (*(x+8)) * (*(y+8));
+    *(accumulator+65)      += (*(x+9)) * (*(y+8));
+    *(accumulator+66)      += (*(x+10)) * (*(y+8));
+    *(accumulator+67)      += (*(x+11)) * (*(y+8));
+    *(accumulator+68)      += (*(x+12)) * (*(y+8));
+    *(accumulator+69)      += (*(x+13)) * (*(y+8));
+    *(accumulator+70)      += (*(x+14)) * (*(y+8));
+    *(accumulator+71)      += (*(x+15)) * (*(y+8));
+
+    *(accumulator+72)      += (*(x+8)) * (*(y+9));
+    *(accumulator+73)      += (*(x+9)) * (*(y+9));
+    *(accumulator+74)      += (*(x+10)) * (*(y+9));
+    *(accumulator+75)      += (*(x+11)) * (*(y+9));
+    *(accumulator+76)      += (*(x+12)) * (*(y+9));
+    *(accumulator+77)      += (*(x+13)) * (*(y+9));
+    *(accumulator+78)      += (*(x+14)) * (*(y+9));
+    *(accumulator+79)      += (*(x+15)) * (*(y+9));
+
+    *(accumulator+80)      += (*(x+8)) * (*(y+10));
+    *(accumulator+81)      += (*(x+9)) * (*(y+10));
+    *(accumulator+82)      += (*(x+10)) * (*(y+10));
+    *(accumulator+83)      += (*(x+11)) * (*(y+10));
+    *(accumulator+84)      += (*(x+12)) * (*(y+10));
+    *(accumulator+85)      += (*(x+13)) * (*(y+10));
+    *(accumulator+86)      += (*(x+14)) * (*(y+10));
+    *(accumulator+87)      += (*(x+15)) * (*(y+10));
+
+    *(accumulator+88)      += (*(x+8)) * (*(y+11));
+    *(accumulator+89)      += (*(x+9)) * (*(y+11));
+    *(accumulator+90)      += (*(x+10)) * (*(y+11));
+    *(accumulator+91)      += (*(x+11)) * (*(y+11));
+    *(accumulator+92)      += (*(x+12)) * (*(y+11));
+    *(accumulator+93)      += (*(x+13)) * (*(y+11));
+    *(accumulator+94)      += (*(x+14)) * (*(y+11));
+    *(accumulator+95)      += (*(x+15)) * (*(y+11));
+  
+    //
+
+    *(accumulator+96)      += (*(x+8)) * (*(y+12));
+    *(accumulator+97)      += (*(x+9)) * (*(y+12));
+    *(accumulator+98)      += (*(x+10)) * (*(y+12));
+    *(accumulator+99)      += (*(x+11)) * (*(y+12));
+    *(accumulator+100)      += (*(x+12)) * (*(y+12));
+    *(accumulator+101)      += (*(x+13)) * (*(y+12));
+    *(accumulator+102)      += (*(x+14)) * (*(y+12));
+    *(accumulator+103)      += (*(x+15)) * (*(y+12));
+
+    *(accumulator+104)      += (*(x+8)) * (*(y+13));
+    *(accumulator+105)      += (*(x+9)) * (*(y+13));
+    *(accumulator+106)      += (*(x+10)) * (*(y+13));
+    *(accumulator+107)      += (*(x+11)) * (*(y+13));
+    *(accumulator+108)      += (*(x+12)) * (*(y+13));
+    *(accumulator+109)      += (*(x+13)) * (*(y+13));
+    *(accumulator+110)      += (*(x+14)) * (*(y+13));
+    *(accumulator+111)      += (*(x+15)) * (*(y+13));
+
+    *(accumulator+112)      += (*(x+8)) * (*(y+14));
+    *(accumulator+113)      += (*(x+9)) * (*(y+14));
+    *(accumulator+114)      += (*(x+10)) * (*(y+14));
+    *(accumulator+115)      += (*(x+11)) * (*(y+14));
+    *(accumulator+116)      += (*(x+12)) * (*(y+14));
+    *(accumulator+117)      += (*(x+13)) * (*(y+14));
+    *(accumulator+118)      += (*(x+14)) * (*(y+14));
+    *(accumulator+119)      += (*(x+15)) * (*(y+14));
+
+    *(accumulator+120)      += (*(x+8)) * (*(y+15));
+    *(accumulator+121)      += (*(x+9)) * (*(y+15));
+    *(accumulator+122)      += (*(x+10)) * (*(y+15));
+    *(accumulator+123)      += (*(x+11)) * (*(y+15));
+    *(accumulator+124)      += (*(x+12)) * (*(y+15));
+    *(accumulator+125)      += (*(x+13)) * (*(y+15));
+    *(accumulator+126)      += (*(x+14)) * (*(y+15));
+    *(accumulator+127)      += (*(x+15)) * (*(y+15));
+
   }
 
 // extern "C"
@@ -681,7 +848,7 @@ __global__ void Winograd_kernel(const float *A, const float *B, float *C,
         prefetch_filter_frag(filter_frag_buffer, B_frag, f_frag_offset, access_f_s[0][threadIdx.x], access_f_s[1][threadIdx.x]);
       }
      
-      outer_product(input_frag, filter_frag, accumulator);
+      outer_product<float>(input_frag, filter_frag, accumulator);
 
       swap_input = input_frag;
       input_frag = input_frag_buffer;
