@@ -502,7 +502,7 @@ __device__ __forceinline__ void load_filter_tile(float *tiles, float * __restric
 
 __device__ __forceinline__ void prefetch_filter_tile(const float * __restrict__ pInputs, float * __restrict__ tiles, int filt_k){
 
-  int c_tensor = blockIdx.z*BK + (threadIdx.y*filt_k<<4) + threadIdx.x; // Iny*filt_k*4*4
+  int c_tensor = blockIdx.z*BK + threadIdx.y*(filt_k<<4) + threadIdx.x; // Iny*filt_k*4*4
   // each threadIdx.y corresponds to one channel; there are 8 different threadIdx.y so 8 channels 
   
   //each thread (32 threads in x direction) loads 2 kernel tiles (32 in K direction apart)
