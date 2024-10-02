@@ -690,8 +690,9 @@ __device__ __forceinline__ void load_filter_tile(float *tiles, float * __restric
 
 __device__ __forceinline__ void prefetch_filter_tile(const half * __restrict__ pInputs, float * __restrict__ tiles, int filt_k){
 
-  int c_tensor = blockIdx.z*BK + (threadIdx.y*filt_k<<4) + threadIdx.x; // Iny*filt_k*4*4
-  // each threadIdx.y corresponds to one channel; there are 8 different threadIdx.y so 8 channels 
+  int c_offset = (filt_k<<4); // Iny*filt_k*4*4 
+  int c_tensor = blockIdx.z*BK + threadIdx.y*2*(filt_k<<4) + threadIdx.x; // Iny*filt_k*4*4
+  // each threadIdx.y corresponds to 2 channels; there are 8 different threadIdx.y so 16 channels 
   
   //each thread (32 threads in x direction) loads 2 kernel tiles (32 in K direction apart)
   // save the two tiles in a float[32] register, float[16] for each  
@@ -702,7 +703,7 @@ __device__ __forceinline__ void prefetch_filter_tile(const half * __restrict__ p
       acumm = (i*filt_k<<2);
       #pragma unroll
       for(int j=0; j<4; j++){
-          tiles[(i<<2) + j] = pInputs[acumm + j*filt_k + c_tensor];
+          tiles[(i<<2) + j] = __halves2half2(pInputs[acumm + j*filt_k + c_tensor], pInputs[acumm + j*filt_k + c_tensor + c_offset]);
           tiles[16 + (i<<2) + j] = pInputs[acumm + j*filt_k + c_tensor+BN];
       }
   }
