@@ -1,6 +1,7 @@
 #include "conv-winograd.cuh"
 #include "convert.cuh"
 
+
 #if 0
 __device__ void __inline__ outer_product(float4* input_frag, float4* filter_frag, float4 accumulator[][16]){
     accumulator[0][0].x += input_frag[0].x*filter_frag[0].x;
@@ -520,31 +521,48 @@ float4 *input_frag_mem, float4* filter_frag_mem){
   }
 }
 
+template <typename T>
+  static __device__ T __forceinline__ fx_const (float val) {
+      return static_cast<T>(val);
+  }
+template <>
+  __device__ half __forceinline__ fx_const<half>(float val) {
+      return __float2half(val);
+  }
 
 // Set of functions per row in Gw product
-__device__ float f_row1(float * __restrict__ G, int j){
+template <typename T>
+  __device__ T f_row1(const T * __restrict__ G, int j){
     return G[j];
   }
-  __device__ float f_row2(float * __restrict__ G, int j){
-    return 0.5f*(G[j] + G[6+j] + G[3+j]);
+template <typename T>
+  __device__ T f_row2(const T * __restrict__ G, int j){
+    return fx_const<T>(0.5f)*(G[j] + G[6+j] + G[3+j]);
   }
-  __device__ float f_row3(float * __restrict__ G, int j){
-    return 0.5f*(G[j] + G[6+j] - G[3+j]);
+template <typename T>
+  __device__ T f_row3(const T * __restrict__ G, int j){
+    return fx_const<T>(0.5f)*(G[j] + G[6+j] - G[3+j]);
   }
-  __device__ float f_row4(float * __restrict__ G, int j){
+template <typename T>
+  __device__ T f_row4(const T * __restrict__ G, int j){
     return G[6+j];
   }
+
   // Set of functions per column in GwGt product
-  __device__ float f_col1(float * __restrict__ G, int j){
+template <typename T>  
+  __device__ T f_col1(const T * __restrict__ G, int j){
     return G[j];
   }
-  __device__ float f_col2(float * __restrict__ G, int j){
-    return 0.5f*(G[j] + G[j+2] + G[j+1]);
+template <typename T>
+  __device__ T f_col2(const T * __restrict__ G, int j){
+    return fx_const<T>(0.5f)*(G[j] + G[j+2] + G[j+1]);
   }
-  __device__ float f_col3(float * __restrict__ G, int j){
-    return 0.5f*(G[j] + G[j+2] - G[j+1]);
+template <typename T>
+  __device__ T f_col3(const T * __restrict__ G, int j){
+    return fx_const<T>(0.5f)*(G[j] + G[j+2] - G[j+1]);
   }
-  __device__ float f_col4(float * __restrict__ G, int j){
+template <typename T>
+  __device__ T f_col4(const T * __restrict__ G, int j){
     return G[j+2];
   }
 
@@ -558,11 +576,13 @@ __device__ float f_row1(float * __restrict__ G, int j){
       return __half2float(val);
   }
 
-  typedef float(*pointFunction_t)(float *, int);
+  
 
   template<typename T>
-  __global__ void FX(const T * __restrict__ pInputs, float * __restrict__ pOutputs, int filt_k, 
+  __global__ void FX(const T * __restrict__ pInputs, T * __restrict__ pOutputs, int filt_k, 
                       int filt_c, int filt_h, int filt_w){
+
+  typedef T(*pointFunction_t)(const T *, int);
 
     // assumes KCHW layout
     int Inx = threadIdx.x, Iny = threadIdx.y;
@@ -576,15 +596,16 @@ __device__ float f_row1(float * __restrict__ G, int j){
     int c_glb_offset_s = filt_k*4*4;
     int c_kernel_s = TileY*BC*c_glb_offset_s + TileX*BK + Iny*c_glb_offset_s + Inx;
   
-    float Gw[21]; //9+12. In registers
-    float *Gw_buffer = Gw+9;
+    T Gw[21]; //9+12. In registers
+    T *Gw_buffer = Gw+9;
   
     pointFunction_t func1[4] = {f_row1, f_row2, f_row3, f_row4};
     pointFunction_t func2[4] = {f_col1, f_col2, f_col3, f_col4};
   
     for(int bk=0; bk<BK; bk+=blockDim.x){      
       for(int i=0; i<9; i++){
-        Gw[i] = t2f32(pInputs[c_kernel + i]);
+        // Gw[i] = t2f32(pInputs[c_kernel + i]);
+        Gw[i] = pInputs[c_kernel + i];
       }      
   
       int aux;
@@ -667,7 +688,7 @@ __device__ __forceinline__ void load_filter_tile(float *tiles, float * __restric
   
 }
 
-__device__ __forceinline__ void prefetch_filter_tile(const float * __restrict__ pInputs, float * __restrict__ tiles, int filt_k){
+__device__ __forceinline__ void prefetch_filter_tile(const half * __restrict__ pInputs, float * __restrict__ tiles, int filt_k){
 
   int c_tensor = blockIdx.z*BK + (threadIdx.y*filt_k<<4) + threadIdx.x; // Iny*filt_k*4*4
   // each threadIdx.y corresponds to one channel; there are 8 different threadIdx.y so 8 channels 
@@ -687,14 +708,14 @@ __device__ __forceinline__ void prefetch_filter_tile(const float * __restrict__ 
   }
 }
 
-__device__ __forceinline__ void prefetch_input_tile(const float * __restrict__ pInputs, float *tile, int in_h, 
+__device__ __forceinline__ void prefetch_input_tile(const float * __restrict__ pInputs, half2 *tile, int in_h, 
                        int in_w, int tw, int th, unsigned short mask){
   
-  // load one input tile  
-  int tx = TW, ty = TH;
-  int c_tile = blockIdx.x * tx  + blockIdx.y * in_w * ty; 
+  // each thread loads two input tiles to fill a half2 buffer   
+  int c_offset = in_h*in_w;
+  int c_tile = blockIdx.x * TW  + blockIdx.y * in_w * TH; 
   int c_tensor = c_tile + (threadIdx.x % tw) * 2 + (threadIdx.x / tw) * in_w * 2 + 
-                threadIdx.y*(in_h*in_w) - (in_w+1);
+                threadIdx.y*2*c_offset - (in_w+1);
   
   int acumm,x;
   
@@ -705,7 +726,8 @@ __device__ __forceinline__ void prefetch_input_tile(const float * __restrict__ p
       acumm = i*in_w;   
       #pragma unroll
       for(int j=0; j<4; j++){
-        tile[(i<<2) + j] = pInputs[acumm + j + c_tensor];        
+        tile[(i<<2) + j] = __floats2half2_rn(pInputs[acumm + j + c_tensor], 
+                                             pInputs[acumm + j + c_tensor + c_offset]);
       }
     }
 
@@ -715,9 +737,10 @@ __device__ __forceinline__ void prefetch_input_tile(const float * __restrict__ p
       #pragma unroll
       for(int j=0; j<4; j++){
         x = (i<<2) + j;
-        tile[x] = 0.f;
+        tile[x] = __floats2half2_rn(0.f, 0.f);
         if(mask&(1<<x))
-          tile[x]=pInputs[acumm + j + c_tensor];        
+          tile[x] = __floats2half2_rn(pInputs[acumm + j + c_tensor], 
+                                      pInputs[acumm + j + c_tensor + c_offset]);
       }
     }
   }
@@ -752,7 +775,8 @@ __device__  __forceinline__ void prefetch_input_frag(float4* input_frag, float4 
   *((float4*) (input_frag + 3)) = *(A_frag + frag_offset + offset2); //3=2+1
 }
 
-__global__ void Winograd_kernel(const float *A, const float *B, float *C,
+
+__global__ void Winograd_kernel(const float *A, const half *B, float *C,
                     int tiles_dim_w, int tiles_dim_h,
                     int in_c, int in_h, int in_w,
                     int tile_size, int X, int Y,
@@ -760,9 +784,9 @@ __global__ void Winograd_kernel(const float *A, const float *B, float *C,
                     int out_c,
                     int tile_2d_s, int out_h, int out_w){
 
-  extern __shared__ float shared_mem[];
-  float *input_smem  = (float*)shared_mem;
-  float *filter_smem = (float*)&shared_mem[16*BC*BN];
+  extern __shared__ half2 shared_mem[];
+  half2 *input_smem  = (half2*)shared_mem;
+  half2 *filter_smem = (half2*)&shared_mem[16*BC*BN];
 
   unsigned int m = 0xFFFF;  
 
@@ -794,8 +818,11 @@ __global__ void Winograd_kernel(const float *A, const float *B, float *C,
   }  
   if(blockIdx.x==0 && (threadIdx.x % X) == 0)   m &=0xeeee;  // pad left col
   
-  float img_tile[16]; // Prefetch input from GMEM
-  float filter_tile[32]; // Prefetch filter from GMEM
+  // float img_tile[16]; // Prefetch input from GMEM
+  // float filter_tile[32]; // Prefetch filter from GMEM
+
+  half2 img_tile[16]; // Prefetch input from GMEM
+  half2 filter_tile[32]; // Prefetch filter from GMEM
 
   float4 input_frag_mem[8];  //2*2(2*8/4) Data to do Outer Product + prefetch f. SMEM (double_buffer)
   float4 filter_frag_mem[8]; //2*2 Data to do Outer Product + prefetch f. SMEM (double_buffer)
@@ -848,7 +875,7 @@ __global__ void Winograd_kernel(const float *A, const float *B, float *C,
         prefetch_filter_frag(filter_frag_buffer, B_frag, f_frag_offset, access_f_s[0][threadIdx.x], access_f_s[1][threadIdx.x]);
       }
      
-      outer_product<float>(input_frag, filter_frag, accumulator);
+      outer_product<half2>(input_frag, filter_frag, accumulator);
 
       swap_input = input_frag;
       input_frag = input_frag_buffer;
@@ -900,14 +927,37 @@ cudaError_t convolutionForward_32Tx64x8(float *k, int in_h, int in_w, float *w, 
 // }
 
 template<typename T>
-static void conv_winograd_stage0_f32_cuda(        
+static void conv_winograd_stage0_cuda(        
         const int src0_ne0, const int src0_ne1, const int src0_ne2, const int src0_ne3,        
         const int dst_ne0, const int dst_ne1, const int dst_ne2, const int dst_ne3,
-        const T * src0, float * dst,
+        const T * src0, T * dst,
         cudaStream_t stream) {
     // printf("doing FX\n");
-    FX<<<dim3(src0_ne3/BK, src0_ne2/BC), dim3(32, BC), 0, stream>>>(src0, dst, src0_ne3, src0_ne2, src0_ne1, src0_ne0);
+    FX<T><<<dim3(src0_ne3/BK, src0_ne2/BC), dim3(32, BC), 0, stream>>>(src0, dst, src0_ne3, src0_ne2, src0_ne1, src0_ne0);
     
+}
+
+static void conv_winograd_stage1_f16_f32_cuda(int tiles_dim_w, int tiles_dim_h, int X, int Y,   
+        int tile_size, int tile_2d_s,    
+        const int src0_ne0, const int src0_ne1, const int src0_ne2, const int src0_ne3,
+        const int src1_ne0, const int src1_ne1, const int src1_ne2, const int src1_ne3,
+        const int dst_ne0, const int dst_ne1, const int dst_ne2, const int dst_ne3,
+        const half * src0, const float * src1,  float * dst,
+        cudaStream_t stream) {
+
+    int64_t filt_k = src0_ne0; 
+    int64_t in_c   = src1_ne2;
+    int64_t in_h   = src1_ne1;
+    int64_t in_w   = src1_ne0;
+    int64_t filt_c = src0_ne3;
+    int64_t out_c  = filt_k;
+    int64_t out_h  = in_h;
+    int64_t out_w  = in_w;
+    int smem_size = (16*BN*BC + 16*BC*BK)*4;
+
+    Winograd_kernel<<<dim3((tiles_dim_w+X-1)/X, (tiles_dim_h+Y-1)/Y, filt_k/BK), dim3(BN, 8), smem_size, stream>>>(src1, src0, dst,
+               tiles_dim_w, tiles_dim_h, in_c, in_h, in_w, tile_size, X, Y, 
+               filt_k, filt_c, out_c, tile_2d_s, out_h, out_w);    
 }
 
 static void conv_winograd_stage1_f32_f32_cuda(int tiles_dim_w, int tiles_dim_h, int X, int Y,   
@@ -940,12 +990,12 @@ void ggml_cuda_op_winograd_stage0(ggml_backend_cuda_context & ctx, ggml_tensor *
     if(src0 == NULL){
         return;
     }
-    float * dst_d = (float *)dst->data;
+    // float * dst_d = (float *)dst->data;
     cudaStream_t stream = ctx.stream();
     // int id = ggml_cuda_get_device();
 
     // GGML_ASSERT(src0->type == GGML_TYPE_F16);
-    GGML_ASSERT( dst->type == GGML_TYPE_F32);
+    // GGML_ASSERT( dst->type == GGML_TYPE_F32);
 
     // ggml_cuda_pool_alloc<float> src0_ddq_as_f32(ctx.pool(id));
     // if (src0->type != GGML_TYPE_F32) {
@@ -961,14 +1011,16 @@ void ggml_cuda_op_winograd_stage0(ggml_backend_cuda_context & ctx, ggml_tensor *
     // const float * src0_ddf_i = src0->type == GGML_TYPE_F32 ? (const float *)src0->data : src0_ddq_as_f32.get();
     if(src0->type == GGML_TYPE_F32){
       const float* src0_d = (const float *)src0->data;
+      float * dst_d = (float *)dst->data;
       // conv_winograd_stage0_f32_f32_cuda(src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3],
-      conv_winograd_stage0_f32_cuda(src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3],
+      conv_winograd_stage0_cuda(src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3],
           dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3],
            src0_d, dst_d, stream);    
     }else{
       const half * src0_d = (const half *)src0->data;
+      half * dst_d = (half *)dst->data;
       // conv_winograd_stage0_f16_f32_cuda(src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3],
-      conv_winograd_stage0_f32_cuda(src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3],
+      conv_winograd_stage0_cuda(src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3],
           dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3],
            src0_d, dst_d, stream);    
     }
@@ -978,7 +1030,7 @@ void ggml_cuda_op_winograd_stage0(ggml_backend_cuda_context & ctx, ggml_tensor *
 
 void ggml_cuda_op_winograd_stage1(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
-    const float * src0_d = (const float *)src0->data;
+    // const float * src0_d = (const float *)src0->data;
 
     const ggml_tensor * src1 = dst->src[1];
     const float * src1_d = (const float *)src1->data;
@@ -986,7 +1038,7 @@ void ggml_cuda_op_winograd_stage1(ggml_backend_cuda_context & ctx, ggml_tensor *
     float * dst_d = (float *)dst->data;
     cudaStream_t stream = ctx.stream();
 
-    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    // GGML_ASSERT(src0->type == GGML_TYPE_F32);
     GGML_ASSERT(src1->type == GGML_TYPE_F32);
     GGML_ASSERT( dst->type == GGML_TYPE_F32);
 
@@ -1006,13 +1058,26 @@ void ggml_cuda_op_winograd_stage1(ggml_backend_cuda_context & ctx, ggml_tensor *
     cudaMemcpyToSymbol(access_f_s, aux, 64*sizeof(int));
     cudaMemcpyToSymbol(access_s, aux2, 64*sizeof(int));  
     cudaMemcpyToSymbol(tileid, tid, 64*sizeof(int));
+    if(src0->type == GGML_TYPE_F32){
+      const float * src0_d = (const float *)src0->data;
+      // const float * src1_d = (const float *)src1->data;
+      conv_winograd_stage1_f32_f32_cuda(tiles_dim_w, tiles_dim_h, 4, 8, 
+          tile_size, tile_2d_s,
+          src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3],
+          src1->ne[0], src1->ne[1], src1->ne[2], src1->ne[3],
+          dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3],
+          src0_d, src1_d, dst_d, stream);
+    } else{
+      const half * src0_d = (const half *)src0->data;
+      // const half * src1_d = (const half *)src1->data;
+      conv_winograd_stage1_f16_f32_cuda(tiles_dim_w, tiles_dim_h, 4, 8, 
+          tile_size, tile_2d_s,
+          src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3],
+          src1->ne[0], src1->ne[1], src1->ne[2], src1->ne[3],
+          dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3],
+          src0_d, src1_d, dst_d, stream);
+    }
 
-    conv_winograd_stage1_f32_f32_cuda(tiles_dim_w, tiles_dim_h, 4, 8, 
-        tile_size, tile_2d_s,
-        src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3],
-        src1->ne[0], src1->ne[1], src1->ne[2], src1->ne[3],
-        dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3],
-        src0_d, src1_d, dst_d, stream);
     
 }
 
