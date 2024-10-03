@@ -688,10 +688,11 @@ __device__ __forceinline__ void load_filter_tile(float *tiles, float * __restric
   
 }
 
-__device__ __forceinline__ void prefetch_filter_tile(const half * __restrict__ pInputs, float * __restrict__ tiles, int filt_k){
+template<typename T>
+__device__ __forceinline__ void prefetch_filter_tile(const T * __restrict__ pInputs, float * __restrict__ tiles, int filt_k){
 
-  int c_offset = (filt_k<<4); // Iny*filt_k*4*4 
-  int c_tensor = blockIdx.z*BK + threadIdx.y*2*(filt_k<<4) + threadIdx.x; // Iny*filt_k*4*4
+  // int c_offset = (filt_k<<4); // Iny*filt_k*4*4 
+  int c_tensor = blockIdx.z*BK + threadIdx.y*(filt_k<<4) + threadIdx.x; // Iny*filt_k*4*4
   // each threadIdx.y corresponds to 2 channels; there are 8 different threadIdx.y so 16 channels 
   
   //each thread (32 threads in x direction) loads 2 kernel tiles (32 in K direction apart)
@@ -703,20 +704,20 @@ __device__ __forceinline__ void prefetch_filter_tile(const half * __restrict__ p
       acumm = (i*filt_k<<2);
       #pragma unroll
       for(int j=0; j<4; j++){
-          tiles[(i<<2) + j] = __halves2half2(pInputs[acumm + j*filt_k + c_tensor], pInputs[acumm + j*filt_k + c_tensor + c_offset]);
-          tiles[16 + (i<<2) + j] = pInputs[acumm + j*filt_k + c_tensor+BN];
+          tiles[(i<<2) + j] = t2f32(pInputs[acumm + j*filt_k + c_tensor]);
+          tiles[16 + (i<<2) + j] = t2f32(pInputs[acumm + j*filt_k + c_tensor+BN]);
       }
   }
 }
 
-__device__ __forceinline__ void prefetch_input_tile(const float * __restrict__ pInputs, half2 *tile, int in_h, 
+__device__ __forceinline__ void prefetch_input_tile(const float * __restrict__ pInputs, float *tile, int in_h, 
                        int in_w, int tw, int th, unsigned short mask){
   
   // each thread loads two input tiles to fill a half2 buffer   
   int c_offset = in_h*in_w;
   int c_tile = blockIdx.x * TW  + blockIdx.y * in_w * TH; 
   int c_tensor = c_tile + (threadIdx.x % tw) * 2 + (threadIdx.x / tw) * in_w * 2 + 
-                threadIdx.y*2*c_offset - (in_w+1);
+                threadIdx.y*c_offset - (in_w+1);
   
   int acumm,x;
   
@@ -727,8 +728,7 @@ __device__ __forceinline__ void prefetch_input_tile(const float * __restrict__ p
       acumm = i*in_w;   
       #pragma unroll
       for(int j=0; j<4; j++){
-        tile[(i<<2) + j] = __floats2half2_rn(pInputs[acumm + j + c_tensor], 
-                                             pInputs[acumm + j + c_tensor + c_offset]);
+        tile[(i<<2) + j] = pInputs[acumm + j + c_tensor];
       }
     }
 
@@ -738,10 +738,9 @@ __device__ __forceinline__ void prefetch_input_tile(const float * __restrict__ p
       #pragma unroll
       for(int j=0; j<4; j++){
         x = (i<<2) + j;
-        tile[x] = __floats2half2_rn(0.f, 0.f);
+        tile[x] = 0.f;
         if(mask&(1<<x))
-          tile[x] = __floats2half2_rn(pInputs[acumm + j + c_tensor], 
-                                      pInputs[acumm + j + c_tensor + c_offset]);
+          tile[x] = pInputs[acumm + j + c_tensor];
       }
     }
   }
@@ -776,8 +775,8 @@ __device__  __forceinline__ void prefetch_input_frag(float4* input_frag, float4 
   *((float4*) (input_frag + 3)) = *(A_frag + frag_offset + offset2); //3=2+1
 }
 
-
-__global__ void Winograd_kernel(const float *A, const half *B, float *C,
+template<typename T>
+__global__ void Winograd_kernel(const float *A, const T *B, float *C,
                     int tiles_dim_w, int tiles_dim_h,
                     int in_c, int in_h, int in_w,
                     int tile_size, int X, int Y,
@@ -785,9 +784,9 @@ __global__ void Winograd_kernel(const float *A, const half *B, float *C,
                     int out_c,
                     int tile_2d_s, int out_h, int out_w){
 
-  extern __shared__ half2 shared_mem[];
-  half2 *input_smem  = (half2*)shared_mem;
-  half2 *filter_smem = (half2*)&shared_mem[16*BC*BN];
+  extern __shared__ float shared_mem[];
+  float *input_smem  = (float*)shared_mem;
+  float *filter_smem = (float*)&shared_mem[16*BC*BN];
 
   unsigned int m = 0xFFFF;  
 
@@ -822,8 +821,8 @@ __global__ void Winograd_kernel(const float *A, const half *B, float *C,
   // float img_tile[16]; // Prefetch input from GMEM
   // float filter_tile[32]; // Prefetch filter from GMEM
 
-  half2 img_tile[16]; // Prefetch input from GMEM
-  half2 filter_tile[32]; // Prefetch filter from GMEM
+  float img_tile[16]; // Prefetch input from GMEM
+  float filter_tile[32]; // Prefetch filter from GMEM
 
   float4 input_frag_mem[8];  //2*2(2*8/4) Data to do Outer Product + prefetch f. SMEM (double_buffer)
   float4 filter_frag_mem[8]; //2*2 Data to do Outer Product + prefetch f. SMEM (double_buffer)
@@ -876,7 +875,7 @@ __global__ void Winograd_kernel(const float *A, const half *B, float *C,
         prefetch_filter_frag(filter_frag_buffer, B_frag, f_frag_offset, access_f_s[0][threadIdx.x], access_f_s[1][threadIdx.x]);
       }
      
-      outer_product<half2>(input_frag, filter_frag, accumulator);
+      outer_product<float>(input_frag, filter_frag, accumulator);
 
       swap_input = input_frag;
       input_frag = input_frag_buffer;
@@ -905,25 +904,6 @@ __global__ void Winograd_kernel(const float *A, const half *B, float *C,
                      
 }
 
-cudaError_t convolutionForward_32Tx64x8(float *k, int in_h, int in_w, float *w, int out_h,
-                  int out_w, int out_c, float *C, float *Ww,                 
-                int tiles_dim_w, int tiles_dim_h, int tile_size,
-                int in_c, int filt_k, int filt_c, int filt_h, int filt_w, int m){
-
-  int tile_2d_s = tile_size*tile_size;
-  int smem_size = (16*BN*BC + 16*BC*BK)*4;
-  int X = 4, Y = 8;
-  
-
-  FX<<<dim3(filt_k/BK, filt_c/BC), dim3(32, BC)>>>(w, Ww, filt_k, filt_c, filt_h, filt_w);
-        
-  // each thread block will load 32 tiles (4x4) from the single image input
-  // we let X*Y = 32 and arbitraraly pick X = 4 and Y = 8
-  Winograd_kernel<<<dim3((tiles_dim_w+X-1)/X, (tiles_dim_h+Y-1)/Y, filt_k/BK), dim3(BN, 8), smem_size>>>(k, Ww, C,
-  tiles_dim_w, tiles_dim_h, in_c, in_h, in_w, tile_size, X, Y, filt_k, filt_c, out_c, tile_2d_s, out_h, out_w);
-
-  return cudaGetLastError();
-}
 
 // }
 
