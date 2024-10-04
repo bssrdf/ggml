@@ -1,5 +1,6 @@
 #include "conv-winograd.cuh"
 #include "convert.cuh"
+#include <cuda_runtime.h>
 
 
 #if 0
@@ -931,6 +932,8 @@ static void conv_winograd_stage1_f16_f32_cuda(int tiles_dim_w, int tiles_dim_h, 
     int64_t out_h  = in_h;
     int64_t out_w  = in_w;
     int smem_size = (16*BN*BC + 16*BC*BK)*4;
+    int max_size = 65536; // 64 KB
+    cudaFuncSetAttribute(Winograd_kernel<half>, cudaFuncAttributeMaxDynamicSharedMemorySize, max_size);
 
     Winograd_kernel<<<dim3((tiles_dim_w+X-1)/X, (tiles_dim_h+Y-1)/Y, filt_k/BK), dim3(BN, 8), smem_size, stream>>>(src1, src0, dst,
                tiles_dim_w, tiles_dim_h, in_c, in_h, in_w, tile_size, X, Y, 
@@ -954,6 +957,8 @@ static void conv_winograd_stage1_f32_f32_cuda(int tiles_dim_w, int tiles_dim_h, 
     int64_t out_h  = in_h;
     int64_t out_w  = in_w;
     int smem_size = (16*BN*BC + 16*BC*BK)*4;
+    int max_size = 65536; // 64 KB
+    cudaFuncSetAttribute(Winograd_kernel<float>, cudaFuncAttributeMaxDynamicSharedMemorySize, max_size);
 
     Winograd_kernel<<<dim3((tiles_dim_w+X-1)/X, (tiles_dim_h+Y-1)/Y, filt_k/BK), dim3(BN, 8), smem_size, stream>>>(src1, src0, dst,
                tiles_dim_w, tiles_dim_h, in_c, in_h, in_w, tile_size, X, Y, 
@@ -1035,6 +1040,7 @@ void ggml_cuda_op_winograd_stage1(ggml_backend_cuda_context & ctx, ggml_tensor *
     cudaMemcpyToSymbol(access_f_s, aux, 64*sizeof(int));
     cudaMemcpyToSymbol(access_s, aux2, 64*sizeof(int));  
     cudaMemcpyToSymbol(tileid, tid, 64*sizeof(int));
+
     if(src0->type == GGML_TYPE_F32){
       const float * src0_d = (const float *)src0->data;
       // const float * src1_d = (const float *)src1->data;
