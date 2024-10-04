@@ -818,9 +818,6 @@ __global__ void Winograd_kernel(const float *A, const T *B, float *C,
   }  
   if(blockIdx.x==0 && (threadIdx.x % X) == 0)   m &=0xeeee;  // pad left col
   
-  // float img_tile[16]; // Prefetch input from GMEM
-  // float filter_tile[32]; // Prefetch filter from GMEM
-
   float img_tile[16]; // Prefetch input from GMEM
   float filter_tile[32]; // Prefetch filter from GMEM
 
