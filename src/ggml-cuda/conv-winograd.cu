@@ -747,6 +747,49 @@ __device__ __forceinline__ void prefetch_input_tile(const float * __restrict__ p
 }
 
 
+__device__ __forceinline__ void prefetch_input_tile_smem(const float * __restrict__ pInputs, float *smem, int in_h, 
+                       int in_w, int tw, int th){
+  
+  // each thread loads two input tiles to fill a half2 buffer   
+  int c_offset = in_h*in_w;
+  int c_tile = blockIdx.x * TW  + blockIdx.y * in_w * TH; 
+  // int c_tensor = c_tile + ((threadIdx.x & (tw-1)) << 1) + (threadIdx.x / tw ) * (in_w << 1) + 
+  //               threadIdx.y*c_offset - (in_w+1);
+  int c_tensor = c_tile + threadIdx.y*2*c_offset - 1;
+  
+  int acumm,x;
+  int lines = 2;
+  int mask = 0; 
+  if(blockIdx.x == 0 && threadIdx.x == 0){
+    mask = 1;
+  }  
+  
+  for(int c=0; c<BC; c++) {    
+    float val = pInputs[c_tensor]; // first row
+    if(mask)
+        val = 0.f;
+    //smem[] = val;
+    val = pInputs[c_tensor+c_offset]; // 2nd row
+    if(mask)
+        val = 0.f;
+    //smem[] = val;
+    if(blockIdx.y > 0 && threadIdx.y == 0){
+      val = pInputs[c_tensor-c_offset]; // overlap row
+      if(mask)
+        val = 0.f;
+      //smem[] = val;
+    }
+    if(blockIdx.y < gridDim.y-1 && threadIdx.y == blockDim.y-1){
+      val = pInputs[c_tensor+2*c_offset]; // overlap row
+      if(mask)
+        val = 0.f;
+      //smem[] = val;
+    }     
+  }
+  
+}
+
+
 // this remains the same as 32x64x8 case
 __device__  __forceinline__ void prefetch_filter_frag(float4 *filter_frag, float4 *B_frag, int f_frag_offset, int offset1, int offset2){
 
@@ -785,8 +828,9 @@ __global__ void Winograd_kernel(const float *A, const T *B, float *C,
                     int tile_2d_s, int out_h, int out_w){
 
   extern __shared__ float shared_mem[];
-  float *input_smem  = (float*)shared_mem;
-  float *filter_smem = (float*)&shared_mem[16*BC*BN];
+  float *input_load_smem = (float*)shared_mem;
+  float *input_smem  = (float*)&shared_mem[(TW+2)*(TH+2)*BC];
+  float *filter_smem = (float*)&shared_mem[(TW+2)*(TH+2)*BC + 16*BC*BN];
 
   unsigned int m = 0xFFFF;  
 
@@ -932,6 +976,7 @@ static void conv_winograd_stage1_f16_f32_cuda(int tiles_dim_w, int tiles_dim_h, 
     int64_t out_h  = in_h;
     int64_t out_w  = in_w;
     int smem_size = (16*BN*BC + 16*BC*BK)*4;
+    smem_size += (TW+2)*(TH+2)*BC*4;
     int max_size = 65536; // 64 KB
     cudaFuncSetAttribute(Winograd_kernel<half>, cudaFuncAttributeMaxDynamicSharedMemorySize, max_size);
 
@@ -957,6 +1002,7 @@ static void conv_winograd_stage1_f32_f32_cuda(int tiles_dim_w, int tiles_dim_h, 
     int64_t out_h  = in_h;
     int64_t out_w  = in_w;
     int smem_size = (16*BN*BC + 16*BC*BK)*4;
+    smem_size += (TW+2)*(TH+2)*BC*4;
     int max_size = 65536; // 64 KB
     cudaFuncSetAttribute(Winograd_kernel<float>, cudaFuncAttributeMaxDynamicSharedMemorySize, max_size);
 
