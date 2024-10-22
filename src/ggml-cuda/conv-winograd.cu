@@ -701,7 +701,7 @@ __device__ __forceinline__ void prefetch_filter_tile(const T * __restrict__ pInp
   int acumm;
   #pragma unroll  
   for(int i=0; i<4; i++){
-      acumm = (i*filt_k<<2);
+      acumm = i*(filt_k<<2);
       #pragma unroll
       for(int j=0; j<4; j++){
           tiles[(i<<2) + j] = t2f32(pInputs[acumm + j*filt_k + c_tensor]);
