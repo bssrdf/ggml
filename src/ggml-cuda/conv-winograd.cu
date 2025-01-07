@@ -244,7 +244,7 @@ __device__ __forceinline__ unsigned int get_mask(int idd, int tiles_dim_w, int t
   return mask;
 }
 
-template<int TW, int TH>
+template<int TW, int TH, int BN, int BK, int BC>
 __device__ __forceinline__ void store_output_tile(float4 acumm_smem[][16], float *shared_mem, float * __restrict__ C, 
 int out_h, int out_w, int tiles_dim_w, int tiles_dim_h,  int tw, int th, 
 float4 *input_frag_mem, float4* filter_frag_mem){
@@ -413,7 +413,7 @@ template <typename T>
 
   
 
-  template<typename T>
+  template<typename T, int BN, int BK, int BC>
   __global__ void FX(const T * __restrict__ pInputs, T * __restrict__ pOutputs, int filt_k, 
                       int filt_c, int filt_h, int filt_w){
 
@@ -465,7 +465,7 @@ template <typename T>
   }
 
 #define d(input, i, j) ( input[(i<<2) + (j)] )
-
+template <int BN, int BK, int BC>
 __device__ __forceinline__ void load_and_transform_input_tile(float *Btd, float * __restrict__ pOutputs){
 
   float workspace[3]; 
@@ -495,6 +495,7 @@ __device__ __forceinline__ void load_and_transform_input_tile(float *Btd, float 
 
 }
 
+template <int BN, int BK, int BC>
 __device__ __forceinline__ void load_filter_tile(float *tiles, float * __restrict__ pOutputs, 
                                 int filt_c, int filt_k){
  
@@ -523,7 +524,7 @@ __device__ __forceinline__ void load_filter_tile(float *tiles, float * __restric
   
 }
 
-template<typename T>
+template<typename T, int BN, int BK>
 __device__ __forceinline__ void prefetch_filter_tile(const T * __restrict__ pInputs, float * __restrict__ tiles, int filt_k){
 
   int c_tensor = blockIdx.z*BK + threadIdx.y*(filt_k<<4) + threadIdx.x; // Iny*filt_k*4*4
@@ -610,7 +611,7 @@ __device__  __forceinline__ void prefetch_input_frag(float4* input_frag, float4 
   *((float4*) (input_frag + 3)) = *(A_frag + frag_offset + offset2); //3=2+1
 }
 
-template<typename T, int TW, int TH>
+template<typename T, int TW, int TH, int BN, int BK, int BC>
 __global__ void Winograd_kernel(const float *A, const T *B, float *C,
                     int tiles_dim_w, int tiles_dim_h,
                     int in_c, int in_h, int in_w,
@@ -674,7 +675,7 @@ __global__ void Winograd_kernel(const float *A, const T *B, float *C,
   float4 *swap_input;
 
   prefetch_input_tile<TW, TH>(A, img_tile, in_h, in_w, X, Y, m);
-  prefetch_filter_tile(B, filter_tile, filt_k);
+  prefetch_filter_tile<T, BN, BK>(B, filter_tile, filt_k);
 
   float4 *input_frag_buffer  = (float4*) (input_frag+4);
   float4 *filter_frag_buffer = (float4*) (filter_frag+4);
@@ -685,8 +686,8 @@ __global__ void Winograd_kernel(const float *A, const T *B, float *C,
     A_frag = (float4*) (input_smem  + threadIdx.y*BN*BC);
     B_frag = (float4*) (filter_smem + threadIdx.y*BC*BK);
 
-    load_and_transform_input_tile(img_tile, input_smem);
-    load_filter_tile(filter_tile, filter_smem, filt_c, filt_k);
+    load_and_transform_input_tile<BN, BK,BC>(img_tile, input_smem);
+    load_filter_tile<BN, BK,BC>(filter_tile, filter_smem, filt_c, filt_k);
 
     __syncthreads();
 
@@ -724,14 +725,14 @@ __global__ void Winograd_kernel(const float *A, const T *B, float *C,
 
     if(iter<(in_c-BC)){
       prefetch_input_tile<TW,TH>(A, img_tile, in_h, in_w, X, Y, m);
-      prefetch_filter_tile(B, filter_tile, filt_k);
+      prefetch_filter_tile<T,BN,BK>(B, filter_tile, filt_k);
     }
 
     __syncthreads();
   }
 
   // Transpose, transform and store accumulated result
-  store_output_tile<TW, TH>(accumulator, shared_mem, C, out_h, out_w, tiles_dim_w, tiles_dim_h, X, Y,
+  store_output_tile<TW, TH, BN, BK, BC>(accumulator, shared_mem, C, out_h, out_w, tiles_dim_w, tiles_dim_h, X, Y,
                   input_frag_mem, filter_frag_mem);
                      
 }
@@ -739,18 +740,18 @@ __global__ void Winograd_kernel(const float *A, const T *B, float *C,
 
 // }
 
-template<typename T>
+template<typename T, int BN, int BK, int BC>
 static void conv_winograd_stage0_cuda(        
         const int src0_ne0, const int src0_ne1, const int src0_ne2, const int src0_ne3,        
         const int dst_ne0, const int dst_ne1, const int dst_ne2, const int dst_ne3,
         const T * src0, T * dst,
         cudaStream_t stream) {
     // printf("doing FX\n");
-    FX<T><<<dim3(src0_ne3/BK, src0_ne2/BC), dim3(32, BC), 0, stream>>>(src0, dst, src0_ne3, src0_ne2, src0_ne1, src0_ne0);
+    FX<T,BN,BK,BC><<<dim3(src0_ne3/BK, src0_ne2/BC), dim3(32, BC), 0, stream>>>(src0, dst, src0_ne3, src0_ne2, src0_ne1, src0_ne0);
     
 }
 
-template<typename T>
+template<typename T, int BN, int BK, int BC>
 static void conv_winograd_stage1_cuda(int tiles_dim_w, int tiles_dim_h, int X, int Y,   
         int tile_size, int tile_2d_s,    
         const int src0_ne0, const int src0_ne1, const int src0_ne2, const int src0_ne3,
@@ -769,9 +770,9 @@ static void conv_winograd_stage1_cuda(int tiles_dim_w, int tiles_dim_h, int X, i
     int64_t out_w  = in_w;
     int smem_size = (16*BN*BC + 16*BC*BK)*4;
     int max_size = 65536; // 64 KB
-    cudaFuncSetAttribute(Winograd_kernel<T,32,4>, cudaFuncAttributeMaxDynamicSharedMemorySize, max_size);
+    cudaFuncSetAttribute(Winograd_kernel<T,32,4,BN,BK,BC>, cudaFuncAttributeMaxDynamicSharedMemorySize, max_size);
 
-    Winograd_kernel<T,32,4><<<dim3((tiles_dim_w+X-1)/X, (tiles_dim_h+Y-1)/Y, filt_k/BK), dim3(BN, 8), smem_size, stream>>>(src1, src0, dst,
+    Winograd_kernel<T,32,4,BN,BK,BC><<<dim3((tiles_dim_w+X-1)/X, (tiles_dim_h+Y-1)/Y, filt_k/BK), dim3(BN, 8), smem_size, stream>>>(src1, src0, dst,
                tiles_dim_w, tiles_dim_h, in_c, in_h, in_w, tile_size, X, Y, 
                filt_k, filt_c, out_c, tile_2d_s, out_h, out_w);    
 }
@@ -805,14 +806,14 @@ void ggml_cuda_op_winograd_stage0(ggml_backend_cuda_context & ctx, ggml_tensor *
       const float* src0_d = (const float *)src0->data;
       float * dst_d = (float *)dst->data;
       // conv_winograd_stage0_f32_f32_cuda(src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3],
-      conv_winograd_stage0_cuda(src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3],
+      conv_winograd_stage0_cuda<float, 32,64,8>(src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3],
           dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3],
            src0_d, dst_d, stream);    
     }else{
       const half * src0_d = (const half *)src0->data;
       half * dst_d = (half *)dst->data;
       // conv_winograd_stage0_f16_f32_cuda(src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3],
-      conv_winograd_stage0_cuda(src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3],
+      conv_winograd_stage0_cuda<half, 32, 64, 8>(src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3],
           dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3],
            src0_d, dst_d, stream);    
     }
@@ -837,6 +838,7 @@ void ggml_cuda_op_winograd_stage1(ggml_backend_cuda_context & ctx, ggml_tensor *
     GGML_ASSERT(ggml_is_contiguous(src0));
     GGML_ASSERT(ggml_is_contiguous(src1));
 
+
     const int m         = 2;
     const int r         = 3;
     const int tile_size = m+r-1; 
@@ -854,7 +856,7 @@ void ggml_cuda_op_winograd_stage1(ggml_backend_cuda_context & ctx, ggml_tensor *
     if(src0->type == GGML_TYPE_F32){
       const float * src0_d = (const float *)src0->data;
       // const float * src1_d = (const float *)src1->data;      
-      conv_winograd_stage1_cuda<float>(tiles_dim_w, tiles_dim_h, 16, 2, 
+      conv_winograd_stage1_cuda<float,32,64,8>(tiles_dim_w, tiles_dim_h, 16, 2,
           tile_size, tile_2d_s,
           src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3],
           src1->ne[0], src1->ne[1], src1->ne[2], src1->ne[3],
@@ -863,7 +865,7 @@ void ggml_cuda_op_winograd_stage1(ggml_backend_cuda_context & ctx, ggml_tensor *
     } else{
       const half * src0_d = (const half *)src0->data;
       // const half * src1_d = (const half *)src1->data;      
-      conv_winograd_stage1_cuda<half>(tiles_dim_w, tiles_dim_h, 16, 2,  
+      conv_winograd_stage1_cuda<half,32,64,8>(tiles_dim_w, tiles_dim_h, 16, 2,
           tile_size, tile_2d_s,
           src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3],
           src1->ne[0], src1->ne[1], src1->ne[2], src1->ne[3],

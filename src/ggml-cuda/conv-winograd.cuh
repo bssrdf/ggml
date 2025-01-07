@@ -1,9 +1,9 @@
 #include "common.cuh"
 #include <type_traits>
 
-#define BC 8
-#define BN 32
-#define BK 64
+// #define BC 8
+// #define BN 32
+// #define BK 64
 // #define TW 32
 // #define TH 4
 #define BN_p 138
