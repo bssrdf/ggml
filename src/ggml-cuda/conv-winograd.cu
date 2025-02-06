@@ -356,6 +356,84 @@ float4 *input_frag_mem, float4* filter_frag_mem){
   }
 }
 
+
+#if __CUDA_ARCH__ >= CC_AMPERE
+
+// Set of functions per row in Gw product
+__device__ half f_row1(const half * __restrict__ Gw, int j){
+    return Gw[j];
+  }
+  __device__ half f_row2(const half * __restrict__ Gw, int j){
+    return __float2half(0.5f)*(Gw[j] + Gw[6+j] + Gw[3+j]);
+  }
+  __device__ half f_row3(const half * __restrict__ Gw, int j){
+    return __float2half(0.5f)*(Gw[j] + Gw[6+j] - Gw[3+j]);
+  }
+  __device__ half f_row4(const half * __restrict__ Gw, int j){
+    return Gw[6+j];
+  }
+  // Set of functions per column in GwGt product
+  __device__ half f_col1(const half * __restrict__ Gw, int j){
+    return Gw[j];
+  }
+  __device__ half f_col2(const half * __restrict__ Gw, int j){
+    return __float2half(0.5f)*(Gw[j] + Gw[j+2] + Gw[j+1]);
+  }
+  __device__ half f_col3(const half * __restrict__ Gw, int j){
+    return __float2half(0.5f)*(Gw[j] + Gw[j+2] - Gw[j+1]);
+  }
+  __device__ half f_col4(const half * __restrict__ Gw, int j){
+    return Gw[j+2];
+  }
+  
+  typedef half(*pointFunction_t)(const half *, int);
+
+  template<int BN, int BK, int BC>
+  __global__ void FX(const half * __restrict__ pInputs, half * __restrict__ pOutputs, int filt_k, 
+                      int filt_c, int filt_h, int filt_w){
+    int Inx = threadIdx.x, Iny = threadIdx.y;
+    int TileX = blockIdx.x, TileY = blockIdx.y;
+  
+    int c_glb_offset = filt_k*filt_h*filt_w;
+    int c_kernel = TileY*BC*c_glb_offset + TileX*BK + Iny*c_glb_offset + Inx;
+    // int c_glb_offset_s = filt_c*4*4;
+    int c_glb_offset_s = filt_c*filt_k;
+    int c_kernel_s = TileY*BC + TileX*BK*filt_c + Iny + Inx * filt_c;
+  
+    half Gw[21]; //9+12. In registers
+    half *Gw_buffer = Gw+9;
+  
+    pointFunction_t func1[4] = {f_row1, f_row2, f_row3, f_row4};
+    pointFunction_t func2[4] = {f_col1, f_col2, f_col3, f_col4};
+  
+    for(int bk=0; bk<BK; bk+=blockDim.x){
+      for(int i=0; i<9; i++){
+        Gw[i] = pInputs[c_kernel + i*filt_k];
+      }
+  
+      int aux;
+      for(int i=0; i<4; i++){
+        aux = i*3;
+        for(int j=0; j<3; j++){
+          Gw_buffer[j+aux] = (*func1[i])(Gw, j);
+        }
+      }
+  
+      int aux2;
+      for(int i=0; i<4; i++){
+        aux = i*3; aux2 = i<<2;
+        for(int j=0; j<4; j++){
+          pOutputs[c_kernel_s+aux2*c_glb_offset_s+j*c_glb_offset_s] = (*func2[j])(Gw_buffer, aux);
+        }
+      }
+  
+      c_kernel   += blockDim.x;
+      c_kernel_s += blockDim.x*filt_c;
+    }
+  }
+
+#else
+
 template <typename T>
   static __device__ T __forceinline__ fx_const (float val) {
       return static_cast<T>(val);
@@ -463,6 +541,9 @@ template <typename T>
       c_kernel_s += blockDim.x;
     }
   }
+
+#endif
+
 
 #define d(input, i, j) ( input[(i<<2) + (j)] )
 template <int BN, int BK, int BC>
@@ -747,7 +828,11 @@ static void conv_winograd_stage0_cuda(
         const T * src0, T * dst,
         cudaStream_t stream) {
     // printf("doing FX\n");
-    FX<T,BN,BK,BC><<<dim3(src0_ne3/BK, src0_ne2/BC), dim3(32, BC), 0, stream>>>(src0, dst, src0_ne3, src0_ne2, src0_ne1, src0_ne0);
+#if __CUDA_ARCH__ >= CC_AMPERE
+  FX<BN,BK,BC><<<dim3(src0_ne3/BK, src0_ne2/BC), dim3(32, BC), 0, stream>>>(src0, dst, src0_ne3, src0_ne2, src0_ne1, src0_ne0);
+#else
+  FX<T,BN,BK,BC><<<dim3(src0_ne3/BK, src0_ne2/BC), dim3(32, BC), 0, stream>>>(src0, dst, src0_ne3, src0_ne2, src0_ne1, src0_ne0);
+#endif
     
 }
 
@@ -813,12 +898,17 @@ void ggml_cuda_op_winograd_stage0(ggml_backend_cuda_context & ctx, ggml_tensor *
       const half * src0_d = (const half *)src0->data;
       half * dst_d = (half *)dst->data;
       // conv_winograd_stage0_f16_f32_cuda(src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3],
+#if __CUDA_ARCH__ >= CC_AMPERE
+      conv_winograd_stage0_cuda<half, 32, 64, 16>(src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3],
+          dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3],
+           src0_d, dst_d, stream);
+#else      
       conv_winograd_stage0_cuda<half, 32, 64, 8>(src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3],
           dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3],
-           src0_d, dst_d, stream);    
+           src0_d, dst_d, stream);
+#endif
     }
 }
-
 
 
 void ggml_cuda_op_winograd_stage1(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
@@ -851,7 +941,14 @@ void ggml_cuda_op_winograd_stage1(ggml_backend_cuda_context & ctx, ggml_tensor *
 
     cudaMemcpyToSymbol(access_f_s, aux, 64*sizeof(int));
     cudaMemcpyToSymbol(access_s, aux2, 64*sizeof(int));  
+  #if __CUDA_ARCH__ >= CC_AMPERE
+    cudaMemcpyToSymbol(access_t, aux3, 64*sizeof(int));
+    cudaMemcpyToSymbol(access_f_f, aux1, 64*sizeof(int));
+    cudaMemcpyToSymbol(access_o, aux_offset, 4*sizeof(int));
+    cudaMemcpyToSymbol(access_p, aux_offset1, 2*sizeof(int));
+  #else
     cudaMemcpyToSymbol(tileid, tid, 64*sizeof(int));
+  #endif  
 
     if(src0->type == GGML_TYPE_F32){
       const float * src0_d = (const float *)src0->data;
