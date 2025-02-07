@@ -170,11 +170,12 @@ __device__ void __inline__ outer_product(float4* input_frag, float4* filter_frag
 // extern "C"
 // {
 
-#if __CUDA_ARCH__ >= CC_AMPERE
 
-__device__ __forceinline__ void  transform_output_tile(float *pOutputs, float2 *C_tile, float2 *At, 
+
+__device__ __forceinline__ void  transform_output_tile_tc(float *pOutputs, float2 *C_tile, float2 *At, 
     int round, int c_tensor, int c_glb_offset, int id, unsigned short mask, int out_w)
 {                     
+#if __CUDA_ARCH__ >= CC_AMPERE
   // c_tensor += (((round)/2)*32 + ((round)%2)*2)*c_glb_offset/2;  
   // c_tensor +=  round * 16 * c_glb_offset; //each round moves 16 (= 64/4) K
   // c_tensor +=  16 * c_glb_offset; //each round moves 16 (= 64/4) K
@@ -212,9 +213,21 @@ __device__ __forceinline__ void  transform_output_tile(float *pOutputs, float2 *
       pOutputs[x1 + c_tensor + c_glb_offset + id + 1] = At[x+1].y - At[x+2].y - At[x+3].y;
     }
   } 
+#else
+  GGML_UNUSED(pOutputs);
+  GGML_UNUSED(C_tile);
+  GGML_UNUSED(At);
+  GGML_UNUSED(round);
+  GGML_UNUSED(c_tensor);
+  GGML_UNUSED(c_glb_offset);
+  GGML_UNUSED(id);
+  GGML_UNUSED(mask);  
+  GGML_UNUSED(out_w);
+  NO_DEVICE_CODE;
+#endif
 }
 
-#else
+
 
 __device__ __forceinline__ void  transform_output_tile(float * __restrict__ pOutputs, float2 *C_tile, float2 *At, 
     int round, int c_tensor, int c_glb_offset, int i1, int i2,
@@ -255,7 +268,7 @@ __device__ __forceinline__ void  transform_output_tile(float * __restrict__ pOut
   } 
 }
 
-#endif
+
 
 template<int TW, int TH>
 __device__ __forceinline__ unsigned int get_mask(int idd, int tiles_dim_w, int tiles_dim_h, 
@@ -293,7 +306,7 @@ __device__ __forceinline__ unsigned int get_mask(int idd, int tiles_dim_w, int t
 }
 
 
-#if __CUDA_ARCH__ >= CC_AMPERE
+
 
 __device__ __forceinline__ int loc(int st, int k){
   
@@ -312,9 +325,9 @@ __device__ __forceinline__ int loc(int st, int k){
 }
 
 template<int TW, int TH, int BN, int BK, int BC>
-__device__ __forceinline__ void store_output_tile(float *Accum, unsigned char* shared_mem, float *C, 
+__device__ __forceinline__ void store_output_tile_tc(float *Accum, unsigned char* shared_mem, float *C, 
                        int out_h, int out_w, int tiles_dim_w, int tiles_dim_h,  int tw, int th){
-  
+#if __CUDA_ARCH__ >= CC_AMPERE  
   float2 *output_smem = (float2 *) shared_mem;
   float2 *accumulator = (float2 *) Accum;
   // float2 *C_out = (float2*)C;
@@ -327,7 +340,7 @@ __device__ __forceinline__ void store_output_tile(float *Accum, unsigned char* s
 
   int warpid = threadIdx.y;
   int laneid = threadIdx.x;
-  unsigned short mask1 = get_mask(laneid, tiles_dim_w, tiles_dim_h, tw, th, out_w, out_h);
+  unsigned short mask1 = get_mask<TW, TH>(laneid, tiles_dim_w, tiles_dim_h, tw, th, out_w, out_h);
   int id1 = (laneid % tw) * 2 + (laneid / tw) * out_w * 2;
   
   int acumm1 = ((threadIdx.x%8)/2)*34 + threadIdx.x%2 + (threadIdx.x/16)*2 + ((threadIdx.x/8)%2)*8;
@@ -432,9 +445,22 @@ __device__ __forceinline__ void store_output_tile(float *Accum, unsigned char* s
     c_tensor +=  16 * c_glb_offset;
 
   }
-}
 
 #else
+  GGML_UNUSED(Accum);
+  GGML_UNUSED(shared_mem);
+  GGML_UNUSED(C);
+  GGML_UNUSED(out_h);
+  GGML_UNUSED(tiles_dim_w);
+  GGML_UNUSED(tiles_dim_h);
+  GGML_UNUSED(tw);
+  GGML_UNUSED(th);  
+  GGML_UNUSED(out_w);
+  NO_DEVICE_CODE;
+#endif
+}
+
+
 
 template<int TW, int TH, int BN, int BK, int BC>
 __device__ __forceinline__ void store_output_tile(float4 acumm_smem[][16], float *shared_mem, float * __restrict__ C, 
@@ -548,85 +574,7 @@ float4 *input_frag_mem, float4* filter_frag_mem){
   }
 }
 
-#endif
 
-
-#if __CUDA_ARCH__ >= CC_AMPERE
-
-// Set of functions per row in Gw product
-__device__ half f_row1(const half * __restrict__ Gw, int j){
-    return Gw[j];
-  }
-  __device__ half f_row2(const half * __restrict__ Gw, int j){
-    return __float2half(0.5f)*(Gw[j] + Gw[6+j] + Gw[3+j]);
-  }
-  __device__ half f_row3(const half * __restrict__ Gw, int j){
-    return __float2half(0.5f)*(Gw[j] + Gw[6+j] - Gw[3+j]);
-  }
-  __device__ half f_row4(const half * __restrict__ Gw, int j){
-    return Gw[6+j];
-  }
-  // Set of functions per column in GwGt product
-  __device__ half f_col1(const half * __restrict__ Gw, int j){
-    return Gw[j];
-  }
-  __device__ half f_col2(const half * __restrict__ Gw, int j){
-    return __float2half(0.5f)*(Gw[j] + Gw[j+2] + Gw[j+1]);
-  }
-  __device__ half f_col3(const half * __restrict__ Gw, int j){
-    return __float2half(0.5f)*(Gw[j] + Gw[j+2] - Gw[j+1]);
-  }
-  __device__ half f_col4(const half * __restrict__ Gw, int j){
-    return Gw[j+2];
-  }
-  
-  typedef half(*pointFunction_t)(const half *, int);
-
-  template<int BN, int BK, int BC>
-  __global__ void FX(const half * __restrict__ pInputs, half * __restrict__ pOutputs, int filt_k, 
-                      int filt_c, int filt_h, int filt_w){
-    int Inx = threadIdx.x, Iny = threadIdx.y;
-    int TileX = blockIdx.x, TileY = blockIdx.y;
-  
-    int c_glb_offset = filt_k*filt_h*filt_w;
-    int c_kernel = TileY*BC*c_glb_offset + TileX*BK + Iny*c_glb_offset + Inx;
-    // int c_glb_offset_s = filt_c*4*4;
-    int c_glb_offset_s = filt_c*filt_k;
-    int c_kernel_s = TileY*BC + TileX*BK*filt_c + Iny + Inx * filt_c;
-  
-    half Gw[21]; //9+12. In registers
-    half *Gw_buffer = Gw+9;
-  
-    pointFunction_t func1[4] = {f_row1, f_row2, f_row3, f_row4};
-    pointFunction_t func2[4] = {f_col1, f_col2, f_col3, f_col4};
-  
-    for(int bk=0; bk<BK; bk+=blockDim.x){
-      for(int i=0; i<9; i++){
-        Gw[i] = pInputs[c_kernel + i*filt_k];
-      }
-  
-      int aux;
-      for(int i=0; i<4; i++){
-        aux = i*3;
-        for(int j=0; j<3; j++){
-          Gw_buffer[j+aux] = (*func1[i])(Gw, j);
-        }
-      }
-  
-      int aux2;
-      for(int i=0; i<4; i++){
-        aux = i*3; aux2 = i<<2;
-        for(int j=0; j<4; j++){
-          pOutputs[c_kernel_s+aux2*c_glb_offset_s+j*c_glb_offset_s] = (*func2[j])(Gw_buffer, aux);
-        }
-      }
-  
-      c_kernel   += blockDim.x;
-      c_kernel_s += blockDim.x*filt_c;
-    }
-  }
-
-#else
 
 template <typename T>
   static __device__ T __forceinline__ fx_const (float val) {
@@ -683,10 +631,103 @@ template <typename T>
       return __half2float(val);
   }
 
+
+// Set of functions per row in Gw product
+template <>
+__device__ half f_row1<half>(const half * __restrict__ Gw, int j){
+    return Gw[j];
+}
+template <>
+__device__ half f_row2<half>(const half * __restrict__ Gw, int j){
+  return __float2half(0.5f)*(Gw[j] + Gw[6+j] + Gw[3+j]);
+}
+template <>
+__device__ half f_row3<half>(const half * __restrict__ Gw, int j){
+  return __float2half(0.5f)*(Gw[j] + Gw[6+j] - Gw[3+j]);
+}
+template <>
+__device__ half f_row4<half>(const half * __restrict__ Gw, int j){
+  return Gw[6+j];
+}
+
+// Set of functions per column in GwGt product
+template <>
+__device__ half f_col1<half>(const half * __restrict__ Gw, int j){
+  return Gw[j];
+}
+template <>
+__device__ half f_col2<half>(const half * __restrict__ Gw, int j){
+  return __float2half(0.5f)*(Gw[j] + Gw[j+2] + Gw[j+1]);
+}
+template <>
+__device__ half f_col3<half>(const half * __restrict__ Gw, int j){
+  return __float2half(0.5f)*(Gw[j] + Gw[j+2] - Gw[j+1]);
+}
+template <>
+__device__ half f_col4<half>(const half * __restrict__ Gw, int j){
+  return Gw[j+2];
+}
+
+typedef half(*pointFunction_t)(const half *, int);
+
+template<int BN, int BK, int BC>
+__global__ void FX_tc(const half * pInputs, half * pOutputs, int filt_k, 
+                      int filt_c, int filt_h, int filt_w){
+#if __CUDA_ARCH__ >= CC_AMPERE
+    int Inx = threadIdx.x, Iny = threadIdx.y;
+    int TileX = blockIdx.x, TileY = blockIdx.y;
+  
+    int c_glb_offset = filt_k*filt_h*filt_w;
+    int c_kernel = TileY*BC*c_glb_offset + TileX*BK + Iny*c_glb_offset + Inx;
+    // int c_glb_offset_s = filt_c*4*4;
+    int c_glb_offset_s = filt_c*filt_k;
+    int c_kernel_s = TileY*BC + TileX*BK*filt_c + Iny + Inx * filt_c;
+  
+    half Gw[21]; //9+12. In registers
+    half *Gw_buffer = Gw+9;
+  
+    pointFunction_t func1[4] = {f_row1, f_row2, f_row3, f_row4};
+    pointFunction_t func2[4] = {f_col1, f_col2, f_col3, f_col4};
+  
+    for(int bk=0; bk<BK; bk+=blockDim.x){
+      for(int i=0; i<9; i++){
+        Gw[i] = pInputs[c_kernel + i*filt_k];
+      }
+  
+      int aux;
+      for(int i=0; i<4; i++){
+        aux = i*3;
+        for(int j=0; j<3; j++){
+          Gw_buffer[j+aux] = (*func1[i])(Gw, j);
+        }
+      }
+  
+      int aux2;
+      for(int i=0; i<4; i++){
+        aux = i*3; aux2 = i<<2;
+        for(int j=0; j<4; j++){
+          pOutputs[c_kernel_s+aux2*c_glb_offset_s+j*c_glb_offset_s] = (*func2[j])(Gw_buffer, aux);
+        }
+      }
+  
+      c_kernel   += blockDim.x;
+      c_kernel_s += blockDim.x*filt_c;
+    }
+#else
+  GGML_UNUSED(pInputs);
+  GGML_UNUSED(pOutputs);
+  GGML_UNUSED(filt_k);
+  GGML_UNUSED(filt_c);
+  GGML_UNUSED(filt_h);
+  GGML_UNUSED(filt_w);  
+  NO_DEVICE_CODE;
+#endif
+}
+
   
 
-  template<typename T, int BN, int BK, int BC>
-  __global__ void FX(const T * __restrict__ pInputs, T * __restrict__ pOutputs, int filt_k, 
+template<typename T, int BN, int BK, int BC>
+__global__ void FX(const T * __restrict__ pInputs, T * __restrict__ pOutputs, int filt_k, 
                       int filt_c, int filt_h, int filt_w){
 
   typedef T(*pointFunction_t)(const T *, int);
@@ -736,11 +777,8 @@ template <typename T>
     }
   }
 
-#endif
-
 
 #define d(input, i, j) ( input[(i<<2) + (j)] )
-#if __CUDA_ARCH__ >= CC_AMPERE
 
 // smem layout for input tile
 // ___________32T(C0)______32T(C1)____... _____32T(C15) E0
@@ -749,8 +787,8 @@ template <typename T>
 // .....
 // ___________32T(C0)______32T(C1)____... _____32T(C15) E15
 
-__device__ __forceinline__ void load_and_transform_input_tile(half *Btd, half *pOutputs){
-
+__device__ __forceinline__ void load_and_transform_input_tile_tc(half *Btd, half *pOutputs){
+#if __CUDA_ARCH__ >= CC_AMPERE
   half2 workspace[3]; 
   int c_offset = 4*(64+PADDING);
   int c_tensor = (threadIdx.x/8)*(64+PADDING) + (threadIdx.x%8)*4 + (threadIdx.y/4)*32 + (threadIdx.y%4);
@@ -776,10 +814,14 @@ __device__ __forceinline__ void load_and_transform_input_tile(half *Btd, half *p
     ptr[c_tensor+i*c_offset*4+c_offset] = d(Btd2, i, 1) + d(Btd2, i, 2);
     ptr[c_tensor+i*c_offset*4+2*c_offset] = d(Btd2, i, 2) - d(Btd2, i, 1);
     ptr[c_tensor+i*c_offset*4+3*c_offset] = d(Btd2, i, 1) - d(Btd2, i, 3);
-  }     
+  }   
+#else
+  GGML_UNUSED(Btd);
+  GGML_UNUSED(pOutputs);  
+  NO_DEVICE_CODE;
+#endif  
 }
 
-#else
 
 template <int BN, int BK, int BC>
 __device__ __forceinline__ void load_and_transform_input_tile(float *Btd, float * __restrict__ pOutputs){
@@ -811,7 +853,6 @@ __device__ __forceinline__ void load_and_transform_input_tile(float *Btd, float 
 
 }
 
-#endif
 
 template <int BN, int BK, int BC>
 __device__ __forceinline__ void load_filter_tile(float *tiles, float * __restrict__ pOutputs, 
@@ -863,12 +904,12 @@ __device__ __forceinline__ void prefetch_filter_tile(const T * __restrict__ pInp
   }
 }
 
-#if __CUDA_ARCH__ >= CC_AMPERE
+
 
 template<int TW, int TH>
-__device__ __forceinline__ void prefetch_input_tile(const half *pInputs, half *tile, int in_h, 
+__device__ __forceinline__ void prefetch_input_tile_tc(const half *pInputs, half *tile, int in_h, 
                        int in_w, int tw, int th, unsigned short mask){
-  
+#if __CUDA_ARCH__ >= CC_AMPERE  
   // load two input tiles per thread
   // int tx = in_w / gridDim.x, ty = in_h / gridDim.y;  
   int c_offset = in_h*in_w; 
@@ -924,6 +965,16 @@ __device__ __forceinline__ void prefetch_input_tile(const half *pInputs, half *t
       }
     }
   }
+#else
+  GGML_UNUSED(pInputs);
+  GGML_UNUSED(tile);
+  GGML_UNUSED(in_h);
+  GGML_UNUSED(in_w);
+  GGML_UNUSED(tw);
+  GGML_UNUSED(th);
+  GGML_UNUSED(mask);
+  NO_DEVICE_CODE;
+#endif  
 }
 
 // smem layout for transformed filter weights 
@@ -935,6 +986,8 @@ __device__ __forceinline__ void prefetch_input_tile(const half *pInputs, half *t
 // -- B_Frag1
 template<int BK, int BC>
 __device__ __forceinline__ void prefetch_filter_tile_async(const half *pInputs, half *smem, int filt_c, int filt_k, int ko){
+
+#if __CUDA_ARCH__ >= CC_AMPERE 
 
   int tx = threadIdx.x;
   int ty = threadIdx.y;
@@ -987,9 +1040,16 @@ __device__ __forceinline__ void prefetch_filter_tile_async(const half *pInputs, 
                 "l"(&pInputs[c_tensor + 16*filt_c + k * 8 * c_offset]),
                 "n"(16));
   }
+  #else
+  GGML_UNUSED(pInputs);
+  GGML_UNUSED(smem);
+  GGML_UNUSED(filt_c);
+  GGML_UNUSED(filt_k);
+  GGML_UNUSED(ko);
+  NO_DEVICE_CODE;
+#endif  
 }
 
-#else
 
 template<int TW, int TH>
 __device__ __forceinline__ void prefetch_input_tile(const float * __restrict__ pInputs, float *tile, int in_h, 
@@ -1028,7 +1088,6 @@ __device__ __forceinline__ void prefetch_input_tile(const float * __restrict__ p
   }
 }
 
-#endif 
 
 // this remains the same as 32x64x8 case
 __device__  __forceinline__ void prefetch_filter_frag(float4 *filter_frag, float4 *B_frag, int f_frag_offset, int offset1, int offset2){
@@ -1058,10 +1117,11 @@ __device__  __forceinline__ void prefetch_input_frag(float4* input_frag, float4 
   *((float4*) (input_frag + 3)) = *(A_frag + frag_offset + offset2); //3=2+1
 }
 
-#if __CUDA_ARCH__ >= CC_AMPERE
+
 
 __device__ void loadFragA(unsigned int *frag, half *smem, int ki)
 {
+#if __CUDA_ARCH__ >= CC_AMPERE
     // load 32x16    
     // we use mma.sync.aligned.m16n8k8.row.col.f32.f16.f16.f32 to do 16x16x16 mm,
     // so we need to fill 2 16x8 A matrices;
@@ -1093,11 +1153,18 @@ __device__ void loadFragA(unsigned int *frag, half *smem, int ki)
         fragA[i*4+3] = input[i*2*(64+PADDING) + (64+PADDING) + 32 + tx];
         
     }
+#else
+    GGML_UNUSED(frag);
+    GGML_UNUSED(smem);
+    GGML_UNUSED(ki);
+    NO_DEVICE_CODE;
+#endif
 }
 
 template<int BN, int BC>
 __device__ void loadFragB(unsigned int *frag, half *smem, int ki)
 {
+#if __CUDA_ARCH__ >= CC_AMPERE
     // // load 16x16    
     // // for (int i = 0; i < 2; ++i)
     // // {      
@@ -1149,6 +1216,12 @@ __device__ void loadFragB(unsigned int *frag, half *smem, int ki)
       ptr =  reinterpret_cast<unsigned int *>(smem + (ki*8+ty)*(BC*BN) + BC*16 + BC * (tx / 4 + k * 8) +  access_t[1][tx]);
       frag[4+k*2+1] = ptr[0];
     }    
+#else
+    GGML_UNUSED(frag);
+    GGML_UNUSED(smem);
+    GGML_UNUSED(ki);
+    NO_DEVICE_CODE;
+#endif
 }
 
 
@@ -1183,6 +1256,7 @@ __device__ void loadFragB(unsigned int *frag, half *smem, int ki)
 
 __device__ void mmaSync(unsigned int *fragA, unsigned int *fragB, float *accum)
 {
+#if __CUDA_ARCH__ >= CC_AMPERE
     asm volatile(
         "mma.sync.aligned.m16n8k8.row.col.f32.f16.f16.f32 "
         "{%0,  %1,  %2,  %3},"
@@ -1226,16 +1300,23 @@ __device__ void mmaSync(unsigned int *fragA, unsigned int *fragB, float *accum)
         : "r"(fragA[1]), "r"(fragA[3]),
           "r"(fragB[3]),
           "f"(accum[2]), "f"(accum[3]), "f"(accum[6]), "f"(accum[7]));
+#else
+    GGML_UNUSED(fragA);
+    GGML_UNUSED(fragB);
+    GGML_UNUSED(accum);
+    NO_DEVICE_CODE;
+#endif
 }
 
 template<int TW, int TH, int BN, int BK, int BC>
-__global__ void Winograd_kernel(half *A, half *B, float *C,
+__global__ void Winograd_kernel_tc(const half *A, const half *B, float *C,
                     int tiles_dim_w, int tiles_dim_h,
                     int in_c, int in_h, int in_w,
                     int tile_size, int X, int Y,
                     int filt_k, int filt_c,
                     int out_c,
                     int out_h, int out_w){
+#if __CUDA_ARCH__ >= CC_AMPERE
 
   extern __shared__ unsigned char shared_mem[];
   half *input_smem  = reinterpret_cast<half *>(shared_mem);
@@ -1334,7 +1415,7 @@ __global__ void Winograd_kernel(half *A, half *B, float *C,
     asm volatile("cp.async.commit_group;\n" ::);
 
     for(int k = 0; k < 2; k++){
-      loadFragB(FragB + k * BN / wmmaN * 4, B_frag1, k);
+      loadFragB<BN,BC>(FragB + k * BN / wmmaN * 4, B_frag1, k);
     }
     
     for(int k = 0; k < 2; k++){  
@@ -1356,7 +1437,7 @@ __global__ void Winograd_kernel(half *A, half *B, float *C,
     asm volatile("cp.async.commit_group;\n" ::);
 
     for(int k = 0; k < 2; k++){
-      loadFragB(FragB + k * BN / wmmaN * 4, B_frag2, k);
+      loadFragB<BN,BC>(FragB + k * BN / wmmaN * 4, B_frag2, k);
     }
     for(int k = 0; k < 2; k++){
       for(int mii = 0; mii < BN / wmmaM; mii++){
@@ -1394,7 +1475,7 @@ __global__ void Winograd_kernel(half *A, half *B, float *C,
   asm volatile("cp.async.commit_group;\n" ::);  
   
   for(int k = 0; k < 2; k++){
-    loadFragB(FragB + k * BN / wmmaN * 4, B_frag1, k);
+    loadFragB<BN,BC>(FragB + k * BN / wmmaN * 4, B_frag1, k);
   }
     
   for(int k = 0; k < 2; k++){  
@@ -1412,7 +1493,7 @@ __global__ void Winograd_kernel(half *A, half *B, float *C,
   __syncthreads();   
 
   for(int k = 0; k < 2; k++){
-    loadFragB(FragB + k * BN / wmmaN * 4, B_frag2, k);
+    loadFragB<BN,BC>(FragB + k * BN / wmmaN * 4, B_frag2, k);
   }
 
   for(int k = 0; k < 2; k++){
@@ -1426,10 +1507,28 @@ __global__ void Winograd_kernel(half *A, half *B, float *C,
 
   // Transpose, transform and store accumulated result
   store_output_tile<TW,TH,BN,BK,BC>(Accum, shared_mem, C, out_h, out_w, tiles_dim_w, tiles_dim_h, X, Y);
-                     
+#else
+    GGML_UNUSED(A);
+    GGML_UNUSED(B);
+    GGML_UNUSED(C);
+    GGML_UNUSED(tiles_dim_w);
+    GGML_UNUSED(tiles_dim_h);
+    GGML_UNUSED(in_c);
+    GGML_UNUSED(in_h);
+    GGML_UNUSED(in_w);
+    GGML_UNUSED(tile_size);
+    GGML_UNUSED(X);
+    GGML_UNUSED(Y);
+    GGML_UNUSED(filt_k);
+    GGML_UNUSED(filt_c);
+    GGML_UNUSED(out_c);
+    GGML_UNUSED(out_h);
+    GGML_UNUSED(out_w);
+    NO_DEVICE_CODE;
+#endif                     
 }
 
-#else
+
 
 template<typename T, int TW, int TH, int BN, int BK, int BC>
 __global__ void Winograd_kernel(const float *A, const T *B, float *C,
@@ -1438,7 +1537,7 @@ __global__ void Winograd_kernel(const float *A, const T *B, float *C,
                     int tile_size, int X, int Y,
                     int filt_k, int filt_c,
                     int out_c,
-                    int tile_2d_s, int out_h, int out_w){
+                    int out_h, int out_w){
 
   extern __shared__ float shared_mem[];
   float *input_smem  = (float*)shared_mem;
@@ -1556,10 +1655,21 @@ __global__ void Winograd_kernel(const float *A, const T *B, float *C,
                   input_frag_mem, filter_frag_mem);
                      
 }
-#endif
 
-// }
 
+#if __CUDA_ARCH__ >= CC_AMPERE
+template<int BN, int BK, int BC>
+static void conv_winograd_stage0_cuda(        
+        const int src0_ne0, const int src0_ne1, const int src0_ne2, const int src0_ne3,        
+        const int dst_ne0, const int dst_ne1, const int dst_ne2, const int dst_ne3,
+        const half * src0, half * dst,
+        cudaStream_t stream) {
+    // printf("doing FX\n");
+
+  FX<BN,BK,BC><<<dim3(src0_ne3/BK, src0_ne2/BC), dim3(32, BC), 0, stream>>>(src0, dst, src0_ne3, src0_ne2, src0_ne1, src0_ne0);
+  
+}
+#else
 template<typename T, int BN, int BK, int BC>
 static void conv_winograd_stage0_cuda(        
         const int src0_ne0, const int src0_ne1, const int src0_ne2, const int src0_ne3,        
@@ -1567,13 +1677,9 @@ static void conv_winograd_stage0_cuda(
         const T * src0, T * dst,
         cudaStream_t stream) {
     // printf("doing FX\n");
-#if __CUDA_ARCH__ >= CC_AMPERE
-  FX<BN,BK,BC><<<dim3(src0_ne3/BK, src0_ne2/BC), dim3(32, BC), 0, stream>>>(src0, dst, src0_ne3, src0_ne2, src0_ne1, src0_ne0);
-#else
   FX<T,BN,BK,BC><<<dim3(src0_ne3/BK, src0_ne2/BC), dim3(32, BC), 0, stream>>>(src0, dst, src0_ne3, src0_ne2, src0_ne1, src0_ne0);
-#endif
-    
 }
+#endif
 
 #if __CUDA_ARCH__ >= CC_AMPERE
 template<int BN, int BK, int BC>
@@ -1582,7 +1688,7 @@ static void conv_winograd_stage1_cuda(int tiles_dim_w, int tiles_dim_h, int X, i
         const int src0_ne0, const int src0_ne1, const int src0_ne2, const int src0_ne3,
         const int src1_ne0, const int src1_ne1, const int src1_ne2, const int src1_ne3,
         const int dst_ne0, const int dst_ne1, const int dst_ne2, const int dst_ne3,
-        const T * src0, const half * src1,  float * dst,
+        const half * src0, const half * src1,  float * dst,
         cudaStream_t stream) {
 
     int64_t filt_k = src0_ne0; 
@@ -1599,7 +1705,7 @@ static void conv_winograd_stage1_cuda(int tiles_dim_w, int tiles_dim_h, int X, i
 
     Winograd_kernel<32,4,BN,BK,BC><<<dim3((tiles_dim_w+X-1)/X, (tiles_dim_h+Y-1)/Y, filt_k/BK), dim3(BN, 8), smem_size, stream>>>(src1, src0, dst,
                tiles_dim_w, tiles_dim_h, in_c, in_h, in_w, tile_size, X, Y, 
-               filt_k, filt_c, out_c, tile_2d_s, out_h, out_w);    
+               filt_k, filt_c, out_c, out_h, out_w);    
 }
 
 #else
@@ -1627,7 +1733,7 @@ static void conv_winograd_stage1_cuda(int tiles_dim_w, int tiles_dim_h, int X, i
 
     Winograd_kernel<T,32,4,BN,BK,BC><<<dim3((tiles_dim_w+X-1)/X, (tiles_dim_h+Y-1)/Y, filt_k/BK), dim3(BN, 8), smem_size, stream>>>(src1, src0, dst,
                tiles_dim_w, tiles_dim_h, in_c, in_h, in_w, tile_size, X, Y, 
-               filt_k, filt_c, out_c, tile_2d_s, out_h, out_w);    
+               filt_k, filt_c, out_c, out_h, out_w);    
 }
 
 
@@ -1658,27 +1764,36 @@ void ggml_cuda_op_winograd_stage0(ggml_backend_cuda_context & ctx, ggml_tensor *
 
     // // GGML_ASSERT(ggml_is_contiguous(src0));
     // const float * src0_ddf_i = src0->type == GGML_TYPE_F32 ? (const float *)src0->data : src0_ddq_as_f32.get();
-    if(src0->type == GGML_TYPE_F32){
-      const float* src0_d = (const float *)src0->data;
-      float * dst_d = (float *)dst->data;
-      // conv_winograd_stage0_f32_f32_cuda(src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3],
-      conv_winograd_stage0_cuda<float, 32,64,8>(src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3],
-          dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3],
-           src0_d, dst_d, stream);    
-    }else{
+    int id = ggml_cuda_get_device();
+    const int compute_capability = ggml_cuda_info().devices[id].cc; 
+
+// #if __CUDA_ARCH__ >= CC_AMPERE
+    if(compute_capability >= CC_AMPERE){
+      GGML_ASSERT(src0->type == GGML_TYPE_F16);
       const half * src0_d = (const half *)src0->data;
       half * dst_d = (half *)dst->data;
-      // conv_winograd_stage0_f16_f32_cuda(src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3],
-#if __CUDA_ARCH__ >= CC_AMPERE
-      conv_winograd_stage0_cuda<half, 32, 64, 16>(src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3],
+      conv_winograd_stage0_cuda<32, 64, 16>(src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3],
           dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3],
            src0_d, dst_d, stream);
-#else      
-      conv_winograd_stage0_cuda<half, 32, 64, 8>(src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3],
-          dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3],
-           src0_d, dst_d, stream);
-#endif
+    } else{
+      if(src0->type == GGML_TYPE_F32){
+        const float* src0_d = (const float *)src0->data;
+        float * dst_d = (float *)dst->data;
+        // conv_winograd_stage0_f32_f32_cuda(src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3],
+        conv_winograd_stage0_cuda<float, 32,64,8>(src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3],
+            dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3],
+            src0_d, dst_d, stream);    
+      }else{
+        const half * src0_d = (const half *)src0->data;
+        half * dst_d = (half *)dst->data;
+        // conv_winograd_stage0_f16_f32_cuda(src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3],
+
+        conv_winograd_stage0_cuda<half, 32, 64, 8>(src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3],
+            dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3],
+            src0_d, dst_d, stream);
+      }
     }
+
 }
 
 
@@ -1723,6 +1838,7 @@ void ggml_cuda_op_winograd_stage1(ggml_backend_cuda_context & ctx, ggml_tensor *
 
 #if __CUDA_ARCH__ >= CC_AMPERE
       GGML_ASSERT(src1->type == GGML_TYPE_F16);
+      const half * src0_d = (const half *)src0->data;
       const half * src1_d = (const half *)src1->data;
       conv_winograd_stage1_cuda<32,64,16>(tiles_dim_w, tiles_dim_h, 16, 2,
           tile_size, tile_2d_s,

@@ -10,6 +10,7 @@
 // #define BK 64
 // #define TW 32
 // #define TH 4
+
 #define BN_p 138
 
 __constant__ int access_f_s[2][32];
@@ -17,6 +18,10 @@ __constant__ int access_s[2][32];
 
 
 #if __CUDA_ARCH__ >= CC_AMPERE
+
+#define wmmaM  16
+#define wmmaN  16
+#define wmmaK  16
 
 __constant__ int access_f_f[2][32];
 __constant__ int access_t[2][32];
