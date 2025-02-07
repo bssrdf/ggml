@@ -1699,8 +1699,10 @@ static void conv_winograd_stage1_tc_cuda(int tiles_dim_w, int tiles_dim_h, int X
     int64_t out_c  = filt_k;
     int64_t out_h  = in_h;
     int64_t out_w  = in_w;
-    int smem_size = (16*BN*BC + 16*BC*BK)*4;
+    // int smem_size = (16*BN*BC + 16*BC*BK)*4;
+    int smem_size = 16*4*(64+PADDING)*4 + (16*BC*BK)*2;
     int max_size = 65536; // 64 KB
+    // int max_size = 65536; // 64 KB
     cudaFuncSetAttribute(Winograd_kernel_tc<32,4,BN,BK,BC>, cudaFuncAttributeMaxDynamicSharedMemorySize, max_size);
 
     Winograd_kernel_tc<32,4,BN,BK,BC><<<dim3((tiles_dim_w+X-1)/X, (tiles_dim_h+Y-1)/Y, filt_k/BK), dim3(BN, 8), smem_size, stream>>>(src1, src0, dst,
