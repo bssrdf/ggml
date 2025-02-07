@@ -1,9 +1,8 @@
 #include "common.cuh"
+#include "mma.h"
 #include <type_traits>
 
-#if __CUDA_ARCH__ >= CC_AMPERE
-#include "mma.h"
-#endif
+
 
 // #define BC 8
 // #define BN 32
@@ -12,26 +11,26 @@
 // #define TH 4
 
 #define BN_p 138
+#define PADDING 1
+#define wmmaM  16
+#define wmmaN  16
+#define wmmaK  16
 
 __constant__ int access_f_s[2][32];
 __constant__ int access_s[2][32];
 
 
-#if __CUDA_ARCH__ >= CC_AMPERE
-
-#define wmmaM  16
-#define wmmaN  16
-#define wmmaK  16
 
 __constant__ int access_f_f[2][32];
 __constant__ int access_t[2][32];
 __constant__ int access_o[2][2];
 __constant__ int access_p[2];
 
-#define PADDING 1
+
+
 
 // access_f_s
-const int aux[2][32] = {
+const int aux_tc[2][32] = {
                         {0,2,4,6,0,2,4,6,
                          1,3,5,7,1,3,5,7,
                          0,2,4,6,0,2,4,6,
@@ -53,7 +52,7 @@ const int aux1[2][32] = {
                          14,14,14,14,15,15,15,15}                          
                         };
 // access_s
-const int aux2[2][32] = {
+const int aux2_tc[2][32] = {
                          {0,2,4,6,1,3,5,7,
                           0,2,4,6,1,3,5,7,
                           0,2,4,6,1,3,5,7,
@@ -77,7 +76,6 @@ const int aux3[2][32] = {
 const int aux_offset[2][2] = {{0, 4}, {16, 20}}; 
 const int aux_offset1[2] = {0, BN_p}; 
 
-#else
 
 __constant__ int tileid[2][32];
 
@@ -105,7 +103,6 @@ const int tid[2][32] = {
                          2,3,6,7,10,11,14,15,18,19,22,23,26,27,30,31}
                         };       
 
-#endif
 
 
 void ggml_cuda_op_winograd_stage0(ggml_backend_cuda_context & ctx, ggml_tensor * dst);

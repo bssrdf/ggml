@@ -53,6 +53,96 @@ void load_model(test_model & model, int ic, int oc, int iw, int ih, bool use_gpu
     ggml_fp32_to_fp16_row(adata.data(), hadata.data(), KW * KH * IC * OC);
 
     // Initialize bdata
+    // std::vector<ggml_fp16_t> hbdata(IW * IH * IC * N);
+    std::vector<float> bdata(IW * IH * IC * N);
+    for (int i = 0; i < IW * IH * IC * N; i++) {
+        bdata[i] = 1.5f;
+    }
+    // ggml_fp32_to_fp16_row(bdata.data(), hbdata.data(), IW * IH * IC * N);
+
+    size_t buffer_size = 0;
+    {
+        buffer_size += KW * KH * IC * OC * ggml_type_size(GGML_TYPE_F16); // tensor a
+        buffer_size += IW * IH * IC * N  * ggml_type_size(GGML_TYPE_F32); // tensor b
+        buffer_size += 1024; // overhead
+    }
+
+    // printf("%s: ggml tensor size    = %d bytes\n", __func__, (int) sizeof(ggml_tensor));
+    // printf("%s: backend buffer size = %0.2f MB\n", __func__, (buffer_size/ 1024.f/ 1024.f));
+
+    int num_tensors = 2;
+    struct ggml_init_params params {
+            /*.mem_size   =*/ ggml_tensor_overhead() * num_tensors,
+            /*.mem_buffer =*/ NULL,
+            /*.no_alloc   =*/ true,
+    };
+
+    // initialize the backend
+
+    if (use_gpu) {
+        // fprintf(stderr, "%s: using CUDA backend\n", __func__);
+        model.backend = ggml_backend_cuda_init(0);
+        if (!model.backend) {
+            fprintf(stderr, "%s: ggml_backend_cuda_init() failed\n", __func__);
+        }
+    }
+
+    if(!model.backend) {
+        // fallback to CPU backend
+        model.backend = ggml_backend_cpu_init();
+    }
+
+    model.buffer = ggml_backend_alloc_buffer(model.backend, buffer_size);
+
+    // create context
+    model.ctx = ggml_init(params);
+
+    // create tensors
+    model.a = ggml_new_tensor_4d(model.ctx, GGML_TYPE_F16,  KW, KH, IC, OC);
+    model.b = ggml_new_tensor_4d(model.ctx, GGML_TYPE_F32, IW, IH, IC, N);
+
+    // create a allocator
+    struct ggml_tallocr alloc = ggml_tallocr_new(model.buffer);
+
+    // alloc memory
+    ggml_tallocr_alloc(&alloc, model.a);
+
+    // load data to buffer
+    if(ggml_backend_is_cpu(model.backend)) {
+        memcpy(model.a->data, hadata.data(), ggml_nbytes(model.a));
+    } else {
+        ggml_backend_tensor_set(model.a, hadata.data(), 0, ggml_nbytes(model.a));
+    }
+
+    // alloc memory
+    ggml_tallocr_alloc(&alloc, model.b);
+
+    if(ggml_backend_is_cpu(model.backend)) {
+        memcpy(model.b->data, bdata.data(), ggml_nbytes(model.b));
+    } else {
+        ggml_backend_tensor_set(model.b, bdata.data(), 0, ggml_nbytes(model.b));
+    }
+}
+
+
+void load_model_tc(test_model & model, int ic, int oc, int iw, int ih, bool use_gpu = false ) {
+    // create data
+    int KW = 3, KH = 3, IC = ic, OC = oc;
+    int IW = iw, IH = ih, N = 1;
+
+    // printf(" input: IC = %d, OC = %d, IW = %d, IH = %d \n ", IC, OC, IW, IH);
+
+    // Initialize adata
+    std::vector<float> adata(KW * KH * IC * OC);
+    for (int i = 0; i < KW * KH * IC * OC; i++) {
+        adata[i] = 2.5f;
+    }
+
+    // Convert adata to fp16 format
+    std::vector<ggml_fp16_t> hadata(KW * KH * IC * OC);
+    ggml_fp32_to_fp16_row(adata.data(), hadata.data(), KW * KH * IC * OC);
+
+    // Initialize bdata
     std::vector<ggml_fp16_t> hbdata(IW * IH * IC * N);
     std::vector<float> bdata(IW * IH * IC * N);
     for (int i = 0; i < IW * IH * IC * N; i++) {
@@ -292,31 +382,31 @@ int main(void)
         load_model(model, std::get<0>(c), std::get<1>(c), std::get<2>(c), std::get<3>(c), true);
 
         ggml_gallocr_t allocr = NULL;
-        // allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(model.backend));
+        allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(model.backend));
 
-        // //create the worst case graph for memory usage estimation
-        // struct ggml_cgraph * gf = build_graph_0(model);
+        //create the worst case graph for memory usage estimation
+        struct ggml_cgraph * gf = build_graph_0(model);
 
-        // // compute the required memory
-        // ggml_gallocr_reserve(allocr, gf);
-        // size_t mem_size0 = ggml_gallocr_get_buffer_size(allocr, 0);
-        // // fprintf(stderr, "%s: compute buffer size: %.2f MB\n", __func__, mem_size/1024.0f/1024.0f);
+        // compute the required memory
+        ggml_gallocr_reserve(allocr, gf);
+        size_t mem_size0 = ggml_gallocr_get_buffer_size(allocr, 0);
+        // fprintf(stderr, "%s: compute buffer size: %.2f MB\n", __func__, mem_size/1024.0f/1024.0f);
        
-        size_t mem_size0 = 0;
+        // size_t mem_size0 = 0;
         // struct ggml_cgraph * gf_res_0 = NULL;    
         int iterations = 20;
 
         double run_time0 = 0.0;
-        // std::vector<float> conv2d_data = compute_graph(model, allocr, build_graph_0, iterations, &run_time0);
+        std::vector<float> conv2d_data = compute_graph(model, allocr, build_graph_0, iterations, &run_time0);
 
-        // ggml_gallocr_free(allocr);
+        ggml_gallocr_free(allocr);
 
-        // allocr = NULL;
+        allocr = NULL;
         
         allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(model.backend));
 
         //create the worst case graph for memory usage estimation
-        struct ggml_cgraph * gf = build_graph_1(model);
+        gf = build_graph_1(model);
 
         // compute the required memory
         ggml_gallocr_reserve(allocr, gf);
@@ -359,11 +449,75 @@ int main(void)
 
     }
 
+    printf("\nPerforming Winograd Tensore Core Test:\n");    
+
+    for (auto c : configs){
+        test_model model;
+        load_model_tc(model, std::get<0>(c), std::get<1>(c), std::get<2>(c), std::get<3>(c), true);
+
+        ggml_gallocr_t allocr = NULL;
+        allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(model.backend));
+
+        
+        int iterations = 20;
+      
+        
+    
+        //create the worst case graph for memory usage estimation
+        struct ggml_cgraph *gf = build_graph_1(model);
+
+        // compute the required memory
+        ggml_gallocr_reserve(allocr, gf);
+        size_t mem_size1 = ggml_gallocr_get_buffer_size(allocr, 0);
+            // fprintf(stderr, "%s: compute buffer size: %.2f MB\n", __func__, mem_size/1024.0f/1024.0f);
+        
+
+        // struct ggml_cgraph * gf_res_1 = NULL;    
+
+        double run_time1;
+        std::vector<float> wino_data = compute_graph(model, allocr, build_graph_1, iterations, &run_time1);
+
+        if(k==0) { 
+            k = 1;
+            fprintf(stderr, "| (IC, OC, IW, IH) | Winograd(TC) TIME | Winograd(TC) VRAM \n");
+            fprintf(stderr, "| --- | --- |--- \n");
+        }
+
+        fprintf(stderr, " | (%d, %d, %d, %d) | %.2f ms | %.2f MB\n", 
+                std::get<0>(c), std::get<1>(c), std::get<2>(c), std::get<3>(c),               
+                run_time1, mem_size1/1024.0f/1024.0f);
+
+
+        // for(int i = 0; i < ggml_nelements(wino_res); i++) {
+        // for(int i = 0; i < 3*28; i++) {
+        //     float diff = fabs(conv2d_data[i] - wino_data[i]);
+        //     // if(diff > 1.e-4) {
+        //           printf("(%f, %f, %f, %d) \n",
+        //           conv2d_data[i],
+        //           wino_data[i], diff, i);
+        //         // break;
+        //     // }
+        // }
+
+        ggml_free(model.ctx);
+        ggml_backend_buffer_free(model.buffer);
+        ggml_backend_free(model.backend);
+        ggml_gallocr_free(allocr);
+
+    }
+
     
     // printf("\nPerforming test:\n");    
   
     return 0;
 }
 
+#else
+
+int main(void)
+{
+   return 0;
+
+}
 
 #endif
