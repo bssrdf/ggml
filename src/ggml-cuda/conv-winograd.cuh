@@ -1,6 +1,10 @@
 #include "common.cuh"
 #include <type_traits>
 
+#if __CUDA_ARCH__ >= CC_AMPERE
+#include "mma.h"
+#endif
+
 // #define BC 8
 // #define BN 32
 // #define BK 64
@@ -18,6 +22,8 @@ __constant__ int access_f_f[2][32];
 __constant__ int access_t[2][32];
 __constant__ int access_o[2][2];
 __constant__ int access_p[2];
+
+#define PADDING 1
 
 // access_f_s
 const int aux[2][32] = {

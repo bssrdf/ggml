@@ -170,6 +170,52 @@ __device__ void __inline__ outer_product(float4* input_frag, float4* filter_frag
 // extern "C"
 // {
 
+#if __CUDA_ARCH__ >= CC_AMPERE
+
+__device__ __forceinline__ void  transform_output_tile(float *pOutputs, float2 *C_tile, float2 *At, 
+    int round, int c_tensor, int c_glb_offset, int id, unsigned short mask, int out_w)
+{                     
+  // c_tensor += (((round)/2)*32 + ((round)%2)*2)*c_glb_offset/2;  
+  // c_tensor +=  round * 16 * c_glb_offset; //each round moves 16 (= 64/4) K
+  // c_tensor +=  16 * c_glb_offset; //each round moves 16 (= 64/4) K
+  // int c_tensor1 = c_tensor + 16 * c_glb_offset;
+  int x, x1;
+
+  #pragma unroll
+  for(int j=0; j<4; j++){
+
+    At[j].x = C_tile[j].x + C_tile[4+j].x + C_tile[8+j].x;
+    At[j].y = C_tile[j].y + C_tile[4+j].y + C_tile[8+j].y;
+
+    At[4+j].x = C_tile[4+j].x - C_tile[8+j].x - C_tile[12+j].x;
+    At[4+j].y = C_tile[4+j].y - C_tile[8+j].y - C_tile[12+j].y;
+    
+  }  
+
+  #pragma unroll
+  for(int i=0; i<2; i++){
+    x = i*4;
+    // x1 = i*((tiles_dim-(out_w%2)) + (out_w%2)/2);
+    x1 = i*((out_w-(out_w%2)) + (out_w%2)/2);    
+
+    if(mask&(1<<(i*2))){
+      pOutputs[x1 + c_tensor + id] = At[x].x + At[x+1].x + At[x+2].x;
+    }
+    if(mask&(1<<(i*2))){
+      pOutputs[x1 + c_tensor + id + c_glb_offset] = At[x].y + At[x+1].y + At[x+2].y;
+      
+    }
+    if(mask&(1<<(i*2+1))){
+      pOutputs[x1 + c_tensor + id + 1] = At[x+1].x - At[x+2].x - At[x+3].x;
+    }
+    if(mask&(1<<(i*2+1))){
+      pOutputs[x1 + c_tensor + c_glb_offset + id + 1] = At[x+1].y - At[x+2].y - At[x+3].y;
+    }
+  } 
+}
+
+#else
+
 __device__ __forceinline__ void  transform_output_tile(float * __restrict__ pOutputs, float2 *C_tile, float2 *At, 
     int round, int c_tensor, int c_glb_offset, int i1, int i2,
     unsigned int mask1, unsigned int mask2, int out_w)
@@ -209,6 +255,8 @@ __device__ __forceinline__ void  transform_output_tile(float * __restrict__ pOut
   } 
 }
 
+#endif
+
 template<int TW, int TH>
 __device__ __forceinline__ unsigned int get_mask(int idd, int tiles_dim_w, int tiles_dim_h, 
          int tw, int th, int out_w, int out_h){
@@ -243,6 +291,150 @@ __device__ __forceinline__ unsigned int get_mask(int idd, int tiles_dim_w, int t
   }
   return mask;
 }
+
+
+#if __CUDA_ARCH__ >= CC_AMPERE
+
+__device__ __forceinline__ int loc(int st, int k){
+  
+  int t = (st % 8) * 4;
+  t += (k%8) / 2;
+  int accum1 = ((t%8)/2)*34 + t%2 + (t/16)*2 + ((t/8)%2)*8;
+  int sst = st < 16 ? st : st-16;
+  accum1 += access_o[sst/8][k/8];
+  accum1 += access_p[st/16];
+
+  // if(blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 &&  threadIdx.x == 0  && threadIdx.y == 4){
+  //   printf("AA %d, %d, %d, %d, %d \n", accum1, access_o[sst/8][k/8], access_p[st/16], st, k);
+  // }
+  return accum1; 
+
+}
+
+template<int TW, int TH, int BN, int BK, int BC>
+__device__ __forceinline__ void store_output_tile(float *Accum, unsigned char* shared_mem, float *C, 
+                       int out_h, int out_w, int tiles_dim_w, int tiles_dim_h,  int tw, int th){
+  
+  float2 *output_smem = (float2 *) shared_mem;
+  float2 *accumulator = (float2 *) Accum;
+  // float2 *C_out = (float2*)C;
+
+  // float2 *C_tile = (float2*) input_frag_mem;
+  // float2 *At = (float2*) filter_frag_mem;
+
+  float2 C_tile[16]; 
+  float2 At[16]; 
+
+  int warpid = threadIdx.y;
+  int laneid = threadIdx.x;
+  unsigned short mask1 = get_mask(laneid, tiles_dim_w, tiles_dim_h, tw, th, out_w, out_h);
+  int id1 = (laneid % tw) * 2 + (laneid / tw) * out_w * 2;
+  
+  int acumm1 = ((threadIdx.x%8)/2)*34 + threadIdx.x%2 + (threadIdx.x/16)*2 + ((threadIdx.x/8)%2)*8;
+  int acumm2 = acumm1+4;
+                       
+  
+  // For transformating
+  int offset = BN_p*2; //*2/2
+  int offsetp = warpid*BN_p*2; //*2/2
+
+  int idx = BN/wmmaM*BK/wmmaN*4;
+  // int init = ( (threadIdx.y/4)*BN_p*16 + (threadIdx.y%4)*(32+2) ) *2 + threadIdx.x;
+
+  int c_glb_offset = out_h*out_w;
+  
+
+  int c_tensor = blockIdx.z*c_glb_offset*BK + blockIdx.x * TW  + blockIdx.y * out_w * TH +
+                //  (threadIdx.x % tw) * 2 + (threadIdx.x / tw) * out_w * 2 + 
+                 warpid*2*c_glb_offset;
+
+
+  #pragma unroll                                  
+  for(int round=0; round<4; round++){
+
+    // each round will output 16(E)x32(T)x16(K)
+    // 32T is divided into 2x16(T)
+    // each thread needs to write 8 floats into smem.
+
+    
+    *((float2 *)(output_smem + offsetp + acumm1))      = accumulator[round*4+0];
+    *((float2 *)(output_smem + offsetp + acumm2))      = accumulator[round*4+1];
+    *((float2 *)(output_smem + offsetp + acumm1 + 16)) = accumulator[round*4+2];
+    *((float2 *)(output_smem + offsetp + acumm2 + 16)) = accumulator[round*4+3];
+      
+    
+
+    *((float2 *)(output_smem+offsetp + BN_p + acumm1))      = accumulator[BK/4+round*4+0];
+    *((float2 *)(output_smem+offsetp + BN_p + acumm2))      = accumulator[BK/4+round*4+1];
+    *((float2 *)(output_smem+offsetp + BN_p + acumm1 + 16)) = accumulator[BK/4+round*4+2];
+    *((float2 *)(output_smem+offsetp + BN_p + acumm2 + 16)) = accumulator[BK/4+round*4+3];
+    
+    
+    *((float2 *)(output_smem+BN_p*16 + offsetp + acumm1))      =  accumulator[idx + round*4 + 0];
+    *((float2 *)(output_smem+BN_p*16 + offsetp + acumm2))      =  accumulator[idx + round*4 + 1];
+    *((float2 *)(output_smem+BN_p*16 + offsetp + acumm1 + 16)) =  accumulator[idx + round*4 + 2];
+    *((float2 *)(output_smem+BN_p*16 + offsetp + acumm2 + 16)) =  accumulator[idx + round*4 + 3];
+
+
+
+    *((float2 *)(output_smem+BN_p*16 + offsetp + BN_p + acumm1))      = accumulator[idx + BK/4 + round*4 + 0];
+    *((float2 *)(output_smem+BN_p*16 + offsetp + BN_p + acumm2))      = accumulator[idx + BK/4 + round*4 + 1];
+    *((float2 *)(output_smem+BN_p*16 + offsetp + BN_p + acumm1 + 16)) = accumulator[idx + BK/4 + round*4 + 2];
+    *((float2 *)(output_smem+BN_p*16 + offsetp + BN_p + acumm2 + 16)) = accumulator[idx + BK/4 + round*4 + 3];
+
+    __syncthreads();
+
+
+    // for output transformation, the role of threadIdx.y changes again:
+    // in the main loop, different threadIdx.y deal with different element of the 4x4 tile 
+    // here, they are for 4 different groups of lane ids from optSTS64 layout
+    // for init (and init+32), we need to identify its tile number (0-31) within the supertile     
+    // first, from init, find out from which threadIdx.x it comes.
+    // int idy = init - threadIdx.x;
+    // if(idy > 204) idy -= BN_p*16*2; 
+    // int idx = idy + threadIdx.x;
+    // if(idx % 2 == 0)
+    //     idx = idx / 2;
+    // else
+    //     idx = (idx-1) / 2;
+    // int l = laneid[idx];
+    // now we got l, which is the land id which computed accumulated sum for the tile element 
+    // each lane id (or threadIdx.x) computed 8 tiles which are distributed into 4 locations spreading
+    // over the smem. We need to find which of the 8 the current tile is.   
+    // use tileid table to figure out
+    // int id1 = tileid[0][l];
+
+
+    // for 2nd tile
+    // idx = idy + threadIdx.x + 32;
+    // if(idx % 2 == 0)
+    //     idx = idx / 2;
+    // else
+    //     idx = (idx-1) / 2;
+    // l = laneid[idx];
+    // int id2 = tileid[1][l];
+
+
+    // int tx = 0, ty=0; 
+    // if(blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 &&  threadIdx.x == tx  && threadIdx.y == ty)      
+    //   printf("round, %d, [", round);
+    for(int i=0; i<16; i++){
+      C_tile[i] = output_smem[i*offset + loc(laneid, warpid*2)];
+      
+    }
+    
+
+    // transform output tiles
+    // transform_output_tile(C, C_tile, At, tiles_dim, round, c_tensor, c_glb_offset, id1, id2, mask, out_w);
+    transform_output_tile(C, C_tile, At, round, c_tensor, c_glb_offset, id1, mask1, out_w);
+    __syncthreads();
+
+    c_tensor +=  16 * c_glb_offset;
+
+  }
+}
+
+#else
 
 template<int TW, int TH, int BN, int BK, int BC>
 __device__ __forceinline__ void store_output_tile(float4 acumm_smem[][16], float *shared_mem, float * __restrict__ C, 
@@ -355,6 +547,8 @@ float4 *input_frag_mem, float4* filter_frag_mem){
     __syncthreads();
   }
 }
+
+#endif
 
 
 #if __CUDA_ARCH__ >= CC_AMPERE
@@ -546,6 +740,47 @@ template <typename T>
 
 
 #define d(input, i, j) ( input[(i<<2) + (j)] )
+#if __CUDA_ARCH__ >= CC_AMPERE
+
+// smem layout for input tile
+// ___________32T(C0)______32T(C1)____... _____32T(C15) E0
+// ___________32T(C0)______32T(C1)____... _____32T(C15) E1
+// .....
+// .....
+// ___________32T(C0)______32T(C1)____... _____32T(C15) E15
+
+__device__ __forceinline__ void load_and_transform_input_tile(half *Btd, half *pOutputs){
+
+  half2 workspace[3]; 
+  int c_offset = 4*(64+PADDING);
+  int c_tensor = (threadIdx.x/8)*(64+PADDING) + (threadIdx.x%8)*4 + (threadIdx.y/4)*32 + (threadIdx.y%4);
+  // int offset = 0;
+  half2 *ptr = (half2 *)pOutputs;
+  half2 *Btd2 = (half2 *)Btd;
+  // for(int k=0; k<2; k++){
+  #pragma unroll
+  for(int j=0; j<4; j++){
+    workspace[0] = Btd2[j];
+    workspace[1] = Btd2[j+4];
+    workspace[2] = Btd2[j+8];
+
+    Btd2[j]    = workspace[0] - workspace[2];
+    Btd2[j+4]  = workspace[1] + workspace[2];
+    Btd2[j+8]  = workspace[2] - workspace[1];
+    Btd2[j+12] = workspace[1] - Btd2[j+12];
+  }      
+    // int offset1 = ((threadIdx.x % 2) ^ k) * (BN+PADDING);
+  #pragma unroll
+  for(int i=0; i<4; i++){ // prefetch 1 input tile/thread
+    ptr[c_tensor+i*c_offset*4] = d(Btd2, i, 0) - d(Btd2, i, 2);  
+    ptr[c_tensor+i*c_offset*4+c_offset] = d(Btd2, i, 1) + d(Btd2, i, 2);
+    ptr[c_tensor+i*c_offset*4+2*c_offset] = d(Btd2, i, 2) - d(Btd2, i, 1);
+    ptr[c_tensor+i*c_offset*4+3*c_offset] = d(Btd2, i, 1) - d(Btd2, i, 3);
+  }     
+}
+
+#else
+
 template <int BN, int BK, int BC>
 __device__ __forceinline__ void load_and_transform_input_tile(float *Btd, float * __restrict__ pOutputs){
 
@@ -575,6 +810,8 @@ __device__ __forceinline__ void load_and_transform_input_tile(float *Btd, float 
   }     
 
 }
+
+#endif
 
 template <int BN, int BK, int BC>
 __device__ __forceinline__ void load_filter_tile(float *tiles, float * __restrict__ pOutputs, 
@@ -626,6 +863,134 @@ __device__ __forceinline__ void prefetch_filter_tile(const T * __restrict__ pInp
   }
 }
 
+#if __CUDA_ARCH__ >= CC_AMPERE
+
+template<int TW, int TH>
+__device__ __forceinline__ void prefetch_input_tile(const half *pInputs, half *tile, int in_h, 
+                       int in_w, int tw, int th, unsigned short mask){
+  
+  // load two input tiles per thread
+  // int tx = in_w / gridDim.x, ty = in_h / gridDim.y;  
+  int c_offset = in_h*in_w; 
+  int c_tile = blockIdx.x * TW  + blockIdx.y * in_w * TH; 
+  int c_tensor = c_tile + (threadIdx.x % tw) * 2 + (threadIdx.x / tw) * in_w * 2 + 
+                threadIdx.y*2*c_offset - (in_w+1);
+
+      // + threadIdx.y*(in_h*in_w) + (in_w+1);
+  // if(threadIdx.x/in_n != 0){
+  //   printf(" %d, %d, %d, %d \n", blockIdx.x, blockIdx.y,  threadIdx.x, threadIdx.y);
+  // }
+  int acumm,x;
+  //short x1,x2;     
+
+  // if(blockIdx.y == 0 && blockIdx.x == 0 && blockIdx.z == 0 
+  //     && threadIdx.x == 31 && threadIdx.y == 0){
+  //         printf("X, %hu \n", mask);   
+  //   }
+           
+  if(mask==0xFFFF){
+    #pragma unroll
+    for(int i=0; i<4; i++){
+      acumm = i*in_w;   
+      #pragma unroll
+      for(int j=0; j<4; j++){
+        x = (i<<2) + j;
+        tile[2*x + 0] = pInputs[acumm + j + c_tensor]; //1st channel
+        tile[2*x + 1] = pInputs[acumm + j + c_tensor + c_offset];//2nd channel
+        // if(blockIdx.y == 0 && blockIdx.x == 0 && blockIdx.z == 0 
+        //   && threadIdx.x == 31 && threadIdx.y == 0){
+        //      printf("A, %d, %d, %d, %f, %d\n", i, j, acumm+j, tile[(i<<2) + j],acumm + j + c_tensor);   
+        // }
+      }
+    }
+
+  } else {
+    for(int i=0; i<4; i++){
+      acumm = i*in_w;   
+      #pragma unroll
+      for(int j=0; j<4; j++){
+        x = (i<<2) + j;
+        tile[2*x+0] = 0.f;
+        tile[2*x+1] = 0.f;
+        if(mask&(1<<x)){
+          tile[2*x + 0]=pInputs[acumm + j + c_tensor];
+          tile[2*x + 1]=pInputs[acumm + j + c_tensor + c_offset];
+        }
+          // if(blockIdx.y == 0 && blockIdx.x == 0 && blockIdx.z == 0 
+          //   && threadIdx.x == 0 && threadIdx.y == 0){
+          //      printf("B, %d, %d, %d, %d, %d, %d, %hu, %s, %f, %f, %d, %d\n", i, j, x, acumm+j, c_tensor, c_offset, mask, mask&(1<<x)?"t":"f",
+          //       __half2float(tile[2*x+0]), __half2float(tile[2*x+1]), acumm + j + c_tensor, acumm + j + c_tensor + c_offset);   
+          // }        
+      }
+    }
+  }
+}
+
+// smem layout for transformed filter weights 
+// ___________16C(K0)______16C(K1)____... _____16C(K31) E0
+// ___________16C(K0)______16C(K1)____... _____16C(K31) E1
+// .....
+// .....
+// ___________16C(K0)______16C(K1)____... _____16C(K31) E15
+// -- B_Frag1
+template<int BK, int BC>
+__device__ __forceinline__ void prefetch_filter_tile_async(const half *pInputs, half *smem, int filt_c, int filt_k, int ko){
+
+  int tx = threadIdx.x;
+  int ty = threadIdx.y;
+  int c_offset = filt_c*filt_k;
+  int c_tensor = blockIdx.z*BK*filt_c + ty*c_offset + (tx/2)*filt_c + (tx%2)*8 + ko * 32 * filt_c; // Iny*filt_k*4*4
+  int c_tensor_s = ty*(BC*32) + tx * 8;
+
+  // each threadIdx.y corresponds to 2 channels; there are 8 different threadIdx.y so 16 channels 
+  // each threadx load 16 filters in K 
+  //each thread (32 threads in x direction) loads 4 kernel tiles (2 for each channel and 32 in K direction apart)
+  
+  
+  // int tid = ty*32+tx;
+  // int cid = ((ty*32+tx) % 128) / 8;   
+  // int kid = tx % 8;
+  // tx = tx % 16;
+  // int eid = (tx / 4) * (filt_k<<2) + (tx % 4) * filt_k;  
+
+
+   // swizzling, but not necessary here
+  // int c = tx % 8;
+  // int s = tx / 8;
+  // int row =  (c & 1) | ((c >> 1) & 2);
+  // int bank = ((c << 1) & 4) | s ^ row;
+  #pragma unroll
+  for(int k = 0; k < 2; k++){ // each cp.async can load 16 bytes = 8 halfs, we need to load 16 halfs
+    // load 8 tile elements, each ty loads 16Kx16C 
+    // each tx loads 8 halfs (16 bytes)
+    void *ptr = (void *)(smem + k*8*(BC*32) + c_tensor_s);
+    // void *ptr = (void *)(smem + k*8*(BC*16) + ty*(BC*16) + (row * 8 + bank) * 8);
+    unsigned int smem_ptr;
+
+    asm("{ .reg .u64 smem_ptr; cvta.to.shared.u64 smem_ptr, %1; cvt.u32.u64 "
+        "%0, smem_ptr; }\n"
+        : "=r"(smem_ptr)
+        : "l"(ptr));
+
+    asm volatile("cp.async.cg.shared.global [%0], [%1], %2;\n" ::"r"(smem_ptr),
+                "l"(&pInputs[c_tensor + k * 8 * c_offset]),
+                "n"(16));
+    
+    ptr = (void *)(smem + k*8*(BC*32) + c_tensor_s + BC*16);    
+
+    asm("{ .reg .u64 smem_ptr; cvta.to.shared.u64 smem_ptr, %1; cvt.u32.u64 "
+        "%0, smem_ptr; }\n"
+        : "=r"(smem_ptr)
+        : "l"(ptr));
+
+    asm volatile("cp.async.cg.shared.global [%0], [%1], %2;\n" ::"r"(smem_ptr),
+                "l"(&pInputs[c_tensor + 16*filt_c + k * 8 * c_offset]),
+                "n"(16));
+  }
+}
+
+#else
+
 template<int TW, int TH>
 __device__ __forceinline__ void prefetch_input_tile(const float * __restrict__ pInputs, float *tile, int in_h, 
                        int in_w, int tw, int th, unsigned short mask){
@@ -663,6 +1028,7 @@ __device__ __forceinline__ void prefetch_input_tile(const float * __restrict__ p
   }
 }
 
+#endif 
 
 // this remains the same as 32x64x8 case
 __device__  __forceinline__ void prefetch_filter_frag(float4 *filter_frag, float4 *B_frag, int f_frag_offset, int offset1, int offset2){
@@ -691,6 +1057,379 @@ __device__  __forceinline__ void prefetch_input_frag(float4* input_frag, float4 
   *((float4*) (input_frag + 2)) = *(A_frag + frag_offset + offset1);
   *((float4*) (input_frag + 3)) = *(A_frag + frag_offset + offset2); //3=2+1
 }
+
+#if __CUDA_ARCH__ >= CC_AMPERE
+
+__device__ void loadFragA(unsigned int *frag, half *smem, int ki)
+{
+    // load 32x16    
+    // we use mma.sync.aligned.m16n8k8.row.col.f32.f16.f16.f32 to do 16x16x16 mm,
+    // so we need to fill 2 16x8 A matrices;
+    // for each 16x8 matrix A, each thread loads 4 elements (a0, a1, a2, a3) and they are
+    // row 0, col 0,1 and row 8 col 0,1
+    // so from the point of view the 16x16 matrix, all 8 elemets for thread 0 are
+    // row/tile 0, col/channel (0, 1, 8, 9) and row/tile 8, col/chennel (0, 1, 8, 9)
+    // to avoid bank conflicts, we can make threads in a warp coordinate the loading by using 
+    // specially designed offsets
+    // T0, T4, T8,..T28 all 8 threads load the same channels (0 and 1) and successive super tiles,
+    // which results in bank conflicts. We let them load in an interleaving way:
+    // first (0, 1, 0, 1, 0, 1, 0, 1)
+    // then  (1, 0, 1, 0, 1, 0, 1, 0)
+    // so in each round, successive threads load different channels and avoid conflicts
+    // similarly for the otehr 24 threads
+    int tx = threadIdx.x;
+    // int ty = threadIdx.y;
+    // half2 *fragA = (half2 *)frag;
+    // half2 *input = (half2 *)smem;
+    unsigned int *fragA = frag;
+    unsigned int *input = (unsigned int *)smem;
+    #pragma unroll
+    for (int i = 0; i < 2; ++i){        
+      // for (int k = 0; k < 2; ++k){              
+        //                      |   channel          |   |     super tile      |
+        fragA[i*4+0] = input[i*2*(64+PADDING) +                     tx];
+        fragA[i*4+1] = input[i*2*(64+PADDING) +                32 + tx];
+        fragA[i*4+2] = input[i*2*(64+PADDING) + (64+PADDING)      + tx];
+        fragA[i*4+3] = input[i*2*(64+PADDING) + (64+PADDING) + 32 + tx];
+        
+    }
+}
+
+template<int BN, int BC>
+__device__ void loadFragB(unsigned int *frag, half *smem, int ki)
+{
+    // // load 16x16    
+    // // for (int i = 0; i < 2; ++i)
+    // // {      
+    //   nvcuda::wmma::load_matrix_sync(frag, smem + threadIdx.y*(wmmaN*wmmaK)+ ki * 8 *(wmmaN*wmmaK) , 16);
+    // // }
+    // load 16x16    
+    // we use mma.sync.aligned.m16n8k8.row.col.f32.f16.f16.f32 to do 16x16x16 mm,
+    // so we need to fill 4 8x8 B matrices;
+    // for each 8x8 matrix B, thread 0 loads 2 elements (a0, a1) and they are
+    // row 0,1 col 0
+    // so from the point of view of the 16x16 matrix, all 8 elements for thread 0 are
+    // row/channel (0, 1) col/K 0 , row/channel (8, 9), col/K 0
+    // row/channel (0, 1) col/K 8 , row/channel (8, 9), col/K 8
+    // to avoid bank conflicts, we can make threads in a warp coordinate the loading by using 
+    // specially designed offsets
+    // T0, T4, T8,..T28 all 8 threads load the same channels (0 and 1) and successive filters in K,
+    // which results in bank conflicts. We let them load in an interleaving way:
+    // first (0, 1, 0, 1, 0, 1, 0, 1)
+    // then  (1, 0, 1, 0, 1, 0, 1, 0)
+    // so in each round, successive threads load different channels and avoid conflicts
+    // similarly for the other 24 threads
+    // note the code is very similar to loadFragA
+    int tx = threadIdx.x;
+    int ty = threadIdx.y;
+    // half *fragB = (half *)frag;
+    unsigned int * ptr;
+    #pragma unroll
+    for (int k = 0; k < 2; ++k){
+      //                  | tile element  |   |   channel          |  |       K      |
+      // fragB[k*4+0] = smem[(ki*8+ty)*(BC*BC) + BC*access_s[0][tx]     + tx / 4 + k * 8];
+      // fragB[k*4+1] = smem[(ki*8+ty)*(BC*BC) + BC*access_s[1][tx]     + tx / 4 + k * 8];
+      // fragB[k*4+2] = smem[(ki*8+ty)*(BC*BC) + BC*(access_s[0][tx]+8) + tx / 4 + k * 8];
+      // fragB[k*4+3] = smem[(ki*8+ty)*(BC*BC) + BC*(access_s[1][tx]+8) + tx / 4 + k * 8];
+      //                                             | tile element  |   |        K          |   | channel   |
+      // ptr =  reinterpret_cast<unsigned int *>(smem + (ki*8+ty)*(BC*BC) + BC * (tx / 4 + k * 8) +  (tx%4)*2    );
+      ptr =  reinterpret_cast<unsigned int *>(smem + (ki*8+ty)*(BC*BN) + BC * (tx / 4 + k * 8) +  access_t[0][tx] );
+      frag[k*2+0] = ptr[0];
+      // ptr =  reinterpret_cast<unsigned int *>(smem + (ki*8+ty)*(BC*BC) + BC * (tx / 4 + k * 8) +  (tx%4)*2 + 8);
+      ptr =  reinterpret_cast<unsigned int *>(smem + (ki*8+ty)*(BC*BN) + BC * (tx / 4 + k * 8) +  access_t[1][tx]);
+      frag[k*2+1] = ptr[0];
+    }
+    #pragma unroll
+    for (int k = 0; k < 2; ++k){
+      //                                             | tile element  |   |        K          |   | channel   |
+      // ptr =  reinterpret_cast<unsigned int *>(smem + (ki*8+ty)*(BC*BC) + BC * (tx / 4 + k * 8) +  (tx%4)*2    );
+      ptr =  reinterpret_cast<unsigned int *>(smem + (ki*8+ty)*(BC*BN) + BC*16 + BC * (tx / 4 + k * 8) +  access_t[0][tx] );
+      frag[4+k*2+0] = ptr[0];
+      // ptr =  reinterpret_cast<unsigned int *>(smem + (ki*8+ty)*(BC*BC) + BC * (tx / 4 + k * 8) +  (tx%4)*2 + 8);
+      ptr =  reinterpret_cast<unsigned int *>(smem + (ki*8+ty)*(BC*BN) + BC*16 + BC * (tx / 4 + k * 8) +  access_t[1][tx]);
+      frag[4+k*2+1] = ptr[0];
+    }    
+}
+
+
+// Fragments layouts for A and B
+// used by mmaSync
+// each mma.sync.aligned.m16n8k8 takes 2 FragA and 1 FragB
+//                FragA
+//   ______________________________
+//  |              |               |
+//  |      0       |        1      |
+//  |              |               |
+//  |______________|_______________|
+//  |              |               |
+//  |              |               |
+//  |      2       |        3      |
+//  |              |               |
+//  |______________|_______________|
+
+
+//                FragB
+//   ______________________________
+//  |              |               |
+//  |      0       |        2      |
+//  |              |               |
+//  |______________|_______________|
+//  |              |               |
+//  |              |               |
+//  |      1       |        3      |
+//  |              |               |
+//  |______________|_______________|
+
+
+__device__ void mmaSync(unsigned int *fragA, unsigned int *fragB, float *accum)
+{
+    asm volatile(
+        "mma.sync.aligned.m16n8k8.row.col.f32.f16.f16.f32 "
+        "{%0,  %1,  %2,  %3},"
+        "{%4,  %5},"
+        "{%6},"
+        "{%7,  %8,  %9,  %10};\n"
+        : "=f"(accum[0]), "=f"(accum[1]), "=f"(accum[4]), "=f"(accum[5])
+        : "r"(fragA[0]), "r"(fragA[2]),
+          "r"(fragB[0]),
+          "f"(accum[0]), "f"(accum[1]), "f"(accum[4]), "f"(accum[5]));
+
+    asm volatile(
+        "mma.sync.aligned.m16n8k8.row.col.f32.f16.f16.f32 "
+        "{%0,  %1,  %2,  %3},"
+        "{%4,  %5},"
+        "{%6},"
+        "{%7,  %8,  %9,  %10};\n"
+        : "=f"(accum[0]), "=f"(accum[1]), "=f"(accum[4]), "=f"(accum[5])
+        : "r"(fragA[1]), "r"(fragA[3]),
+          "r"(fragB[1]),
+          "f"(accum[0]), "f"(accum[1]), "f"(accum[4]), "f"(accum[5]));
+
+    asm volatile(
+        "mma.sync.aligned.m16n8k8.row.col.f32.f16.f16.f32 "
+        "{%0,  %1,  %2,  %3},"
+        "{%4,  %5},"
+        "{%6},"
+        "{%7,  %8,  %9,  %10};\n"
+        : "=f"(accum[2]), "=f"(accum[3]), "=f"(accum[6]), "=f"(accum[7])
+        : "r"(fragA[0]), "r"(fragA[2]),
+          "r"(fragB[2]),
+          "f"(accum[2]), "f"(accum[3]), "f"(accum[6]), "f"(accum[7]));
+
+    asm volatile(
+        "mma.sync.aligned.m16n8k8.row.col.f32.f16.f16.f32 "
+        "{%0,  %1,  %2,  %3},"
+        "{%4,  %5},"
+        "{%6},"
+        "{%7,  %8,  %9,  %10};\n"
+        : "=f"(accum[2]), "=f"(accum[3]), "=f"(accum[6]), "=f"(accum[7])
+        : "r"(fragA[1]), "r"(fragA[3]),
+          "r"(fragB[3]),
+          "f"(accum[2]), "f"(accum[3]), "f"(accum[6]), "f"(accum[7]));
+}
+
+template<int TW, int TH, int BN, int BK, int BC>
+__global__ void Winograd_kernel(half *A, half *B, float *C,
+                    int tiles_dim_w, int tiles_dim_h,
+                    int in_c, int in_h, int in_w,
+                    int tile_size, int X, int Y,
+                    int filt_k, int filt_c,
+                    int out_c,
+                    int out_h, int out_w){
+
+  extern __shared__ unsigned char shared_mem[];
+  half *input_smem  = reinterpret_cast<half *>(shared_mem);
+  // half *filter_smem = input_smem + 16*BC*BN;
+
+  unsigned short m = 0xFFFF;
+  // if((blockIdx.y/tiles_dim)==0)   m&=0xFFF0;
+  // if((blockIdx.y/tiles_dim)==(tiles_dim-1)) m &= (!(in_w%2))?(0x0FFF):(0x00FF);
+  // if(!((blockIdx.y+1)%tiles_dim)) m &= (!(in_w%2))?(0x7777):(0x3333);
+  // if(!((blockIdx.y)%tiles_dim))   m&=0xeeee;
+
+  if(blockIdx.y==0 && (threadIdx.x / X) == 0)   m &= 0xFFF0;  // pad top row
+  if(tiles_dim_w % X == 0 && tiles_dim_h % Y == 0){
+    if(blockIdx.y==gridDim.y-1 && threadIdx.x / X == Y-1) m &= (!(in_h%2))?(0x0FFF):(0x00FF); //pad bottom row or bottom 2 rows
+    if(blockIdx.x==gridDim.x-1 && (threadIdx.x % X) == X-1) m &= (!(in_w%2))?(0x7777):(0x3333); // pad right col or right 2 cols
+  }else if(tiles_dim_w % X == 0){
+    int k = in_h % TH; 
+    int k1 =  k % 2 ? (k+1)/2 : k/2; // there could be 4*k1 tiles
+    if(blockIdx.x==gridDim.x-1 && (threadIdx.x % X) == X-1) m &= (!(in_w%2))?(0x7777):(0x3333); // pad right col or right 2 cols
+    if(blockIdx.y==gridDim.y-1 && threadIdx.x / X == k1-1) m &= (!(k%2))?(0x0FFF):(0x00FF); //pad bottom row or bottom 2 rows
+    if(blockIdx.y==gridDim.y-1 && threadIdx.x / X > k1-1) m &= 0x0; //pad all zeros since this tile does not exist
+  }else if(tiles_dim_h % Y == 0){
+    int k = in_w % TW;   
+    int k1 =  k % 2 ? (k+1)/2 : k/2; // there could be 8*k1 tiles
+    if(blockIdx.y==gridDim.y-1 && threadIdx.x / X == Y-1) m &= (!(in_h%2))?(0x0FFF):(0x00FF); //pad bottom row or bottom 2 rows
+    if(blockIdx.x==gridDim.x-1 && threadIdx.x % X == k1-1) m &= (!(k%2))?(0x7777):(0x3333); // pad right col or right 2 cols
+    if(blockIdx.x==gridDim.x-1 && threadIdx.x % X > k1-1) m &= 0x0; //pad all zeros since this tile does not exist 
+  }else{
+    int kh = in_h % TH; 
+    int kw = in_w % TW;   
+    int kh1 =  kh % 2 ? (kh+1)/2 : kh/2; // there could be kh1*kw1 tiles
+    int kw1 =  kw % 2 ? (kw+1)/2 : kw/2; 
+    if(blockIdx.y==gridDim.y-1 && threadIdx.x / X == kh1-1) m &= (!(kh%2))?(0x0FFF):(0x00FF); //pad bottom row or bottom 2 rows
+    if(blockIdx.y==gridDim.y-1 && threadIdx.x / X > kh1-1) m &= 0x0; //pad all zeros since this tile does not exist
+    if(blockIdx.x==gridDim.x-1 && threadIdx.x % X == kw1-1) m &= (!(kw%2))?(0x7777):(0x3333); // pad right col or right 2 cols
+    if(blockIdx.x==gridDim.x-1 && threadIdx.x % X > kw1-1) m &= 0x0; //pad all zeros since this tile does not exist
+  }  
+  if(blockIdx.x==0 && (threadIdx.x % X) == 0)   m &=0xeeee;  // pad left col
+  
+  half img_tile[32]; // Prefetch input from GMEM
+  // half filter_tile[64]; // Prefetch filter from GMEM
+
+  
+  half *A_frag; // Input data pointer
+
+  // half *B_frag; // Filter data pointer  
+  // half *B_frag1 =  filter_smem;
+  half *B_frag1 = input_smem + 16*4*(64+PADDING)*2;
+  half *B_frag2 =  B_frag1 + 16*BC*BK/2;  // 16*BC*BK/4 = 4*BC*BK
+  
+
+  // unsigned int FragA[2 * BN / wmmaM * 4];      //  4 int32 = 8 half
+  unsigned int *FragA = (unsigned int *)img_tile;      //  4 int32 = 8 half
+  unsigned int FragB[2 * BN / wmmaN * 4];      // 4 int32 = 8 half
+  float Accum[2 * BN / wmmaM * BK / wmmaN * 8] = {0.0}; // [4, 2, 8]
+
+  prefetch_input_tile<TW, TH>(A, img_tile, in_h, in_w, X, Y, m);
+  prefetch_filter_tile_async<BK, BC>(B, B_frag1, filt_c, filt_k, 0);  
+  asm volatile("cp.async.commit_group;\n" ::);
+  // prefetch_filter_tile_async(B, B_frag2, filt_c, filt_k, 1);  
+  // asm volatile("cp.async.commit_group;\n" ::);
+  // prefetch_filter_tile_async(B, B_frag3, filt_c, filt_k, 2);  
+  // asm volatile("cp.async.commit_group;\n" ::);
+  // int ko = 0;
+  
+
+  // Mainloop - iterates over the entire K dimension - not unrolled
+
+  // wee need to do 16-batched 32x16x64 MM, each wmma will do 16x16x16 so 
+  // we need to do 16 2x4 wmmas's 
+  // we allocate 2 FragA and 4 FragB and 16 Accum, then in a loop of 2 iterations 
+  // reuse 2 FragA and 4 FragB
+  //    
+  for(int iter=0; iter<in_c-BC; iter+=BC){ // Current iteration
+
+   
+
+    load_and_transform_input_tile(img_tile, input_smem);
+    // load_filter_tile(filter_tile, filter_smem, filt_c, filt_k);
+
+    __syncthreads();
+
+    for(int k = 0; k < 2; k++){
+      // A_frag = input_smem  + threadIdx.y*(BN+PADDING)*BC + k*8*(BN+PADDING)*BC;
+      A_frag = input_smem  + threadIdx.y*(64+PADDING)*4*2 + k*8*(64+PADDING)*4*2;
+      // B_frag = filter_smem + threadIdx.y*BC*BK + k*8*BC*BK;      
+      loadFragA(FragA + k * BN / wmmaM * 4, A_frag, k);
+    }
+  
+
+    asm volatile("cp.async.wait_group %0;\n" ::"n"(0));
+    __syncthreads();   
+    // now both input and filter tiles are in smem, we can load wmma frags and do wmma computation  
+    // if(iter<(in_c-BC)){ // ???should there be a if here
+    prefetch_filter_tile_async<BK,BC>(B, B_frag2, filt_c, filt_k, 1);  
+    asm volatile("cp.async.commit_group;\n" ::);
+
+    for(int k = 0; k < 2; k++){
+      loadFragB(FragB + k * BN / wmmaN * 4, B_frag1, k);
+    }
+    
+    for(int k = 0; k < 2; k++){  
+      for(int mii = 0; mii < BN / wmmaM; mii++){
+        for(int nii = 0; nii < BN / wmmaN; nii++){
+            // 16x16x16 for each wmma
+             mmaSync(&FragA[k * BN / wmmaM * 4 + mii * 4], &FragB[k * BN / wmmaN * 4 + nii * 4], &Accum[k*(BN / wmmaM * BK / wmmaN) * 8 + mii * (BK / wmmaN) * 8 + nii * 8]);
+        }
+      }     
+    }
+
+    // __syncthreads();
+    asm volatile("cp.async.wait_group %0;\n" ::"n"(0));
+    __syncthreads();   
+
+    B += BC; 
+
+    prefetch_filter_tile_async<BK,BC>(B, B_frag1, filt_c, filt_k, 0);  
+    asm volatile("cp.async.commit_group;\n" ::);
+
+    for(int k = 0; k < 2; k++){
+      loadFragB(FragB + k * BN / wmmaN * 4, B_frag2, k);
+    }
+    for(int k = 0; k < 2; k++){
+      for(int mii = 0; mii < BN / wmmaM; mii++){
+        for(int nii = 0; nii < BN / wmmaN; nii++){
+            // 16x16x16 for each wmma
+            mmaSync(&FragA[k * BN / wmmaM * 4 + mii * 4], &FragB[k * BN / wmmaN * 4 + nii * 4], &Accum[k*(BN / wmmaM * BK / wmmaN) * 8 + mii * (BK / wmmaN) * 8 + nii * 8 + 16]);
+        }
+      }     
+    }
+    
+    A += BC*in_w*in_h;
+    // B += filt_k*BC*4*4;
+
+    // if(iter<(in_c-BC)){
+    prefetch_input_tile<TW,TH>(A, img_tile, in_h, in_w, X, Y, m);
+      // prefetch_filter_tile(B, filter_tile, filt_k);
+
+    __syncthreads();
+  }
+
+  // last iteration 
+  load_and_transform_input_tile(img_tile, input_smem);  
+  __syncthreads(); 
+
+  for(int k = 0; k < 2; k++){
+    // A_frag = input_smem  + threadIdx.y*(BN+PADDING)*BC + k*8*(BN+PADDING)*BC;      
+    A_frag = input_smem  + threadIdx.y*(64+PADDING)*4*2 + k*8*(64+PADDING)*4*2;
+    loadFragA(FragA + k * BN / wmmaM * 4, A_frag, k);
+  }
+
+  asm volatile("cp.async.wait_group %0;\n" ::"n"(0));
+  __syncthreads();   
+    
+  prefetch_filter_tile_async<BK,BC>(B, B_frag2, filt_c, filt_k, 1);  
+  asm volatile("cp.async.commit_group;\n" ::);  
+  
+  for(int k = 0; k < 2; k++){
+    loadFragB(FragB + k * BN / wmmaN * 4, B_frag1, k);
+  }
+    
+  for(int k = 0; k < 2; k++){  
+    for(int mii = 0; mii < BN / wmmaM; mii++){
+      for(int nii = 0; nii < BN / wmmaN; nii++){
+          // 16x16x16 for each wmma
+          mmaSync(&FragA[k * BN / wmmaM * 4 + mii * 4], &FragB[k * BN / wmmaN * 4 + nii * 4], &Accum[k*(BN / wmmaM * BK / wmmaN) * 8 + mii * (BK / wmmaN) * 8 + nii * 8]);
+      }
+    }     
+  }
+
+  
+
+  asm volatile("cp.async.wait_group %0;\n" ::"n"(0));
+  __syncthreads();   
+
+  for(int k = 0; k < 2; k++){
+    loadFragB(FragB + k * BN / wmmaN * 4, B_frag2, k);
+  }
+
+  for(int k = 0; k < 2; k++){
+    for(int mii = 0; mii < BN / wmmaM; mii++){
+      for(int nii = 0; nii < BN / wmmaN; nii++){
+          // 16x16x16 for each wmma
+          mmaSync(&FragA[k * BN / wmmaM * 4 + mii * 4], &FragB[k * BN / wmmaN * 4 + nii * 4], &Accum[k*(BN / wmmaM * BK / wmmaN) * 8 + mii * (BK / wmmaN) * 8 + nii * 8 + 16]);
+      }    
+    }     
+  }
+
+  // Transpose, transform and store accumulated result
+  store_output_tile<TW,TH,BN,BK,BC>(Accum, shared_mem, C, out_h, out_w, tiles_dim_w, tiles_dim_h, X, Y);
+                     
+}
+
+#else
 
 template<typename T, int TW, int TH, int BN, int BK, int BC>
 __global__ void Winograd_kernel(const float *A, const T *B, float *C,
@@ -817,7 +1556,7 @@ __global__ void Winograd_kernel(const float *A, const T *B, float *C,
                   input_frag_mem, filter_frag_mem);
                      
 }
-
+#endif
 
 // }
 
@@ -835,6 +1574,35 @@ static void conv_winograd_stage0_cuda(
 #endif
     
 }
+
+#if __CUDA_ARCH__ >= CC_AMPERE
+template<int BN, int BK, int BC>
+static void conv_winograd_stage1_cuda(int tiles_dim_w, int tiles_dim_h, int X, int Y,   
+        int tile_size, int tile_2d_s,    
+        const int src0_ne0, const int src0_ne1, const int src0_ne2, const int src0_ne3,
+        const int src1_ne0, const int src1_ne1, const int src1_ne2, const int src1_ne3,
+        const int dst_ne0, const int dst_ne1, const int dst_ne2, const int dst_ne3,
+        const T * src0, const half * src1,  float * dst,
+        cudaStream_t stream) {
+
+    int64_t filt_k = src0_ne0; 
+    int64_t in_c   = src1_ne2;
+    int64_t in_h   = src1_ne1;
+    int64_t in_w   = src1_ne0;
+    int64_t filt_c = src0_ne3;
+    int64_t out_c  = filt_k;
+    int64_t out_h  = in_h;
+    int64_t out_w  = in_w;
+    int smem_size = (16*BN*BC + 16*BC*BK)*4;
+    int max_size = 65536; // 64 KB
+    cudaFuncSetAttribute(Winograd_kernel<32,4,BN,BK,BC>, cudaFuncAttributeMaxDynamicSharedMemorySize, max_size);
+
+    Winograd_kernel<32,4,BN,BK,BC><<<dim3((tiles_dim_w+X-1)/X, (tiles_dim_h+Y-1)/Y, filt_k/BK), dim3(BN, 8), smem_size, stream>>>(src1, src0, dst,
+               tiles_dim_w, tiles_dim_h, in_c, in_h, in_w, tile_size, X, Y, 
+               filt_k, filt_c, out_c, tile_2d_s, out_h, out_w);    
+}
+
+#else
 
 template<typename T, int BN, int BK, int BC>
 static void conv_winograd_stage1_cuda(int tiles_dim_w, int tiles_dim_h, int X, int Y,   
@@ -861,6 +1629,9 @@ static void conv_winograd_stage1_cuda(int tiles_dim_w, int tiles_dim_h, int X, i
                tiles_dim_w, tiles_dim_h, in_c, in_h, in_w, tile_size, X, Y, 
                filt_k, filt_c, out_c, tile_2d_s, out_h, out_w);    
 }
+
+
+#endif
 
 void ggml_cuda_op_winograd_stage0(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
@@ -916,13 +1687,13 @@ void ggml_cuda_op_winograd_stage1(ggml_backend_cuda_context & ctx, ggml_tensor *
     // const float * src0_d = (const float *)src0->data;
 
     const ggml_tensor * src1 = dst->src[1];
-    const float * src1_d = (const float *)src1->data;
+    
 
     float * dst_d = (float *)dst->data;
     cudaStream_t stream = ctx.stream();
 
     // GGML_ASSERT(src0->type == GGML_TYPE_F32);
-    GGML_ASSERT(src1->type == GGML_TYPE_F32);
+    // GGML_ASSERT(src1->type == GGML_TYPE_F32);
     GGML_ASSERT( dst->type == GGML_TYPE_F32);
 
     GGML_ASSERT(ggml_is_contiguous(src0));
@@ -950,7 +1721,22 @@ void ggml_cuda_op_winograd_stage1(ggml_backend_cuda_context & ctx, ggml_tensor *
     cudaMemcpyToSymbol(tileid, tid, 64*sizeof(int));
   #endif  
 
+#if __CUDA_ARCH__ >= CC_AMPERE
+      GGML_ASSERT(src1->type == GGML_TYPE_F16);
+      const half * src1_d = (const half *)src1->data;
+      conv_winograd_stage1_cuda<32,64,16>(tiles_dim_w, tiles_dim_h, 16, 2,
+          tile_size, tile_2d_s,
+          src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3],
+          src1->ne[0], src1->ne[1], src1->ne[2], src1->ne[3],
+          dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3],
+          src0_d, src1_d, dst_d, stream);        
+#else  
+    GGML_ASSERT(src1->type == GGML_TYPE_F32);
+
+    const float * src1_d = (const float *)src1->data;
+   
     if(src0->type == GGML_TYPE_F32){
+      
       const float * src0_d = (const float *)src0->data;
       // const float * src1_d = (const float *)src1->data;      
       conv_winograd_stage1_cuda<float,32,64,8>(tiles_dim_w, tiles_dim_h, 16, 2,
@@ -962,6 +1748,7 @@ void ggml_cuda_op_winograd_stage1(ggml_backend_cuda_context & ctx, ggml_tensor *
     } else{
       const half * src0_d = (const half *)src0->data;
       // const half * src1_d = (const half *)src1->data;      
+    
       conv_winograd_stage1_cuda<half,32,64,8>(tiles_dim_w, tiles_dim_h, 16, 2,
           tile_size, tile_2d_s,
           src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3],
@@ -969,6 +1756,7 @@ void ggml_cuda_op_winograd_stage1(ggml_backend_cuda_context & ctx, ggml_tensor *
           dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3],
           src0_d, src1_d, dst_d, stream);
     }
+#endif
 
     
 }
