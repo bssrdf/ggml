@@ -313,18 +313,18 @@ void ggml_cuda_op_concat(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
         } else {
             const size_t size0 = ggml_nbytes(src0);
             const size_t size1 = ggml_nbytes(src1);
-            const void * src0_d = (const void *)src0->data;
 
-            void * dst_d = (void *)dst->data;
-
-            CUDA_CHECK(cudaMemcpyAsync(dst_d,           src0_d, size0, cudaMemcpyDeviceToDevice, stream));
             if (dst->type == GGML_TYPE_F16) {
-                half * dst_ddf_d = (half *)dst->data;
+                const half * src0_d = (const half *)src0->data;
                 const half * src1_d = (const half *)src1->data;
+                half * dst_ddf_d = (half *)dst->data;
+                CUDA_CHECK(cudaMemcpyAsync(dst_ddf_d,           src0_d, size0, cudaMemcpyDeviceToDevice, stream));
                 CUDA_CHECK(cudaMemcpyAsync(dst_ddf_d + size0/2, src1_d, size1, cudaMemcpyDeviceToDevice, stream));
             } else {
+                const float * src0_d = (const float *)src0->data;
                 const float * src1_d = (const float *)src1->data;
                 float * dst_ddf_d = (float *)dst->data;
+                CUDA_CHECK(cudaMemcpyAsync(dst_ddf_d,           src0_d, size0, cudaMemcpyDeviceToDevice, stream));
                 CUDA_CHECK(cudaMemcpyAsync(dst_ddf_d + size0/4, src1_d, size1, cudaMemcpyDeviceToDevice, stream));
             }
         }

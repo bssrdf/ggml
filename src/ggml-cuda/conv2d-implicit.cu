@@ -123,19 +123,19 @@ static __global__ void NCHW2NHWC(const src_T *src, dst_T * dst, const int ne, co
 
 
 
-template<typename T, const int BM, const int BN, const int BK, const int WM, const int WN,
+template<typename input_T, typename kernel_T, typename output_T, const int BM, const int BN, const int BK, const int WM, const int WN,
           const int WNITER, const int TM, const int TN, const int NUM_THREADS,
           // layout: 0, NHWC; 1, NCHW
           const int layout, const bool vec_load, const int ksplit, const int PAD=4>
-static __global__ void conv2d_implicit_kernel(const T * __restrict__ input,
-                                              const T * __restrict__ kernel,
-                                              T * __restrict__ output,
+static __global__ void conv2d_implicit_kernel(const input_T * __restrict__ input,
+                                              const kernel_T * __restrict__ kernel,
+                                              output_T * __restrict__ output,
                                               const param_t param) {
 
-    __shared__ char smem[sizeof(float) * (TM*TN*NUM_THREADS) <= sizeof(float) * 2 * (BM+PAD) * BK +  sizeof(T)*2*BK * (BN+PAD) ?
-                         sizeof(float)*2*(BM+PAD)*BK + sizeof(T)*2*BK*(BN+PAD) : sizeof(float) * (TM*TN*NUM_THREADS)];
-    T *smemweight = reinterpret_cast<T *>(smem);
-    T *smeminput = reinterpret_cast<T *>(smem + 2 * BK * (BN+PAD) * sizeof(T));
+    __shared__ char smem[sizeof(float) * (TM*TN*NUM_THREADS) <= sizeof(input_T) * 2 * (BM+PAD) * BK +  sizeof(kernel_T)*2*BK * (BN+PAD) ?
+                         sizeof(input_T)*2*(BM+PAD)*BK + sizeof(kernel_T)*2*BK*(BN+PAD) : sizeof(float) * (TM*TN*NUM_THREADS)];
+    kernel_T *smemweight = reinterpret_cast<kernel_T *>(smem);
+    input_T *smeminput = reinterpret_cast<input_T *>(smem + 2 * BK * (BN+PAD) * sizeof(kernel_T));
 
     const uint tx = threadIdx.x;
     const uint bx = blockIdx.x;
@@ -169,9 +169,9 @@ static __global__ void conv2d_implicit_kernel(const T * __restrict__ input,
     const uint end_k = min(start_k + ks, weightKOffset);
 
     int write_flag = 1;
-    T weight_frag[2][WNITER * TN];
-    T input_frag[2][WMITER * TM] = {0.f};
-    T output_frag[WMITER * TM * WNITER * TN] = {0.f};
+    kernel_T weight_frag[2][WNITER * TN];
+    input_T input_frag[2][WMITER * TM] = {0.f};
+    output_T output_frag[WMITER * TM * WNITER * TN] = {0.f};
 
     // calculating the indices that this thread will load into SMEM
     // we'll load 128bit / 32bit = 4 elements per thread at each step
@@ -180,11 +180,11 @@ static __global__ void conv2d_implicit_kernel(const T * __restrict__ input,
     constexpr uint rowStrideA = (NUM_THREADS * 4) / BK;
 
 // ldg
-    loadFilter<T, BN, rowStrideA, layout, vec_load, ksplit, PAD>
+    loadFilter<kernel_T, BN, rowStrideA, layout, vec_load, ksplit, PAD>
        (kernel, smemweight, by, innerRowA, innerColA, weightKOffset,
         start_k, end_k, param);
 
-    loadInput<T, BM, rowStrideA, layout, vec_load, ksplit, PAD>
+    loadInput<input_T, BM, rowStrideA, layout, vec_load, ksplit, PAD>
        (input,  smeminput, bx,  innerRowA, innerColA,
         start_k, end_k, PQ, CHW, inChannelOffset, param);
 
@@ -238,9 +238,9 @@ static __global__ void conv2d_implicit_kernel(const T * __restrict__ input,
 #pragma unroll
                         for (uint resIdxN = 0; resIdxN < TN; ++resIdxN) {
                             output_frag[(wSubRowIdx * TM + resIdxM) * (WNITER * TN) +
-                                        (wSubColIdx * TN) + resIdxN] +=
-                                input_frag[subcrs % 2][wSubRowIdx * TM + resIdxM] *
-                                weight_frag[subcrs % 2][wSubColIdx * TN + resIdxN];
+                                        (wSubColIdx * TN) + resIdxN] += ggml_cuda_cast<output_T>(
+                                ggml_cuda_cast<float>(input_frag[subcrs % 2][wSubRowIdx * TM + resIdxM]) *
+                                ggml_cuda_cast<float>(weight_frag[subcrs % 2][wSubColIdx * TN + resIdxN]));
                         }
                     }
                 }
@@ -248,11 +248,11 @@ static __global__ void conv2d_implicit_kernel(const T * __restrict__ input,
         }
         // ldg
 
-        loadFilter<T, BN, rowStrideA, layout, vec_load, ksplit, PAD>
+        loadFilter<kernel_T, BN, rowStrideA, layout, vec_load, ksplit, PAD>
             (kernel, &smemweight[write_flag * (BN+PAD) * BK], by, innerRowA, innerColA, weightKOffset,
                 crs+BK, end_k, param);
 
-        loadInput<T, BM, rowStrideA, layout, vec_load, ksplit, PAD>
+        loadInput<input_T, BM, rowStrideA, layout, vec_load, ksplit, PAD>
             (input,  &smeminput[write_flag * (BM+PAD) * BK], bx,  innerRowA, innerColA,
                 crs + BK, end_k, PQ, CHW, inChannelOffset, param);
 
@@ -282,9 +282,9 @@ static __global__ void conv2d_implicit_kernel(const T * __restrict__ input,
 #pragma unroll
                     for (uint resIdxN = 0; resIdxN < TN; ++resIdxN) {
                         output_frag[(wSubRowIdx * TM + resIdxM) * (WNITER * TN) +
-                                    (wSubColIdx * TN) + resIdxN] +=
-                            input_frag[1][wSubRowIdx * TM + resIdxM] *
-                            weight_frag[1][wSubColIdx * TN + resIdxN];
+                                    (wSubColIdx * TN) + resIdxN] += ggml_cuda_cast<output_T>(
+                            ggml_cuda_cast<float>(input_frag[1][wSubRowIdx * TM + resIdxM]) *
+                            ggml_cuda_cast<float>(weight_frag[1][wSubColIdx * TN + resIdxN]));
                     }
                 }
             }
@@ -292,7 +292,7 @@ static __global__ void conv2d_implicit_kernel(const T * __restrict__ input,
     }
 
     // reuse smem
-    T *smemoutput = reinterpret_cast<T *>(smem);
+    output_T *smemoutput = reinterpret_cast<output_T *>(smem);
 
     const uint output_lds_addr = warp_id * WSUBM * WSUBN + lane_id;
     const uint output_sts_addr = mma_tid_x * BN / WN * TM * TN * WARPSIZE + mma_tid_y * TM * TN * WARPSIZE +
@@ -812,8 +812,8 @@ constexpr static int conv_shapes[][NUM_VARIANTS] = {
     { 256,  256, 128, 256}	    //  NUM_THREADS
 };
 
-template <typename T, unsigned int CONV_SHAPE>
-static void conv2d_implicit_cuda(const T * X_D, const T * K_D, T * Y_D, const param_t P, cudaStream_t st) {
+template <typename input_T, typename kernel_T, typename output_T, unsigned int CONV_SHAPE>
+static void conv2d_implicit_cuda(const input_T * X_D, const kernel_T * K_D, output_T * Y_D, const param_t P, cudaStream_t st) {
 
     const uint BM = conv_shapes[0][CONV_SHAPE];
     const uint BN = conv_shapes[1][CONV_SHAPE];
@@ -832,16 +832,16 @@ static void conv2d_implicit_cuda(const T * X_D, const T * K_D, T * Y_D, const pa
     dim3 thblock(NUM_THREADS, thready, threadz);
     dim3 grid(blockx, blocky, blockz);
 
-    conv2d_implicit_kernel<T, BM, BN, BK, WM, WN,
+    conv2d_implicit_kernel<input_T, kernel_T, output_T, BM, BN, BK, WM, WN,
           WNITER, TM, TN, NUM_THREADS, 1, false, 0><<<grid, thblock, 0, st>>>(X_D, K_D, Y_D, P);
 }
 
-template<const int BM, const int BN, const int BK,
+template<typename T, const int BM, const int BN, const int BK,
         const int WM, const int WN, const int WK,  const int ksplit,
         const unsigned int ThreadsM, const unsigned int ThreadsN,
         const int NUM_THREADS>
 static void launch_conv2d_implicit_split_kernel(ggml_backend_cuda_context & ctx,
-                    const half *X_H, const half *K_H, half *Y_D,
+                    const half *X_H, const half *K_H, T *Y_D,
                     const unsigned int BlocksM, const unsigned int BlocksN,
                     const unsigned int shmem_bytes,
                     const param_t P, cudaStream_t st){
@@ -862,10 +862,11 @@ static void launch_conv2d_implicit_split_kernel(ggml_backend_cuda_context & ctx,
         const dim3 block_nums(blockx, 1, 1);
         const dim3 block_dims(512, 1, 1);
         // reduce_f32<half, float><<<block_nums, block_dims, 0, st>>>(Y_H.get(), Y_D, nrows, ksplit);
-        reduce_f32<half, half><<<block_nums, block_dims, 0, st>>>(Y_H.get(), Y_D, nrows, ksplit);
+        reduce_f32<half, T><<<block_nums, block_dims, 0, st>>>(Y_H.get(), Y_D, nrows, ksplit);
 }
 
-static void conv2d_implicit_cuda_f16(ggml_backend_cuda_context & ctx, const half * X_D, const half * K_D, half * Y_D, int cc, const param_t P, cudaStream_t st) {
+template<typename input_T>
+static void conv2d_implicit_cuda_f16(ggml_backend_cuda_context & ctx, const input_T * X_D, const half * K_D, input_T * Y_D, int cc, const param_t P, cudaStream_t st) {
 
     // if (GGML_CUDA_CC_IS_NVIDIA(cc) && turing_mma_available(cc) && P.c % 8 == 0 && (P.r > 1 || P.s > 1)) {
     if (GGML_CUDA_CC_IS_NVIDIA(cc) && turing_mma_available(cc) && P.c % 8 == 0) {
@@ -882,7 +883,7 @@ static void conv2d_implicit_cuda_f16(ggml_backend_cuda_context & ctx, const half
                       (ne/(ne00*ne01) + CUDA_NCHW_2_NHWC_BLOCK_NM - 1) / CUDA_NCHW_2_NHWC_BLOCK_NM) ;
         dim3 dimBlock(CUDA_NCHW_2_NHWC_TILE_DIM,CUDA_NCHW_2_NHWC_BLOCK_ROWS, 1);
         // NCHW2NHWC<float, half><<<dimGrid, dimBlock, 0, st>>>(X_D, input_f16.get(), ne, ne00, ne01);
-        NCHW2NHWC<half, half><<<dimGrid, dimBlock, 0, st>>>(X_D, input_f16.get(), ne, ne00, ne01);
+        NCHW2NHWC<input_T, half><<<dimGrid, dimBlock, 0, st>>>(X_D, input_f16.get(), ne, ne00, ne01);
 
         ne = P.c * P.r * P.s * P.k;
         ne01 = P.r * P.s;
@@ -979,49 +980,49 @@ static void conv2d_implicit_cuda_f16(ggml_backend_cuda_context & ctx, const half
             if(candidate != -1){
               j = candidate;
               if (j == 2) {
-                launch_conv2d_implicit_split_kernel<BM_dim, BN_dim, BK_dim, WM_dim, WN_dim, WK_dim, 2,
+                launch_conv2d_implicit_split_kernel<input_T, BM_dim, BN_dim, BK_dim, WM_dim, WN_dim, WK_dim, 2,
                 ThreadsM, ThreadsN, NumThreads>(ctx, X_H, K_H, Y_D, BlocksM, BlocksN, shmem_bytes, P, st);
               } else if (j == 3) {
-                launch_conv2d_implicit_split_kernel<BM_dim, BN_dim, BK_dim, WM_dim, WN_dim, WK_dim, 3,
+                launch_conv2d_implicit_split_kernel<input_T, BM_dim, BN_dim, BK_dim, WM_dim, WN_dim, WK_dim, 3,
                 ThreadsM, ThreadsN, NumThreads>(ctx, X_H, K_H, Y_D, BlocksM, BlocksN, shmem_bytes, P, st);
               } else if (j == 4) {
-                launch_conv2d_implicit_split_kernel<BM_dim, BN_dim, BK_dim, WM_dim, WN_dim, WK_dim, 4,
+                launch_conv2d_implicit_split_kernel<input_T, BM_dim, BN_dim, BK_dim, WM_dim, WN_dim, WK_dim, 4,
                 ThreadsM, ThreadsN, NumThreads>(ctx, X_H, K_H, Y_D, BlocksM, BlocksN, shmem_bytes, P, st);
               } else if (j == 5) {
-                launch_conv2d_implicit_split_kernel<BM_dim, BN_dim, BK_dim, WM_dim, WN_dim, WK_dim, 5,
+                launch_conv2d_implicit_split_kernel<input_T, BM_dim, BN_dim, BK_dim, WM_dim, WN_dim, WK_dim, 5,
                 ThreadsM, ThreadsN, NumThreads>(ctx, X_H, K_H, Y_D, BlocksM, BlocksN, shmem_bytes, P, st);
               } else if (j == 6) {
-                launch_conv2d_implicit_split_kernel<BM_dim, BN_dim, BK_dim, WM_dim, WN_dim, WK_dim, 6,
+                launch_conv2d_implicit_split_kernel<input_T, BM_dim, BN_dim, BK_dim, WM_dim, WN_dim, WK_dim, 6,
                 ThreadsM, ThreadsN, NumThreads>(ctx, X_H, K_H, Y_D, BlocksM, BlocksN, shmem_bytes, P, st);
               } else if (j == 7) {
-                launch_conv2d_implicit_split_kernel<BM_dim, BN_dim, BK_dim, WM_dim, WN_dim, WK_dim, 7,
+                launch_conv2d_implicit_split_kernel<input_T, BM_dim, BN_dim, BK_dim, WM_dim, WN_dim, WK_dim, 7,
                 ThreadsM, ThreadsN, NumThreads>(ctx, X_H, K_H, Y_D, BlocksM, BlocksN, shmem_bytes, P, st);
               } else if (j == 8) {
-                launch_conv2d_implicit_split_kernel<BM_dim, BN_dim, BK_dim, WM_dim, WN_dim, WK_dim, 8,
+                launch_conv2d_implicit_split_kernel<input_T, BM_dim, BN_dim, BK_dim, WM_dim, WN_dim, WK_dim, 8,
                 ThreadsM, ThreadsN, NumThreads>(ctx, X_H, K_H, Y_D, BlocksM, BlocksN, shmem_bytes, P, st);
               } else if (j == 9) {
-                launch_conv2d_implicit_split_kernel<BM_dim, BN_dim, BK_dim, WM_dim, WN_dim, WK_dim, 9,
+                launch_conv2d_implicit_split_kernel<input_T, BM_dim, BN_dim, BK_dim, WM_dim, WN_dim, WK_dim, 9,
                 ThreadsM, ThreadsN, NumThreads>(ctx, X_H, K_H, Y_D, BlocksM, BlocksN, shmem_bytes, P, st);
               } else if (j == 10) {
-                launch_conv2d_implicit_split_kernel<BM_dim, BN_dim, BK_dim, WM_dim, WN_dim, WK_dim, 10,
+                launch_conv2d_implicit_split_kernel<input_T, BM_dim, BN_dim, BK_dim, WM_dim, WN_dim, WK_dim, 10,
                 ThreadsM, ThreadsN, NumThreads>(ctx, X_H, K_H, Y_D, BlocksM, BlocksN, shmem_bytes, P, st);
               } else if (j == 11) {
-                launch_conv2d_implicit_split_kernel<BM_dim, BN_dim, BK_dim, WM_dim, WN_dim, WK_dim, 11,
+                launch_conv2d_implicit_split_kernel<input_T, BM_dim, BN_dim, BK_dim, WM_dim, WN_dim, WK_dim, 11,
                 ThreadsM, ThreadsN, NumThreads>(ctx, X_H, K_H, Y_D, BlocksM, BlocksN, shmem_bytes, P, st);
               } else if (j == 12) {
-                launch_conv2d_implicit_split_kernel<BM_dim, BN_dim, BK_dim, WM_dim, WN_dim, WK_dim, 12,
+                launch_conv2d_implicit_split_kernel<input_T, BM_dim, BN_dim, BK_dim, WM_dim, WN_dim, WK_dim, 12,
                 ThreadsM, ThreadsN, NumThreads>(ctx, X_H, K_H, Y_D, BlocksM, BlocksN, shmem_bytes, P, st);
               } else if (j == 13) {
-                launch_conv2d_implicit_split_kernel<BM_dim, BN_dim, BK_dim, WM_dim, WN_dim, WK_dim, 13,
+                launch_conv2d_implicit_split_kernel<input_T, BM_dim, BN_dim, BK_dim, WM_dim, WN_dim, WK_dim, 13,
                 ThreadsM, ThreadsN, NumThreads>(ctx, X_H, K_H, Y_D, BlocksM, BlocksN, shmem_bytes, P, st);
               } else if (j == 14) {
-                launch_conv2d_implicit_split_kernel<BM_dim, BN_dim, BK_dim, WM_dim, WN_dim, WK_dim, 14,
+                launch_conv2d_implicit_split_kernel<input_T, BM_dim, BN_dim, BK_dim, WM_dim, WN_dim, WK_dim, 14,
                 ThreadsM, ThreadsN, NumThreads>(ctx, X_H, K_H, Y_D, BlocksM, BlocksN, shmem_bytes, P, st);
               } else if (j == 15) {
-                launch_conv2d_implicit_split_kernel<BM_dim, BN_dim, BK_dim, WM_dim, WN_dim, WK_dim, 15,
+                launch_conv2d_implicit_split_kernel<input_T, BM_dim, BN_dim, BK_dim, WM_dim, WN_dim, WK_dim, 15,
                 ThreadsM, ThreadsN, NumThreads>(ctx, X_H, K_H, Y_D, BlocksM, BlocksN, shmem_bytes, P, st);
               } else if (j == 16) {
-                launch_conv2d_implicit_split_kernel<BM_dim, BN_dim, BK_dim, WM_dim, WN_dim, WK_dim, 16,
+                launch_conv2d_implicit_split_kernel<input_T, BM_dim, BN_dim, BK_dim, WM_dim, WN_dim, WK_dim, 16,
                 ThreadsM, ThreadsN, NumThreads>(ctx, X_H, K_H, Y_D, BlocksM, BlocksN, shmem_bytes, P, st);
               }
               return;
@@ -1033,18 +1034,18 @@ static void conv2d_implicit_cuda_f16(ggml_backend_cuda_context & ctx, const half
         dim3 gridDim(BlocksN, BlocksM);
         dim3 blockDim(ThreadsN, ThreadsM);
 
-        conv2d_implicit_kernel<half, BM_dim, BN_dim, BK_dim,
+        conv2d_implicit_kernel<input_T, BM_dim, BN_dim, BK_dim,
             WM_dim, WN_dim, WK_dim, 0, NumThreads>
             <<<gridDim, blockDim, shmem_bytes, st>>>(X_H, K_H, Y_D, P);
-    } else{
-       conv2d_implicit_cuda<half, 1>(X_D, K_D, Y_D, P, st);
+    } else {
+       conv2d_implicit_cuda<input_T, half, input_T, 1>(X_D, K_D, Y_D, P, st);
         // GGML_ASSERT(false);
     }
 
 }
 
 static void conv2d_implicit_cuda_f32(ggml_backend_cuda_context & ctx, const float * X_D, const float * K_D, float * Y_D, int cc, const param_t P, cudaStream_t st) {
-    conv2d_implicit_cuda<float, 1>(X_D, K_D, Y_D, P, st);
+    conv2d_implicit_cuda<float, float, float, 1>(X_D, K_D, Y_D, P, st);
     GGML_UNUSED(ctx);
     GGML_UNUSED(cc);
 }
@@ -1060,7 +1061,7 @@ void ggml_cuda_op_conv2d_implicit(ggml_backend_cuda_context & ctx, ggml_tensor *
     GGML_ASSERT(kernel->type == GGML_TYPE_F16 || kernel->type == GGML_TYPE_F32);
     GGML_ASSERT(input->type == GGML_TYPE_F16 || input->type == GGML_TYPE_F32);
     GGML_ASSERT(dst->type == GGML_TYPE_F16 || dst->type == GGML_TYPE_F32);
-    GGML_ASSERT(input->type == kernel->type);
+    GGML_ASSERT(input->type == dst->type);
 
     cudaStream_t st = ctx.stream();
     const int cc            = ggml_cuda_info().devices[ctx.device].cc;
@@ -1101,7 +1102,11 @@ void ggml_cuda_op_conv2d_implicit(ggml_backend_cuda_context & ctx, ggml_tensor *
                       init_fastdiv_values(OW*OH)};
 
     if (kernel->type == GGML_TYPE_F16) {
-        conv2d_implicit_cuda_f16(ctx, (const half *)X_D, (const half *) K_D, (half *)Y_D, cc, params, st);
+        if(input->type == GGML_TYPE_F32) {
+          conv2d_implicit_cuda_f16<float>(ctx, X_D, (const half *) K_D, Y_D, cc, params, st);
+        } else {
+          conv2d_implicit_cuda_f16(ctx, (const half *)X_D, (const half *) K_D, (half *)Y_D, cc, params, st);
+        }
     } else {
         conv2d_implicit_cuda_f32(ctx, X_D, K_D, Y_D, cc, params, st);
     }

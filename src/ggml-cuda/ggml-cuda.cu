@@ -3026,6 +3026,182 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
 #endif // NDEBUG
 
                 bool ok = ggml_cuda_compute_forward(*cuda_ctx, node);
+                // std::vector<float> dataf(ggml_nelements(node));
+                // std::vector<half> data(ggml_nelements(node));
+                // if(node->type == GGML_TYPE_F16){
+                //     std::vector<half> data(ggml_nelements(node));
+                //     ggml_backend_tensor_get(node, data.data(), 0, ggml_nbytes(node));
+                //     for(int i = 0; i < data.size() ; i++) {
+                //         if(isnan(data[i])){
+                //             printf("NODE A nan %s, %s, %d \n", node->name, ggml_op_name(node->op), i);
+                //             printf("NODE A nan %s, %s, (%zu, %zu, %zu, %zu)\n", node->src[0]->name,
+                //                 ggml_op_name(node->src[0]->op), node->src[0]->ne[0], node->src[0]->ne[1],
+                //             node->src[0]->ne[2], node->src[0]->ne[3]);
+                //             printf("NODE A nan %s, %s, (%zu, %zu, %zu, %zu)\n", node->src[1]->name,
+                //                 ggml_op_name(node->src[1]->op), node->src[1]->ne[0], node->src[1]->ne[1],
+                //                 node->src[1]->ne[2], node->src[1]->ne[3]);
+                //             abort();
+                //         }
+                //     }
+                // }
+                // else if(node->type == GGML_TYPE_F32) {
+                //     std::vector<float> dataf(ggml_nelements(node));
+                //     ggml_backend_tensor_get(node, dataf.data(), 0, ggml_nbytes(node));
+                //     for(int i = 0; i < dataf.size() ; i++) {
+                //         if(isnan(dataf[i])){
+                //             printf("NODE B nan %s, %s \n", node->name, ggml_op_name(node->op));
+                //             abort();
+                //         }
+                //     }
+                // }
+                // if(strcmp(node->name, "node_94") == 0) {
+                    // ggml_tensor * src = node->src[1];
+                    // printf("0  %s, %s, %s \n", src->name, ggml_op_name(src->op), ggml_type_name(src->type));
+                    // if(src->type == GGML_TYPE_F16){
+                    //     std::vector<half> data(ggml_nelements(src));
+                    //     ggml_backend_tensor_get(src, data.data(), 0, ggml_nbytes(src));
+                    //     printf("src1[");
+                    //     bool ab = false;
+                    //     for(int i = 0; i < data.size() ; i++) {
+                    //         // if(isnan(data[i])){
+                    //         //     printf("A nan %s, %s, %d \n", src->name, ggml_op_name(src->op), i);
+                    //         //     abort();
+                    //         // }
+                    //         float val = __half2float(data[i]);
+                    //         if(isnan(val))
+                    //            ab = true;
+                    //         printf("%.3f,", val);
+                    //     }
+                    //     printf("]\n");
+                    //     if(ab) abort();
+                    // }
+                    
+                    // if(src->type == GGML_TYPE_F32){
+                    //     std::vector<float> data(ggml_nelements(src));
+                    //     ggml_backend_tensor_get(src, data.data(), 0, ggml_nbytes(src));
+                    //     for(int i = 0; i < data.size() ; i++) {
+                    //         if(isnan(data[i])){
+                    //             printf("B nan %s, %s, %d \n", src->name, ggml_op_name(src->op), i);
+                    //             abort();
+                    //         }
+                    //     }
+                    // }
+                    // src = node->src[1];
+                    // printf("1  %s, %s, %s \n", src->name, ggml_op_name(src->op), ggml_type_name(src->type));
+                    // if(src->type == GGML_TYPE_F16){
+                    //     std::vector<half> data(ggml_nelements(node));
+                    //     ggml_backend_tensor_get(src, data.data(), 0, ggml_nbytes(src));
+                    //     for(int i = 0; i < data.size() ; i++) {
+                    //         if(isnan(data[i])){
+                    //             printf("C nan %s, %s, %d \n", src->name, ggml_op_name(src->op), i);
+                    //             abort();
+                    //         }
+                    //     }
+                    // }
+                    // if(src->type == GGML_TYPE_F32){
+                    //     std::vector<float> data(ggml_nelements(node));
+                    //     ggml_backend_tensor_get(src, data.data(), 0, ggml_nbytes(src));
+                    //     for(int i = 0; i < data.size() ; i++) {
+                    //         if(isnan(data[i])){
+                    //             printf("D nan %s, %s, %d \n", src->name, ggml_op_name(src->op), i);
+                    //             abort();
+                    //         }
+                    //     }
+                    // }
+                    // printf("computing %s, %s \n", node->name, ggml_op_name(node->op));
+                    if(node->type == GGML_TYPE_F16){
+                        std::vector<half> data(ggml_nelements(node));
+                        ggml_backend_tensor_get(node, data.data(), 0, ggml_nbytes(node));
+                        // printf("res[");
+                        bool ab = false;
+                        int pos = -1;
+                        for(int i = 0; i < data.size() ; i++) {
+                            // if(isnan(data[i])){
+                            //     printf("NODE A nan %s, %s, %d \n", node->name, ggml_op_name(node->op), i);
+                            //     abort();
+                            // }
+                            float val = __half2float(data[i]);
+                            if(isnan(val)){
+                               ab = true;
+                               pos = i;
+                            }
+                            // printf("%.3f,", val);
+                        }
+                        // printf("]");
+                        if(ab) {
+                            printf("NODE A nan %s, %s  (%zu, %zu, %zu, %zu)\n", node->name, ggml_op_name(node->op),
+                                node->ne[0], node->ne[1], node->ne[2], node->ne[3]);
+                            printf("res[");
+                            for(int i = 0; i < data.size() ; i++) {
+                                float val = __half2float(data[i]);
+                                printf("%.3f,", val);
+                            }
+                            printf("]\n");
+                            printf("NODE A nan %s, %s, (%zu, %zu, %zu, %zu)\n", node->src[0]->name,
+                                ggml_op_name(node->src[0]->op), node->src[0]->ne[0], node->src[0]->ne[1],
+                            node->src[0]->ne[2], node->src[0]->ne[3]);
+                            printf("NODE A nan %s, %s, (%zu, %zu, %zu, %zu)\n", node->src[1]->name,
+                                ggml_op_name(node->src[1]->op), node->src[1]->ne[0], node->src[1]->ne[1],
+                                node->src[1]->ne[2], node->src[1]->ne[3]);
+                            std::vector<half> data1(ggml_nelements(node->src[1]));
+                            ggml_backend_tensor_get(node->src[1], data1.data(), 0, ggml_nbytes(node->src[1]));
+                            printf("src1[");
+                            for(int i = 0; i < data1.size() ; i++) {
+                                float val = __half2float(data1[i]);
+                                printf("%.3f,", val);
+                            }
+                            printf("]\n");
+                            std::vector<half> data0(ggml_nelements(node->src[0]));
+                            ggml_backend_tensor_get(node->src[0], data0.data(), 0, ggml_nbytes(node->src[0]));
+                            printf("src0[");
+                            // for(int i = (pos-1)*node->src[1]->ne[0]; i < data0.size() ; i++) {
+                            for(int i = pos*node->src[1]->ne[0]; i < (pos+1)*node->src[1]->ne[0]; i++) {
+                                float val = __half2float(data0[i]);
+                                printf("%.3f,", val);
+                            }
+                            printf("]\n");
+                            abort();
+                        }
+                    }
+                    // else if(node->type == GGML_TYPE_F32) {
+                    //     std::vector<float> dataf(ggml_nelements(node));
+                    //     ggml_backend_tensor_get(node, dataf.data(), 0, ggml_nbytes(node));
+                    //     for(int i = 0; i < dataf.size() ; i++) {
+                    //         if(isnan(dataf[i])){
+                    //             printf("NODE B nan %s, %s \n", node->name, ggml_op_name(node->op));
+                    //             abort();
+                    //         }
+                    //     }
+                    // }
+                // }
+                
+                // // if(node->op == GGML_OP_CONV_2D) {
+                // if(node->op == GGML_OP_FLASH_ATTN_EXT) {
+                // if(node->op == GGML_OP_MUL_MAT) {
+                // if(node->op == GGML_OP_GROUP_NORM) {
+                // if(node->op == GGML_OP_NORM) {
+                //     std::vector<float> dataf(ggml_nelements(node));
+                //     std::vector<half> data(ggml_nelements(node));
+                //     if(node->type == GGML_TYPE_F16)
+                //         ggml_backend_tensor_get(node, data.data(), 0, ggml_nbytes(node));
+                //     else if(node->type == GGML_TYPE_F32) {
+                //         ggml_backend_tensor_get(node, dataf.data(), 0, ggml_nbytes(node));
+                //     }
+                //     // ggml_backend_tensor_get(node, data.data(), 0, ggml_nbytes(node));
+                //     if(node->type == GGML_TYPE_F16){
+                //         // for(int i = 0; i < data.size(); i++) {
+                //         for(int i = 0; i < min(32,(int)data.size()) ; i++) {
+                //             printf("(%7.3f, %d) \n",   __half2float(data[i]), i);
+                //         }
+                //     }else if(node->type == GGML_TYPE_F32){
+                //         // for(int i = 0; i < dataf.size(); i++) {
+                //         for(int i = 0; i < min(32,(int)dataf.size()); i++) {
+                //             printf("(%7.3f, %d) \n",   dataf[i], i);
+                //         }
+                //     }
+                // }
+                // printf(" compute %s (%s, %s) \n", node->name,
+                //       ggml_type_name(node->type), ggml_op_name(node->op));
                 if (!ok) {
                     GGML_LOG_ERROR("%s: op not supported %s (%s)\n", __func__, node->name, ggml_op_name(node->op));
                 }
