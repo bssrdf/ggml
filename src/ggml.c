@@ -3107,7 +3107,16 @@ struct ggml_tensor * ggml_mul_mat(
     GGML_ASSERT(!ggml_is_transposed(a));
 
     const int64_t ne[4] = { a->ne[1], b->ne[1], b->ne[2], b->ne[3] };
-    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
+    enum GGML_TYPE type;
+    if(b->type == GGML_TYPE_F16){
+        type = GGML_TYPE_F16;
+    } else if (b->type == GGML_TYPE_BF16) {
+        type = GGML_TYPE_BF16;
+    } else {
+        type = GGML_TYPE_F32;
+    }
+    // struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
+    struct ggml_tensor * result = ggml_new_tensor(ctx, type, 4, ne);
 
     result->op     = GGML_OP_MUL_MAT;
     result->src[0] = a;
@@ -5096,7 +5105,16 @@ struct ggml_tensor * ggml_flash_attn_ext(
 
     // permute(0, 2, 1, 3)
     int64_t ne[4] = { v->ne[0], q->ne[2], q->ne[1], q->ne[3] };
-    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
+    enum ggml_type result_type;
+    if(q->type == GGML_TYPE_F16 || k->type == GGML_TYPE_F16 || v->type == GGML_TYPE_F16) {
+        result_type = GGML_TYPE_F16;
+    } else if(q->type == GGML_TYPE_BF16 || k->type == GGML_TYPE_BF16 || v->type == GGML_TYPE_BF16) {
+        result_type = GGML_TYPE_BF16;
+    } else {
+        result_type = GGML_TYPE_F32;
+    }
+
+    struct ggml_tensor * result = ggml_new_tensor(ctx, result_type, 4, ne);
 
     float params[] = { scale, max_bias, logit_softcap };
     ggml_set_op_params(result, params, sizeof(params));
@@ -6943,10 +6961,11 @@ void ggml_graph_print(const struct ggml_cgraph * cgraph) {
     for (int i = 0; i < cgraph->n_nodes; i++) {
         struct ggml_tensor * node = cgraph->nodes[i];
 
-        GGML_LOG_INFO(" - %3d: [ %5" PRId64 ", %5" PRId64 ", %5" PRId64 "] %16s %s\n",
+        GGML_LOG_INFO(" - %3d: [ %5" PRId64 ", %5" PRId64 ", %5" PRId64 "] %16s %4s %s %s\n",
                 i,
                 node->ne[0], node->ne[1], node->ne[2],
-                ggml_op_name(node->op), (node->flags & GGML_TENSOR_FLAG_PARAM) ? "x" :
+                ggml_op_name(node->op), ggml_type_name(node->type), ggml_get_name(node),
+                (node->flags & GGML_TENSOR_FLAG_PARAM) ? "x" :
                       ggml_graph_get_grad(cgraph, node) ? "g" : " ");
     }
 
@@ -6954,11 +6973,11 @@ void ggml_graph_print(const struct ggml_cgraph * cgraph) {
     for (int i = 0; i < cgraph->n_leafs; i++) {
         struct ggml_tensor * node = cgraph->leafs[i];
 
-        GGML_LOG_INFO(" - %3d: [ %5" PRId64 ", %5" PRId64 "] %8s %16s\n",
+        GGML_LOG_INFO(" - %3d: [ %5" PRId64 ", %5" PRId64 "] %8s %16s %4s\n",
                 i,
                 node->ne[0], node->ne[1],
                 ggml_op_name(node->op),
-                ggml_get_name(node));
+                ggml_get_name(node), ggml_type_name(node->type));
     }
 
     GGML_LOG_INFO("========================================\n");

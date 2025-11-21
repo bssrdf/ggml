@@ -561,6 +561,7 @@ void ggml_cuda_op_mul_mat_vec_q(
     const char * src1_ddq_i, float * dst_dd_i, const int64_t row_low, const int64_t row_high, const int64_t src1_ncols,
     const int64_t src1_padded_row_size, cudaStream_t stream) {
 
+
     const int64_t ne00 = src0->ne[0];
     const int64_t row_diff = row_high - row_low;
 

@@ -10,14 +10,37 @@
 #define HALF_MAX_HALF         __float2half(65504.0f/2) // Use neg. of this instead of -INFINITY to initialize KQ max vals to avoid NaN upon subtraction.
 #define SOFTMAX_FTZ_THRESHOLD -20.0f                   // Softmax exp. of values smaller than this are flushed to zero to avoid NaNs.
 
-typedef void (* fattn_kernel_t)(
+// typedef void (* fattn_kernel_t)(
+//         const char * __restrict__ Q,
+//         const char * __restrict__ K,
+//         const char * __restrict__ V,
+//         const char * __restrict__ mask,
+//         const char * __restrict__ sinks,
+//         const int  * __restrict__ KV_max,
+//         float      * __restrict__ dst,
+//         float2     * __restrict__ dst_meta,
+//         const float scale,
+//         const float max_bias,
+//         const float m0,
+//         const float m1,
+//         const uint32_t n_head_log2,
+//         const float logit_softcap,
+//         const int32_t ne00, const int32_t ne01, const int32_t ne02, const int32_t ne03,
+//                             const int32_t nb01, const int32_t nb02, const int32_t nb03,
+//         const int32_t ne10, const int32_t ne11, const int32_t ne12, const int32_t ne13,
+//                             const int32_t nb11, const int32_t nb12, const int64_t nb13,
+//                             const int32_t nb21, const int32_t nb22, const int64_t nb23,
+//                             const int32_t ne31, const int32_t ne32, const int32_t ne33,
+//                             const int32_t nb31, const int32_t nb32, const int64_t nb33);
+template<typename T>
+using  fattn_kernel_t = void (*)(
         const char * __restrict__ Q,
         const char * __restrict__ K,
         const char * __restrict__ V,
         const char * __restrict__ mask,
         const char * __restrict__ sinks,
         const int  * __restrict__ KV_max,
-        float      * __restrict__ dst,
+        T          * __restrict__ dst,
         float2     * __restrict__ dst_meta,
         const float scale,
         const float max_bias,
@@ -32,6 +55,8 @@ typedef void (* fattn_kernel_t)(
                             const int32_t nb21, const int32_t nb22, const int64_t nb23,
                             const int32_t ne31, const int32_t ne32, const int32_t ne33,
                             const int32_t nb31, const int32_t nb32, const int64_t nb33);
+
+
 
 typedef float (*vec_dot_KQ_t)(
     const char * __restrict__ K_c, const void * __restrict__ Q_v, const int * __restrict__ Q_q8 , const void * __restrict__ Q_ds);
@@ -618,10 +643,12 @@ static __global__ void flash_attn_mask_to_KV_max(
     KV_max[sequence*ne31 + jt] = KV_max_sj;
 }
 
-template<int D, int ncols1, int ncols2> // D == head size
+// template<int D, int ncols1, int ncols2> // D == head size
+template<typename T, int D, int ncols1, int ncols2> // D == head size
 __launch_bounds__(D, 1)
 static __global__ void flash_attn_stream_k_fixup(
-        float * __restrict__ dst, const float2 * __restrict__ dst_fixup, const int ne01, const int ne02, const int ne03, const int ne11) {
+        // float * __restrict__ dst, const float2 * __restrict__ dst_fixup, const int ne01, const int ne02, const int ne03, const int ne11) {
+        T * __restrict__ dst, const float2 * __restrict__ dst_fixup, const int ne01, const int ne02, const int ne03, const int ne11) {
     constexpr int ncols = ncols1*ncols2;
 
     const int bidx0 = blockIdx.x;
@@ -657,10 +684,12 @@ static __global__ void flash_attn_stream_k_fixup(
 
     // Load the partial result that needs a fixup:
     float dst_val = 0.0f;
+    // T dst_val{0.0f};
     float max_val = 0.0f;
     float rowsum  = 0.0f;
     {
-        dst_val = *dst;
+        // dst_val = *dst;
+        dst_val = ggml_cuda_cast<float>(*dst);
 
         const float2 tmp = dst_fixup[bidx0*ncols + jc];
         max_val = tmp.x;
@@ -706,7 +735,8 @@ static __global__ void flash_attn_stream_k_fixup(
     }
 
     // Write back final result:
-    *dst = dst_val / rowsum;
+    // *dst = dst_val / rowsum;
+    *dst = ggml_cuda_cast<T>(dst_val / rowsum);
 }
 
 template<int D> // D == head size
@@ -762,9 +792,9 @@ static __global__ void flash_attn_combine_results(
     dst[tid] = VKQ_numerator / VKQ_denominator;
 }
 
-template <int DV, int ncols1, int ncols2>
+template <typename T, int DV, int ncols1, int ncols2>
 void launch_fattn(
-    ggml_backend_cuda_context & ctx, ggml_tensor * dst, fattn_kernel_t fattn_kernel, const int nwarps, const size_t nbytes_shared,
+    ggml_backend_cuda_context & ctx, ggml_tensor * dst, fattn_kernel_t<T> fattn_kernel, const int nwarps, const size_t nbytes_shared,
     const int KQ_row_granularity, const bool need_f16_K, const bool need_f16_V, const bool stream_k, const int warp_size = WARP_SIZE
 ) {
     constexpr int ncols = ncols1 * ncols2;
@@ -782,8 +812,9 @@ void launch_fattn(
 
     ggml_tensor * KQV = dst;
 
-    GGML_ASSERT(Q->type == GGML_TYPE_F32);
-    GGML_ASSERT(KQV->type == GGML_TYPE_F32);
+    GGML_ASSERT(Q->type == GGML_TYPE_F32 || Q->type == GGML_TYPE_F16);
+    GGML_ASSERT(KQV->type == GGML_TYPE_F32 || KQV->type == GGML_TYPE_F16);
+
 
     GGML_ASSERT(      Q->nb[0] == ggml_element_size(Q));
     GGML_ASSERT(      K->nb[0] == ggml_element_size(K));
@@ -970,6 +1001,24 @@ void launch_fattn(
     const float m1 = powf(2.0f, -(max_bias / 2.0f) / n_head_log2);
 
     GGML_ASSERT(block_dim.x % warp_size == 0);
+    // if (dst->type == GGML_TYPE_F16){
+    // fattn_kernel_f16<<<blocks_num, block_dim, nbytes_shared, main_stream>>>(
+    //     (const char *) Q->data,
+    //     K_data,
+    //     V_data,
+    //     mask ? ((const char *) mask->data) : nullptr,
+    //     sinks ? ((const char *) sinks->data) : nullptr,
+    //     KV_max.ptr,
+    //     // !stream_k && parallel_blocks > 1 ? dst_tmp.ptr : (float *) KQV->data, dst_tmp_meta.ptr,
+    //     !stream_k && parallel_blocks > 1 ? dst_tmp.ptr : (half *) KQV->data, dst_tmp_meta.ptr,
+    //     scale, max_bias, m0, m1, n_head_log2, logit_softcap,
+    //     Q->ne[0], Q->ne[1], Q->ne[2], Q->ne[3], Q->nb[1], Q->nb[2], Q->nb[3],
+    //     K->ne[0], K->ne[1], K->ne[2], K->ne[3], nb11, nb12, nb13,
+    //     nb21, nb22, nb23,
+    //     mask ? mask->ne[1] : 0, mask ? mask->ne[2] : 0, mask ? mask->ne[3] : 0,
+    //     mask ? mask->nb[1] : 0, mask ? mask->nb[2] : 0, mask ? mask->nb[3] : 0
+    // );
+    // } else if (dst->type == GGML_TYPE_F32) {
     fattn_kernel<<<blocks_num, block_dim, nbytes_shared, main_stream>>>(
         (const char *) Q->data,
         K_data,
@@ -977,7 +1026,8 @@ void launch_fattn(
         mask ? ((const char *) mask->data) : nullptr,
         sinks ? ((const char *) sinks->data) : nullptr,
         KV_max.ptr,
-        !stream_k && parallel_blocks > 1 ? dst_tmp.ptr : (float *) KQV->data, dst_tmp_meta.ptr,
+        // !stream_k && parallel_blocks > 1 ? dst_tmp.ptr : (float *) KQV->data, dst_tmp_meta.ptr,
+        !stream_k && parallel_blocks > 1 ? (T *) dst_tmp.ptr : (T *) KQV->data, dst_tmp_meta.ptr,
         scale, max_bias, m0, m1, n_head_log2, logit_softcap,
         Q->ne[0], Q->ne[1], Q->ne[2], Q->ne[3], Q->nb[1], Q->nb[2], Q->nb[3],
         K->ne[0], K->ne[1], K->ne[2], K->ne[3], nb11, nb12, nb13,
@@ -985,14 +1035,19 @@ void launch_fattn(
         mask ? mask->ne[1] : 0, mask ? mask->ne[2] : 0, mask ? mask->ne[3] : 0,
         mask ? mask->nb[1] : 0, mask ? mask->nb[2] : 0, mask ? mask->nb[3] : 0
     );
+    // }
     CUDA_CHECK(cudaGetLastError());
 
     if (stream_k) {
         if (ntiles_total % blocks_num.x != 0) { // Fixup is only needed if the SMs work on fractional tiles.
             const dim3 block_dim_combine(DV, 1, 1);
             const dim3 blocks_num_combine = {blocks_num.x, ncols1, ncols2};
-
-            flash_attn_stream_k_fixup<DV, ncols1, ncols2>
+            if (dst->type == GGML_TYPE_F16)
+                flash_attn_stream_k_fixup<half, DV, ncols1, ncols2>
+                <<<blocks_num_combine, block_dim_combine, 0, main_stream>>>
+                ((half *) KQV->data, dst_tmp_meta.ptr, Q->ne[1], Q->ne[2], Q->ne[3], K->ne[1]);
+            else if (dst->type == GGML_TYPE_F32)
+                flash_attn_stream_k_fixup<float, DV, ncols1, ncols2>
                 <<<blocks_num_combine, block_dim_combine, 0, main_stream>>>
                 ((float *) KQV->data, dst_tmp_meta.ptr, Q->ne[1], Q->ne[2], Q->ne[3], K->ne[1]);
         }
@@ -1007,3 +1062,7 @@ void launch_fattn(
     }
     CUDA_CHECK(cudaGetLastError());
 }
+
+
+
+

@@ -13,6 +13,7 @@
 #include "ggml-cuda/concat.cuh"
 #include "ggml-cuda/conv-transpose-1d.cuh"
 #include "ggml-cuda/conv2d.cuh"
+#include "ggml-cuda/conv2d-implicit.cuh"
 #include "ggml-cuda/conv2d-dw.cuh"
 #include "ggml-cuda/conv2d-transpose.cuh"
 #include "ggml-cuda/convert.cuh"
@@ -1176,6 +1177,8 @@ typedef void (*ggml_cuda_op_mul_mat_t)(
     const char * src1_ddq_i, float * dst_dd_i, const int64_t row_low, const int64_t row_high, const int64_t src1_ncols,
     const int64_t src1_padded_row_size, cudaStream_t stream);
 
+
+
 #ifndef GGML_CUDA_PEER_MAX_BATCH_SIZE
 #define GGML_CUDA_PEER_MAX_BATCH_SIZE 128
 #endif // GGML_CUDA_PEER_MAX_BATCH_SIZE
@@ -1216,6 +1219,7 @@ static cudaError_t ggml_cuda_cpy_tensor_2d(
         return cudaSuccess;
     }
 }
+
 
 static void ggml_cuda_op_mul_mat_cublas(
     ggml_backend_cuda_context & ctx,
@@ -1302,6 +1306,7 @@ static void ggml_cuda_op_mul_mat_cublas(
         if (GGML_CUDA_CC_IS_CDNA(cc) || GGML_CUDA_CC_IS_RDNA4(cc)) {
             const float alpha = 1.0f;
             const float beta = 0.0f;
+
             CUBLAS_CHECK(
                 cublasGemmEx(ctx.cublas_handle(id), CUBLAS_OP_T, CUBLAS_OP_N,
                         row_diff, src1_ncols, ne10,
@@ -1311,24 +1316,29 @@ static void ggml_cuda_op_mul_mat_cublas(
                         CUBLAS_COMPUTE_32F,
                         CUBLAS_GEMM_DEFAULT_TENSOR_OP));
         } else {
+
             ggml_cuda_pool_alloc<half> dst_f16(ctx.pool(id), row_diff*src1_ncols);
+            half *dst_ddf_i = dst->type == GGML_TYPE_F16 ? (half *)dst_dd_i : dst_f16.get();
 
             const half alpha_f16 = 1.0f;
             const half beta_f16 = 0.0f;
 
             CUBLAS_CHECK(
-                cublasGemmEx(ctx.cublas_handle(id), CUBLAS_OP_T, CUBLAS_OP_N,
-                        row_diff, src1_ncols, ne10,
-                        &alpha_f16, src0_ptr,      CUDA_R_16F, ne00,
-                                    src1_ptr,      CUDA_R_16F, ne10,
-                        &beta_f16,  dst_f16.get(), CUDA_R_16F, ldc,
-                        CUBLAS_COMPUTE_16F,
-                        CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+            cublasGemmEx(ctx.cublas_handle(id), CUBLAS_OP_T, CUBLAS_OP_N,
+                    row_diff, src1_ncols, ne10,
+                    &alpha_f16, src0_ptr,      CUDA_R_16F, ne00,
+                                src1_ptr,      CUDA_R_16F, ne10,
+                    &beta_f16,  dst_ddf_i,      CUDA_R_16F, ldc,
+                    CUBLAS_COMPUTE_16F,
+                    CUBLAS_GEMM_DEFAULT_TENSOR_OP));
 
-            const to_fp32_cuda_t to_fp32_cuda = ggml_get_to_fp32_cuda(GGML_TYPE_F16);
-            to_fp32_cuda(dst_f16.get(), dst_dd_i, row_diff*src1_ncols, stream);
+            if (dst->type == GGML_TYPE_F32) {
+                const to_fp32_cuda_t to_fp32_cuda = ggml_get_to_fp32_cuda(GGML_TYPE_F16);
+                to_fp32_cuda(dst_f16.get(), dst_dd_i, row_diff*src1_ncols, stream);
+            }
         }
     } else {
+
         ggml_cuda_pool_alloc<float> src0_ddq_as_f32(ctx.pool(id));
         ggml_cuda_pool_alloc<float> src1_ddq_as_f32(ctx.pool(id));
 
@@ -1441,6 +1451,7 @@ static cudaError_t ggml_cuda_Memcpy2DPeerAsync(
 #endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 }
 
+
 static void ggml_cuda_op_mul_mat(
     ggml_backend_cuda_context & ctx,
     const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst, ggml_cuda_op_mul_mat_t op,
@@ -1511,6 +1522,7 @@ static void ggml_cuda_op_mul_mat(
         ggml_cuda_pool_alloc<float> src1_ddf_alloc;
         ggml_cuda_pool_alloc<char>  src1_ddq_alloc;
         ggml_cuda_pool_alloc<float>   dst_dd_alloc;
+
 
         char  *  src0_dd = nullptr;
         float * src1_ddf = nullptr; // float
@@ -1724,8 +1736,11 @@ static void ggml_cuda_op_mul_mat(
                         // Instead they need to be copied to the correct slice in ne0 = dst row index.
                         // If dst is a vector with ne0 == 1 then you don't have to do this but it still produces correct results.
                         float * dhf_dst_i = (float *) ((char *) dst_off_device + i02*nb2 + i03*nb3);
+                        // GGML_ASSERT(dst->nb[1] == ne0*sizeof(float));
                         GGML_ASSERT(dst->nb[1] == ne0*sizeof(float));
                         dhf_dst_i += src1_col_0*ne0 + dev[id].row_low;
+                        // CUDA_CHECK(ggml_cuda_Memcpy2DPeerAsync(
+                        //     dhf_dst_i, ctx.device, ne0*sizeof(float), dst_dd_i, id, row_diff*sizeof(float), row_diff*sizeof(float), src1_ncols, stream));
                         CUDA_CHECK(ggml_cuda_Memcpy2DPeerAsync(
                             dhf_dst_i, ctx.device, ne0*sizeof(float), dst_dd_i, id, row_diff*sizeof(float), row_diff*sizeof(float), src1_ncols, stream));
                     } else {
@@ -2080,6 +2095,7 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
     } else if (!split && (use_batched_cublas_f16 || use_batched_cublas_bf16 || use_batched_cublas_f32)
         && !ggml_is_transposed(src0) && !ggml_is_transposed(src1) && src1->ne[2]*src1->ne[3] > 1) {
         // general KQ + KQV multi-batch without FlashAttention
+        GGML_ASSERT(dst->type != GGML_TYPE_F16);
         ggml_cuda_mul_mat_batched_cublas(ctx, src0, src1, dst);
     } else if (use_mul_mat_vec_f) {
         ggml_cuda_op_mul_mat(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_vec_f, nullptr);
@@ -2474,7 +2490,7 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             ggml_cuda_op_im2col_3d(ctx, dst);
             break;
         case GGML_OP_CONV_2D:
-            ggml_cuda_op_conv2d(ctx, dst);
+            ggml_cuda_op_conv2d_implicit(ctx, dst);
             break;
         case GGML_OP_CONV_2D_DW:
             ggml_cuda_op_conv2d_dw(ctx, dst);

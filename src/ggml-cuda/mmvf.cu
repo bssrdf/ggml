@@ -391,6 +391,7 @@ void ggml_cuda_mul_mat_vec_f(ggml_backend_cuda_context & ctx, const ggml_tensor 
     }
 }
 
+
 void ggml_cuda_op_mul_mat_vec_f(
     ggml_backend_cuda_context & ctx,
     const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst, const char * src0_dd_i, const float * src1_ddf_i,
@@ -399,6 +400,7 @@ void ggml_cuda_op_mul_mat_vec_f(
 
     GGML_ASSERT(src1->type == GGML_TYPE_F32);
     GGML_ASSERT(dst->type  == GGML_TYPE_F32);
+
 
     const int64_t ne00 = src0->ne[0];
     const int64_t ne10 = src1->ne[0];

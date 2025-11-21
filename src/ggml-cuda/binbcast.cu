@@ -165,6 +165,7 @@ static void launch_bin_bcast_pack(const ggml_tensor * src0, const ggml_tensor * 
     size_t cnb[]  = { nb0, nb1, nb2, nb3 };
     size_t cnb0[] = { nb00, nb01, nb02, nb03 };
     size_t cnb1[] = { nb10, nb11, nb12, nb13 };
+    // printf("initial nb10 %llu, %llu, %llu, %llu\n ", nb10, nb11, nb12, nb13);
 
     auto collapse = [](int64_t cne[]) {
         cne[0] *= cne[1];
@@ -245,6 +246,13 @@ static void launch_bin_bcast_pack(const ggml_tensor * src0, const ggml_tensor * 
         GGML_ASSERT(nb01 % sizeof(src0_t) == 0);
         GGML_ASSERT(nb02 % sizeof(src0_t) == 0);
         GGML_ASSERT(nb03 % sizeof(src0_t) == 0);
+
+        // if (nb10 % sizeof(src1_t) != 0){
+        //     printf("nb10 %llu, src1_t %d src0_t %d \n ", nb10, sizeof(src1_t), sizeof(src0_t));
+        //     printf("src0 %s src1 %s dst %s \n ", src0->name, src1->name, dst->name);
+        //     printf("src0:  %llu, %llu, %llu, %llu \n ", ne00, ne01, ne02, ne03);
+        //     printf("src1:  %llu, %llu, %llu, %llu \n ", ne10, ne11, ne12, ne13);
+        // }
 
         GGML_ASSERT(nb10 % sizeof(src1_t) == 0);
         GGML_ASSERT(nb11 % sizeof(src1_t) == 0);
