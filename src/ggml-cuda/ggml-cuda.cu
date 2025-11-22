@@ -1306,7 +1306,7 @@ static void ggml_cuda_op_mul_mat_cublas(
         if (GGML_CUDA_CC_IS_CDNA(cc) || GGML_CUDA_CC_IS_RDNA4(cc)) {
             const float alpha = 1.0f;
             const float beta = 0.0f;
-
+            // printf("Using fp16 compute for cdna/rDNA4\n");
             CUBLAS_CHECK(
                 cublasGemmEx(ctx.cublas_handle(id), CUBLAS_OP_T, CUBLAS_OP_N,
                         row_diff, src1_ncols, ne10,
@@ -1316,9 +1316,10 @@ static void ggml_cuda_op_mul_mat_cublas(
                         CUBLAS_COMPUTE_32F,
                         CUBLAS_GEMM_DEFAULT_TENSOR_OP));
         } else {
-
+            // printf("Using fp16 compute for other architectures %zu, %zu, %zu \n",row_diff, src1_ncols, ne10);
             ggml_cuda_pool_alloc<half> dst_f16(ctx.pool(id), row_diff*src1_ncols);
-            half *dst_ddf_i = dst->type == GGML_TYPE_F16 ? (half *)dst_dd_i : dst_f16.get();
+            half *dst_ddf_i = dst->type == GGML_TYPE_F16 ? reinterpret_cast<half *>(dst_dd_i) : dst_f16.get();
+            // half *dst_ddf_i = dst_f16.get();
 
             const half alpha_f16 = 1.0f;
             const half beta_f16 = 0.0f;
@@ -1674,7 +1675,7 @@ static void ggml_cuda_op_mul_mat(
                 float * src1_ddf_i = dev[id].src1_ddf + (i0*ne11 + src1_col_0) * ne10;
                 char  * src1_ddq_i = dev[id].src1_ddq +  src1_ddq_i_offset;
                 float *   dst_dd_i =   dev[id].dst_dd + (i0*ne1  + src1_col_0) * (dst_on_device ? ne0 : row_diff);
-
+                // printf(" %d, offste %d \n", i0, (i0*ne1  + src1_col_0) * (dst_on_device ? ne0 : row_diff));
                 // the main device memory buffer can be on VRAM scratch, with space for all partial results
                 // in that case an offset on dst_ddf_i is needed
                 if (id == ctx.device) {
@@ -2085,6 +2086,10 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
     if (!split && use_mul_mat_vec_f) {
         // the custom F16 vector kernel can be used over batched cuBLAS GEMM
         // but this is only faster for GPUs without tensor cores or with a thin src0 matrix (particularly KQV in attention)
+        printf("ggml_cuda_mul_mat_vec_f: %s, %s, (%zu, %zu, %zu), (%zu, %zu, %zu)\n",
+           ggml_type_name(src0->type), ggml_type_name(src1->type),
+        src0->ne[0], src0->ne[1], src0->ne[2],
+        src1->ne[0], src1->ne[1], src1->ne[2]);
         ggml_cuda_mul_mat_vec_f(ctx, src0, src1, nullptr, dst);
     } else if (!split && use_mul_mat_f) {
         ggml_cuda_mul_mat_f(ctx, src0, src1, nullptr, dst);
@@ -2104,6 +2109,10 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
     } else if (use_mul_mat_q) {
         ggml_cuda_op_mul_mat(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_q, quantize_mmq_q8_1_cuda);
     } else {
+        printf("ggml_cuda_mul_mat_cublas: %s, %s, (%zu, %zu, %zu), (%zu, %zu, %zu)\n",
+           ggml_type_name(src0->type), ggml_type_name(src1->type),
+        src0->ne[0], src0->ne[1], src0->ne[2],
+        src1->ne[0], src1->ne[1], src1->ne[2]);
         ggml_cuda_op_mul_mat(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_cublas, nullptr);
     }
 }
@@ -3146,8 +3155,11 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                             std::vector<half> data1(ggml_nelements(node->src[1]));
                             ggml_backend_tensor_get(node->src[1], data1.data(), 0, ggml_nbytes(node->src[1]));
                             printf("src1[");
+                            float vmin = 1.e10, vmax= -1.e10;
                             for(int i = 0; i < data1.size() ; i++) {
                                 float val = __half2float(data1[i]);
+                                vmin = min(vmin, val);
+                                vmax = max(vmax, val);
                                 printf("%.3f,", val);
                             }
                             printf("]\n");
@@ -3160,6 +3172,7 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                                 printf("%.3f,", val);
                             }
                             printf("]\n");
+                            printf("src1 min %.3f max %.3f %d \n", vmin, vmax, pos);
                             abort();
                         }
                     }
