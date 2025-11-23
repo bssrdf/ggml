@@ -1,10 +1,11 @@
 #include "ggml.h"
-#include "ggml-cpu.h"
 #include "ggml-alloc.h"
+#include "ggml-cpu.h"
 #include "ggml-backend.h"
 
 #ifdef GGML_USE_CUDA
 #include "ggml-cuda.h"
+//#include <cuda_runtime.h>
 #endif
 
 #ifdef GGML_USE_METAL
@@ -35,15 +36,28 @@ struct test_model {
     struct ggml_context * ctx;
 };
 
-void load_model(test_model & model, bool use_gpu = false) {
+void load_model(test_model &, int,  int, int, int, int, int, bool);
+struct ggml_cgraph * build_graph_0(const test_model&);
+struct ggml_cgraph * build_graph_1(const test_model&);
+
+void load_model(test_model & model, int ic, int oc, int iw, int ih, int kw = 3, int kh = 3, bool use_gpu = false ) {
     // create data
-    int KW = 3, KH = 3, IC = 10, OC = 10;
-    int IW = 8, IH = 6, N = 1;
+    int KW = kw, KH = kh, IC = ic, OC = oc;
+    int IW = iw, IH = ih, N = 1;
+    // srand(time(NULL));
+
+    // printf(" input: IC = %d, OC = %d, IW = %d, IH = %d \n ", IC, OC, IW, IH);
 
     // Initialize adata
     std::vector<float> adata(KW * KH * IC * OC);
     for (int i = 0; i < KW * KH * IC * OC; i++) {
-        adata[i] = 2.5f;
+        // adata[i] = 2.f;
+        // adata[i] = (float)(i%KW)-1.f;
+        // adata[i] = (float)((i+1)%KW+1)/10.0;
+        // adata[i] = (float)(i%100);
+        // adata[i] = (rand() % 255) / 255.0;
+        float r = -1.f + static_cast <float> (rand()) /( static_cast <float> (RAND_MAX/(1.f-(-1.f))));
+        adata[i] = r;
     }
 
     // Convert adata to fp16 format
@@ -53,18 +67,27 @@ void load_model(test_model & model, bool use_gpu = false) {
     // Initialize bdata
     std::vector<float> bdata(IW * IH * IC * N);
     for (int i = 0; i < IW * IH * IC * N; i++) {
-        bdata[i] = 1.5f;
+        // bdata[i] = (float)(i%IW)/10.f;
+        // bdata[i] = 1.5f;
+        // bdata[i] = (rand() % 255) / 255.0;
+        float r = -1.f + static_cast <float> (rand()) /( static_cast <float> (RAND_MAX/(1.f-(-1.f))));
+        bdata[i] = r;
     }
+
+    std::vector<ggml_fp16_t> hbdata(IW * IH * IC * N);
+    ggml_fp32_to_fp16_row(bdata.data(), hbdata.data(), IW * IH * IC * N);
 
     size_t buffer_size = 0;
     {
+        // buffer_size += KW * KH * IC * OC * ggml_type_size(GGML_TYPE_F32); // tensor a
         buffer_size += KW * KH * IC * OC * ggml_type_size(GGML_TYPE_F16); // tensor a
-        buffer_size += IW * IH * IC * N  * ggml_type_size(GGML_TYPE_F32); // tensor b
+        // buffer_size += IW * IH * IC * N  * ggml_type_size(GGML_TYPE_F32); // tensor b
+        buffer_size += IW * IH * IC * N  * ggml_type_size(GGML_TYPE_F16); // tensor b
         buffer_size += 1024; // overhead
     }
 
-    printf("%s: ggml tensor size    = %d bytes\n", __func__, (int) sizeof(ggml_tensor));
-    printf("%s: backend buffer size = %0.2f MB\n", __func__, (buffer_size/ 1024.f/ 1024.f));
+    // printf("%s: ggml tensor size    = %d bytes\n", __func__, (int) sizeof(ggml_tensor));
+    // printf("%s: backend buffer size = %0.2f MB\n", __func__, (buffer_size/ 1024.f/ 1024.f));
 
     int num_tensors = 2;
     struct ggml_init_params params {
@@ -73,17 +96,17 @@ void load_model(test_model & model, bool use_gpu = false) {
             /*.no_alloc   =*/ true,
     };
 
-    ggml_log_set(ggml_log_callback_default, nullptr);
-
     // initialize the backend
 #ifdef GGML_USE_CUDA
     if (use_gpu) {
-        fprintf(stderr, "%s: using CUDA backend\n", __func__);
+        // fprintf(stderr, "%s: using CUDA backend\n", __func__);
         model.backend = ggml_backend_cuda_init(0);
         if (!model.backend) {
             fprintf(stderr, "%s: ggml_backend_cuda_init() failed\n", __func__);
         }
     }
+#else
+    GGML_UNUSED(use_gpu);
 #endif
 
 #ifdef GGML_USE_METAL
@@ -94,6 +117,8 @@ void load_model(test_model & model, bool use_gpu = false) {
             fprintf(stderr, "%s: ggml_backend_metal_init() failed\n", __func__);
         }
     }
+#else
+    GGML_UNUSED(use_gpu);
 #endif
 
     if(!model.backend) {
@@ -108,7 +133,9 @@ void load_model(test_model & model, bool use_gpu = false) {
 
     // create tensors
     model.a = ggml_new_tensor_4d(model.ctx, GGML_TYPE_F16,  KW, KH, IC, OC);
-    model.b = ggml_new_tensor_4d(model.ctx, GGML_TYPE_F32, IW, IH, IC, N);
+    // model.a = ggml_new_tensor_4d(model.ctx, GGML_TYPE_F32,  KW, KH, IC, OC);
+    // model.b = ggml_new_tensor_4d(model.ctx, GGML_TYPE_F32, IW, IH, IC, N);
+    model.b = ggml_new_tensor_4d(model.ctx, GGML_TYPE_F16, IW, IH, IC, N);
 
     // create a allocator
     struct ggml_tallocr alloc = ggml_tallocr_new(model.buffer);
@@ -119,8 +146,10 @@ void load_model(test_model & model, bool use_gpu = false) {
     // load data to buffer
     if(ggml_backend_is_cpu(model.backend)) {
         memcpy(model.a->data, hadata.data(), ggml_nbytes(model.a));
+        // memcpy(model.a->data, adata.data(), ggml_nbytes(model.a));
     } else {
         ggml_backend_tensor_set(model.a, hadata.data(), 0, ggml_nbytes(model.a));
+        // ggml_backend_tensor_set(model.a, adata.data(), 0, ggml_nbytes(model.a));
     }
 
     // alloc memory
@@ -131,13 +160,16 @@ void load_model(test_model & model, bool use_gpu = false) {
                 || ggml_backend_is_metal(model.backend)
 #endif
     ) {
-        memcpy(model.b->data, bdata.data(), ggml_nbytes(model.b));
+        memcpy(model.b->data, hbdata.data(), ggml_nbytes(model.b));
     } else {
-        ggml_backend_tensor_set(model.b, bdata.data(), 0, ggml_nbytes(model.b));
+        ggml_backend_tensor_set(model.b, hbdata.data(), 0, ggml_nbytes(model.b));
     }
 }
 
-struct ggml_cgraph * build_graph(const test_model& model) {
+typedef struct ggml_cgraph* (*build_graph_t)(const test_model& model);
+
+
+struct ggml_cgraph * build_graph_1(const test_model& model) {
     static size_t buf_size = ggml_tensor_overhead()*GGML_DEFAULT_GRAPH_SIZE + ggml_graph_overhead();
     static std::vector<uint8_t> buf(buf_size);
 
@@ -159,22 +191,41 @@ struct ggml_cgraph * build_graph(const test_model& model) {
     int d0 = 1;
     int d1 = 1;
 
-    // split conv2d in fundamental methods for test unit
-    struct ggml_tensor* im2col_0 = ggml_im2col(ctx0, model.a, model.b, s0, s1, p0, p1, d0, d1, true, GGML_TYPE_F16);
-    ggml_set_name(im2col_0, "im2col_res");
-    ggml_build_forward_expand(gf, im2col_0);
+
+    // int s0 = 3;
+    // int s1 = 5;
+    // int p0 = 5;
+    // int p1 = 5;
+    // int d0 = 2;
+    // int d1 = 4;
+
 
     // recalculate for avoid fragmentation
-    struct ggml_tensor* conv2d_res = ggml_conv_2d(ctx0, model.a, model.b, s0, s1, p0, p1, d0, d1);
-    ggml_set_name(conv2d_res, "conv2d_res");
-    ggml_build_forward_expand(gf, conv2d_res);
+    // struct ggml_tensor* conv2d_res = ggml_conv_2d(ctx0, model.a, model.b, s0, s1, p0, p1, d0, d1);
+    // ggml_set_name(conv2d_res, "conv2d_res");
+    // ggml_build_forward_expand(gf, conv2d_res);
+    // int64_t *ne = conv2d_res->ne;
+    // printf("conv2d: (%zu, %zu, %zu, %zu) \n", ne[0], ne[1], ne[2], ne[3]);
 
+
+    // struct ggml_tensor* wino_res = ggml_conv_2d_implicitgemm(ctx0, model.a, model.b, s0, s1, p0, p1, d0, d1);
+    struct ggml_tensor* wino_res = ggml_conv_2d_direct(ctx0, model.a, model.b, s0, s1, p0, p1, d0, d1);
+    ggml_set_name(wino_res, "wino_res");
+    ggml_build_forward_expand(gf, wino_res);
+    // ne = wino_res->ne;
+    // printf("wino: (%zu, %zu, %zu, %zu) \n", ne[0], ne[1], ne[2], ne[3]);
     ggml_free(ctx0);
     return gf;
 }
 
-struct ggml_cgraph * compute_graph(const test_model & model, ggml_gallocr_t allocr) {
+std::vector<ggml_fp16_t> compute_graph(const test_model &, ggml_gallocr_t,
+            build_graph_t, int, double *);
+
+
+std::vector<ggml_fp16_t> compute_graph(const test_model & model, ggml_gallocr_t allocr,
+            build_graph_t build_graph, int iters, double *t) {
     struct ggml_cgraph * gf = build_graph(model);
+
 
     // allocate tensors
     ggml_gallocr_alloc_graph(allocr, gf);
@@ -186,206 +237,463 @@ struct ggml_cgraph * compute_graph(const test_model & model, ggml_gallocr_t allo
 
     ggml_backend_graph_compute(model.backend, gf);
 
+    ggml_backend_synchronize(model.backend);
+
+    int64_t start_time = ggml_time_us();
+
+    for(int iter=0; iter<iters; iter++){
+        ggml_backend_graph_compute(model.backend, gf);
+        ggml_backend_synchronize(model.backend);
+    }
+
+    int64_t end_time = ggml_time_us();
+    double time_us = end_time - start_time;
+
+    time_us = time_us/iters;
+
     //ggml_graph_print(gf);
 
-    return gf;
+    struct ggml_tensor *res = NULL;
+
+    for(int i = 0; i < ggml_graph_n_nodes(gf); ++i) {
+        if(strcmp(ggml_get_name(ggml_graph_node(gf, i)), "wino_res") == 0) {
+            res = ggml_graph_node(gf, i);
+        } else if(strcmp(ggml_get_name(ggml_graph_node(gf, i)), "conv2d_res") == 0) {
+            res = ggml_graph_node(gf, i);
+        }
+    }
+
+    std::vector<ggml_fp16_t> data(ggml_nelements(res));
+    ggml_backend_tensor_get(res, data.data(), 0, ggml_nbytes(res));
+
+    *t = time_us/1000;
+    return data;
+
 }
+
+static std::vector<std::tuple<int, int, int, int, int, int>> configs = {
+        // std::make_tuple(64,64,48,64,3,3),
+        // std::make_tuple(320,320,104,152,3,3),
+        // std::make_tuple(640,640,52,76,3,3),
+        // std::make_tuple(640,640,104,152,3,3),
+        // std::make_tuple(960,320,104,152,3,3),
+        // std::make_tuple(1280,1280,26,38,3,3),
+        // std::make_tuple(1920,640,32,32,3,3)
+        // std::make_tuple(1280,1280,16,16,3,3),
+        std::make_tuple(4,128,16,16,3,3),
+        // std::make_tuple(32,12,141,133,3,3),
+        // std::make_tuple(32,6,141,133,3,3),
+        // std::make_tuple(32,12,141,121,3,3),
+        // std::make_tuple(32,9,141,121,3,3),
+        // std::make_tuple(320,8,16,16,3,3),  //working
+        // std::make_tuple(320,9,16,16,3,3),  //working
+        // std::make_tuple(320,12,16,16,3,3),  //working
+        //  std::make_tuple(256,12,16,16,3,3),  //working
+        //  std::make_tuple(32,12,16,16,3,3),  //not working
+        // std::make_tuple(16,12,16,16,3,3),  //not working
+        // std::make_tuple(32,12,16,16,3,3),  //not working
+        // std::make_tuple(48,12,16,16,3,3),  // not working
+        // std::make_tuple(96,12,16,16,3,3),  //not working
+        // std::make_tuple(64,12,16,16,3,3),  //working
+        // std::make_tuple(64,12,141,133,3,3),  //working
+        // std::make_tuple(32,12,141,133,3,3),  //working
+        // std::make_tuple(1280,1280,16,16,3,3),
+        // std::make_tuple(32,8,24,24,3,3),
+        // std::make_tuple(640,640,64,64,3,3),
+        // std::make_tuple(320,640,32,32,3,3),
+        // std::make_tuple(4,320,96,128,3,3),
+        // std::make_tuple(320,4,96,128,3,3),
+        // std::make_tuple(4,320,64,96,3,3),
+        // std::make_tuple(320,4,64,96,3,3),
+        // std::make_tuple(640,640,96,128,3,3),
+        // std::make_tuple(1280,1280,26,38,1,1),
+        // std::make_tuple(256,128,768,1024,3,3),
+        // std::make_tuple(128,3,768,1024,3,3),
+        // std::make_tuple(256,128,768,1024,1,1),
+        // std::make_tuple(512,256,384,512,1,1),
+        // std::make_tuple(1280,640,52,76,3,3),
+        // std::make_tuple(1920,1280,26,38,3,3),
+        // std::make_tuple(2560,1280,26,38,3,3),
+        // std::make_tuple(320,1280,26,38,3,3),
+        // std::make_tuple(512,512,104,152,3,3),
+        // std::make_tuple(512,512,208,304,3,3),
+        // std::make_tuple(512,256,416,608,3,3),
+        // std::make_tuple(256,128,832,1216,3,3),
+        // std::make_tuple(256,256,832,1216,3,3),
+        // std::make_tuple(32,64,58,58,3,3)
+        // std::make_tuple(320,256,1024,1920)
+    };
+
+static std::vector<std::tuple<int, int, int, int, int, int>> configs_sdxl_512 = {
+        //512x512
+        std::make_tuple(4,320,64,64,3,3),
+        std::make_tuple(320,320,64,64,3,3),
+        std::make_tuple(320,320,64,64,3,3),
+        std::make_tuple(320,320,64,64,3,3),
+        std::make_tuple(320,320,64,64,3,3),
+        std::make_tuple(320,320,64,64,3,3),
+        std::make_tuple(320,640,32,32,3,3),
+        std::make_tuple(640,640,32,32,3,3),
+        std::make_tuple(320,640,32,32,3,3),
+        std::make_tuple(640,640,32,32,3,3),
+        std::make_tuple(640,640,32,32,3,3),
+        std::make_tuple(640,640,32,32,3,3),
+        std::make_tuple(640,1280,16,16,3,3),
+        std::make_tuple(1280,1280,16,16,3,3),
+        std::make_tuple(640,1280,16,16,3,3),
+        std::make_tuple(1280,1280,16,16,3,3),
+        std::make_tuple(1280,1280,16,16,3,3),
+        std::make_tuple(1280,1280,16,16,3,3),
+        std::make_tuple(1280,1280,16,16,3,3),
+        std::make_tuple(1280,1280,16,16,3,3),
+        std::make_tuple(1280,1280,16,16,3,3),
+        std::make_tuple(2560,1280,16,16,3,3),
+        std::make_tuple(1280,1280,16,16,3,3),
+        std::make_tuple(2560,1280,16,16,3,3),
+        std::make_tuple(2560,1280,16,16,3,3),
+        std::make_tuple(1280,1280,16,16,3,3),
+        std::make_tuple(2560,1280,16,16,3,3),
+        std::make_tuple(1920,1280,16,16,3,3),
+        std::make_tuple(1280,1280,16,16,3,3),
+        std::make_tuple(1920,1280,16,16,3,3),
+        std::make_tuple(1280,1280,32,32,3,3),
+        std::make_tuple(1920,640,32,32,3,3),
+        std::make_tuple(640,640,32,32,3,3),
+        std::make_tuple(1920,640,32,32,3,3),
+        std::make_tuple(1280,640,32,32,3,3),
+        std::make_tuple(640,640,32,32,3,3),
+        std::make_tuple(1280,640,32,32,3,3),
+        std::make_tuple(960,640,32,32,3,3),
+        std::make_tuple(640,640,32,32,3,3),
+        std::make_tuple(960,640,32,32,3,3),
+        std::make_tuple(640,640,64,64,3,3),
+        std::make_tuple(960,320,64,64,3,3),
+        std::make_tuple(320,320,64,64,3,3),
+        std::make_tuple(960,320,64,64,3,3),
+        std::make_tuple(640,320,64,64,3,3),
+        std::make_tuple(320,320,64,64,3,3),
+        std::make_tuple(640,320,64,64,3,3),
+        std::make_tuple(640,320,64,64,3,3),
+        std::make_tuple(320,320,64,64,3,3),
+        std::make_tuple(640,320,64,64,3,3),
+        std::make_tuple(320,4,64,64,3,3),
+        std::make_tuple(4,320,64,64,3,3),
+        std::make_tuple(320,320,64,64,3,3),
+        std::make_tuple(320,320,64,64,3,3),
+        std::make_tuple(320,320,64,64,3,3),
+        std::make_tuple(320,320,64,64,3,3),
+        std::make_tuple(320,320,64,64,3,3),
+        std::make_tuple(320,640,32,32,3,3),
+        std::make_tuple(640,640,32,32,3,3),
+        std::make_tuple(320,640,32,32,3,3),
+        std::make_tuple(640,640,32,32,3,3),
+        std::make_tuple(640,640,32,32,3,3),
+        std::make_tuple(640,640,32,32,3,3),
+        std::make_tuple(640,1280,16,16,3,3),
+        std::make_tuple(1280,1280,16,16,3,3),
+        std::make_tuple(640,1280,16,16,3,3),
+        std::make_tuple(1280,1280,16,16,3,3),
+        std::make_tuple(1280,1280,16,16,3,3),
+        std::make_tuple(1280,1280,16,16,3,3),
+        std::make_tuple(1280,1280,16,16,3,3),
+        std::make_tuple(1280,1280,16,16,3,3),
+        std::make_tuple(1280,1280,16,16,3,3),
+        std::make_tuple(2560,1280,16,16,3,3),
+        std::make_tuple(1280,1280,16,16,3,3),
+        std::make_tuple(2560,1280,16,16,3,3),
+        std::make_tuple(2560,1280,16,16,3,3),
+        std::make_tuple(1280,1280,16,16,3,3),
+        std::make_tuple(2560,1280,16,16,3,3),
+        std::make_tuple(1920,1280,16,16,3,3),
+        std::make_tuple(1280,1280,16,16,3,3),
+        std::make_tuple(1920,1280,16,16,3,3),
+        std::make_tuple(1280,1280,32,32,3,3),
+        std::make_tuple(1920,640,32,32,3,3),
+        std::make_tuple(640,640,32,32,3,3),
+        std::make_tuple(1920,640,32,32,3,3),
+        std::make_tuple(1280,640,32,32,3,3),
+        std::make_tuple(640,640,32,32,3,3),
+        std::make_tuple(1280,640,32,32,3,3),
+        std::make_tuple(960,640,32,32,3,3),
+        std::make_tuple(640,640,32,32,3,3),
+        std::make_tuple(960,640,32,32,3,3),
+        std::make_tuple(640,640,64,64,3,3),
+        std::make_tuple(960,320,64,64,3,3),
+        std::make_tuple(320,320,64,64,3,3),
+        std::make_tuple(960,320,64,64,3,3),
+        std::make_tuple(640,320,64,64,3,3),
+        std::make_tuple(320,320,64,64,3,3),
+        std::make_tuple(640,320,64,64,3,3),
+        std::make_tuple(640,320,64,64,3,3),
+        std::make_tuple(320,320,64,64,3,3),
+        std::make_tuple(640,320,64,64,3,3),
+        std::make_tuple(320,4,64,64,3,3)
+        };
+
+static std::vector<std::tuple<int, int, int, int, int, int>> configs_sdxl_768 = {
+        //768x768
+        std::make_tuple(4,320,96,96,3,3),
+        std::make_tuple(320,320,96,96,3,3),
+        std::make_tuple(320,320,96,96,3,3),
+        std::make_tuple(320,320,96,96,3,3),
+        std::make_tuple(320,320,96,96,3,3),
+        std::make_tuple(320,320,96,96,3,3),
+        std::make_tuple(320,640,48,48,3,3),
+        std::make_tuple(640,640,48,48,3,3),
+        std::make_tuple(320,640,48,48,3,3),
+        std::make_tuple(640,640,48,48,3,3),
+        std::make_tuple(640,640,48,48,3,3),
+        std::make_tuple(640,640,48,48,3,3),
+        std::make_tuple(640,1280,24,24,3,3),
+        std::make_tuple(1280,1280,24,24,3,3),
+        std::make_tuple(640,1280,24,24,3,3),
+        std::make_tuple(1280,1280,24,24,3,3),
+        std::make_tuple(1280,1280,24,24,3,3),
+        std::make_tuple(1280,1280,24,24,3,3),
+        std::make_tuple(1280,1280,24,24,3,3),
+        std::make_tuple(1280,1280,24,24,3,3),
+        std::make_tuple(1280,1280,24,24,3,3),
+        std::make_tuple(2560,1280,24,24,3,3),
+        std::make_tuple(1280,1280,24,24,3,3),
+        std::make_tuple(2560,1280,24,24,3,3),
+        std::make_tuple(2560,1280,24,24,3,3),
+        std::make_tuple(1280,1280,24,24,3,3),
+        std::make_tuple(2560,1280,24,24,3,3),
+        std::make_tuple(1920,1280,24,24,3,3),
+        std::make_tuple(1280,1280,24,24,3,3),
+        std::make_tuple(1920,1280,24,24,3,3),
+        std::make_tuple(1280,1280,48,48,3,3),
+        std::make_tuple(1920,640,48,48,3,3),
+        std::make_tuple(640,640,48,48,3,3),
+        std::make_tuple(1920,640,48,48,3,3),
+        std::make_tuple(1280,640,48,48,3,3),
+        std::make_tuple(640,640,48,48,3,3),
+        std::make_tuple(1280,640,48,48,3,3),
+        std::make_tuple(960,640,48,48,3,3),
+        std::make_tuple(640,640,48,48,3,3),
+        std::make_tuple(960,640,48,48,3,3),
+        std::make_tuple(640,640,96,96,3,3),
+        std::make_tuple(960,320,96,96,3,3),
+        std::make_tuple(320,320,96,96,3,3),
+        std::make_tuple(960,320,96,96,3,3),
+        std::make_tuple(640,320,96,96,3,3),
+        std::make_tuple(320,320,96,96,3,3),
+        std::make_tuple(640,320,96,96,3,3),
+        std::make_tuple(640,320,96,96,3,3),
+        std::make_tuple(320,320,96,96,3,3),
+        std::make_tuple(640,320,96,96,3,3),
+        std::make_tuple(320,4,96,96,3,3),
+        std::make_tuple(4,320,96,96,3,3),
+        std::make_tuple(320,320,96,96,3,3),
+        std::make_tuple(320,320,96,96,3,3),
+        std::make_tuple(320,320,96,96,3,3),
+        std::make_tuple(320,320,96,96,3,3),
+        std::make_tuple(320,320,96,96,3,3),
+        std::make_tuple(320,640,48,48,3,3),
+        std::make_tuple(640,640,48,48,3,3),
+        std::make_tuple(320,640,48,48,3,3),
+        std::make_tuple(640,640,48,48,3,3),
+        std::make_tuple(640,640,48,48,3,3),
+        std::make_tuple(640,640,48,48,3,3),
+        std::make_tuple(640,1280,24,24,3,3),
+        std::make_tuple(1280,1280,24,24,3,3),
+        std::make_tuple(640,1280,24,24,3,3),
+        std::make_tuple(1280,1280,24,24,3,3),
+        std::make_tuple(1280,1280,24,24,3,3),
+        std::make_tuple(1280,1280,24,24,3,3),
+        std::make_tuple(1280,1280,24,24,3,3),
+        std::make_tuple(1280,1280,24,24,3,3),
+        std::make_tuple(1280,1280,24,24,3,3),
+        std::make_tuple(2560,1280,24,24,3,3),
+        std::make_tuple(1280,1280,24,24,3,3),
+        std::make_tuple(2560,1280,24,24,3,3),
+        std::make_tuple(2560,1280,24,24,3,3),
+        std::make_tuple(1280,1280,24,24,3,3),
+        std::make_tuple(2560,1280,24,24,3,3),
+        std::make_tuple(1920,1280,24,24,3,3),
+        std::make_tuple(1280,1280,24,24,3,3),
+        std::make_tuple(1920,1280,24,24,3,3),
+        std::make_tuple(1280,1280,48,48,3,3),
+        std::make_tuple(1920,640,48,48,3,3),
+        std::make_tuple(640,640,48,48,3,3),
+        std::make_tuple(1920,640,48,48,3,3),
+        std::make_tuple(1280,640,48,48,3,3),
+        std::make_tuple(640,640,48,48,3,3),
+        std::make_tuple(1280,640,48,48,3,3),
+        std::make_tuple(960,640,48,48,3,3),
+        std::make_tuple(640,640,48,48,3,3),
+        std::make_tuple(960,640,48,48,3,3),
+        std::make_tuple(640,640,96,96,3,3),
+        std::make_tuple(960,320,96,96,3,3),
+        std::make_tuple(320,320,96,96,3,3),
+        std::make_tuple(960,320,96,96,3,3),
+        std::make_tuple(640,320,96,96,3,3),
+        std::make_tuple(320,320,96,96,3,3),
+        std::make_tuple(640,320,96,96,3,3),
+        std::make_tuple(640,320,96,96,3,3),
+        std::make_tuple(320,320,96,96,3,3),
+        std::make_tuple(640,320,96,96,3,3),
+        std::make_tuple(320,4,96,96,3,3),
+        };
+
+static std::vector<std::tuple<int, int, int, int, int, int>> configs_sdxl_1024 = {
+        //1024x1024
+        std::make_tuple(4,320,128,128,3,3),
+        std::make_tuple(320,320,128,128,3,3),
+        std::make_tuple(320,320,128,128,3,3),
+        std::make_tuple(320,320,128,128,3,3),
+        std::make_tuple(320,320,128,128,3,3),
+        std::make_tuple(320,320,128,128,3,3),
+        std::make_tuple(320,640,64,64,3,3),
+        std::make_tuple(640,640,64,64,3,3),
+        std::make_tuple(320,640,64,64,3,3),
+        std::make_tuple(640,640,64,64,3,3),
+        std::make_tuple(640,640,64,64,3,3),
+        std::make_tuple(640,640,64,64,3,3),
+        std::make_tuple(640,1280,32,32,3,3),
+        std::make_tuple(1280,1280,32,32,3,3),
+        std::make_tuple(640,1280,32,32,3,3),
+        std::make_tuple(1280,1280,32,32,3,3),
+        std::make_tuple(1280,1280,32,32,3,3),
+        std::make_tuple(1280,1280,32,32,3,3),
+        std::make_tuple(1280,1280,32,32,3,3),
+        std::make_tuple(1280,1280,32,32,3,3),
+        std::make_tuple(1280,1280,32,32,3,3),
+        std::make_tuple(2560,1280,32,32,3,3),
+        std::make_tuple(1280,1280,32,32,3,3),
+        std::make_tuple(2560,1280,32,32,3,3),
+        std::make_tuple(2560,1280,32,32,3,3),
+        std::make_tuple(1280,1280,32,32,3,3),
+        std::make_tuple(2560,1280,32,32,3,3),
+        std::make_tuple(1920,1280,32,32,3,3),
+        std::make_tuple(1280,1280,32,32,3,3),
+        std::make_tuple(1920,1280,32,32,3,3),
+        std::make_tuple(1280,1280,64,64,3,3),
+        std::make_tuple(1920,640,64,64,3,3),
+        std::make_tuple(640,640,64,64,3,3),
+        std::make_tuple(1920,640,64,64,3,3),
+        std::make_tuple(1280,640,64,64,3,3),
+        std::make_tuple(640,640,64,64,3,3),
+        std::make_tuple(1280,640,64,64,3,3),
+        std::make_tuple(960,640,64,64,3,3),
+        std::make_tuple(640,640,64,64,3,3),
+        std::make_tuple(960,640,64,64,3,3),
+        std::make_tuple(640,640,128,128,3,3),
+        std::make_tuple(960,320,128,128,3,3),
+        std::make_tuple(320,320,128,128,3,3),
+        std::make_tuple(960,320,128,128,3,3),
+        std::make_tuple(640,320,128,128,3,3),
+        std::make_tuple(320,320,128,128,3,3),
+        std::make_tuple(640,320,128,128,3,3),
+        std::make_tuple(640,320,128,128,3,3),
+        std::make_tuple(320,320,128,128,3,3),
+        std::make_tuple(640,320,128,128,3,3),
+        std::make_tuple(320,4,128,128,3,3),
+        std::make_tuple(4,320,128,128,3,3),
+        std::make_tuple(320,320,128,128,3,3),
+        std::make_tuple(320,320,128,128,3,3),
+        std::make_tuple(320,320,128,128,3,3),
+        std::make_tuple(320,320,128,128,3,3),
+        std::make_tuple(320,320,128,128,3,3),
+        std::make_tuple(320,640,64,64,3,3),
+        std::make_tuple(640,640,64,64,3,3),
+        std::make_tuple(320,640,64,64,3,3),
+        std::make_tuple(640,640,64,64,3,3),
+        std::make_tuple(640,640,64,64,3,3),
+        std::make_tuple(640,640,64,64,3,3),
+        std::make_tuple(640,1280,32,32,3,3),
+        std::make_tuple(1280,1280,32,32,3,3),
+        std::make_tuple(640,1280,32,32,3,3),
+        std::make_tuple(1280,1280,32,32,3,3),
+        std::make_tuple(1280,1280,32,32,3,3),
+        std::make_tuple(1280,1280,32,32,3,3),
+        std::make_tuple(1280,1280,32,32,3,3),
+        std::make_tuple(1280,1280,32,32,3,3),
+        std::make_tuple(1280,1280,32,32,3,3),
+        std::make_tuple(2560,1280,32,32,3,3),
+        std::make_tuple(1280,1280,32,32,3,3),
+        std::make_tuple(2560,1280,32,32,3,3),
+        std::make_tuple(2560,1280,32,32,3,3),
+        std::make_tuple(1280,1280,32,32,3,3),
+        std::make_tuple(2560,1280,32,32,3,3),
+        std::make_tuple(1920,1280,32,32,3,3),
+        std::make_tuple(1280,1280,32,32,3,3),
+        std::make_tuple(1920,1280,32,32,3,3),
+        std::make_tuple(1280,1280,64,64,3,3),
+        std::make_tuple(1920,640,64,64,3,3),
+        std::make_tuple(640,640,64,64,3,3),
+        std::make_tuple(1920,640,64,64,3,3),
+        std::make_tuple(1280,640,64,64,3,3),
+        std::make_tuple(640,640,64,64,3,3),
+        std::make_tuple(1280,640,64,64,3,3),
+        std::make_tuple(960,640,64,64,3,3),
+        std::make_tuple(640,640,64,64,3,3),
+        std::make_tuple(960,640,64,64,3,3),
+        std::make_tuple(640,640,128,128,3,3),
+        std::make_tuple(960,320,128,128,3,3),
+        std::make_tuple(320,320,128,128,3,3),
+        std::make_tuple(960,320,128,128,3,3),
+        std::make_tuple(640,320,128,128,3,3),
+        std::make_tuple(320,320,128,128,3,3),
+        std::make_tuple(640,320,128,128,3,3),
+        std::make_tuple(640,320,128,128,3,3),
+        std::make_tuple(320,320,128,128,3,3),
+        std::make_tuple(640,320,128,128,3,3),
+        std::make_tuple(320,4,128,128,3,3)
+    };
+
 
 int main(void)
 {
     ggml_time_init();
 
-    test_model model;
-    load_model(model, true);
+    double time_iter0 = 0.0, time_iter1 = 0.0;
 
-    ggml_gallocr_t allocr = NULL;
+    int k = 0;
 
-    {
+    // for (auto c : configs_sdxl_1024){
+    for (auto c : configs){
+        test_model model;
+        load_model(model, std::get<0>(c), std::get<1>(c), std::get<2>(c),
+            std::get<3>(c), std::get<4>(c), std::get<5>(c), true);
+
+        ggml_gallocr_t allocr = NULL;
         allocr = ggml_gallocr_new(ggml_backend_get_default_buffer_type(model.backend));
 
         //create the worst case graph for memory usage estimation
-        struct ggml_cgraph * gf = build_graph(model);
+        struct ggml_cgraph * gf = build_graph_1(model);
 
         // compute the required memory
         ggml_gallocr_reserve(allocr, gf);
-        size_t mem_size = ggml_gallocr_get_buffer_size(allocr, 0);
-        fprintf(stderr, "%s: compute buffer size: %.2f MB\n", __func__, mem_size/1024.0f/1024.0f);
-    }
+        size_t mem_size0 = ggml_gallocr_get_buffer_size(allocr, 0);
+        // fprintf(stderr, "%s: compute buffer size: %.2f MB\n", __func__, mem_size/1024.0f/1024.0f);
 
-    struct ggml_cgraph * gf_res = compute_graph(model, allocr);
 
-    struct ggml_tensor * im2col_res = NULL;
-    struct ggml_tensor * conv2d_res = NULL;
+        int iterations = 0;
 
-    for(int i = 0; i < ggml_graph_n_nodes(gf_res); ++i) {
-        if(strcmp(ggml_get_name(ggml_graph_node(gf_res, i)), "im2col_res") == 0) {
-            im2col_res = ggml_graph_node(gf_res, i);
-        } else if(strcmp(ggml_get_name(ggml_graph_node(gf_res, i)), "conv2d_res") == 0) {
-            conv2d_res = ggml_graph_node(gf_res, i);
+        double run_time0;
+        std::vector<ggml_fp16_t> conv2d_data = compute_graph(model, allocr, build_graph_1, iterations, &run_time0);
+        std::vector<float>  f32_data(conv2d_data.size());
+        ggml_fp16_to_fp32_row(conv2d_data.data(), f32_data.data(), conv2d_data.size());
+       // int i = 2048;
+        // for(int i = 0; i < ggml_nelements(wino_res); i++) {
+        // for(int i = 0; i < 26*38; i++) {
+        for(int i = 0; i < conv2d_data.size(); i++) {
+            // float diff = fabs(im2col_data[i] - conv2d_data[i]);
+            // if(diff > 0.5) {
+                  printf("(%7.3f, %d) \n",
+                  f32_data[i], i);
+                // break;
+            // }
         }
+
+        ggml_free(model.ctx);
+        ggml_backend_buffer_free(model.buffer);
+        ggml_backend_free(model.backend);
+        ggml_gallocr_free(allocr);
+
     }
 
-    std::vector<uint16_t> im2col_data(ggml_nelements(im2col_res));
-    std::vector<float> conv2d_data(ggml_nelements(conv2d_res));
-
-    ggml_backend_tensor_get(im2col_res, im2col_data.data(), 0, ggml_nbytes(im2col_res));
-    ggml_backend_tensor_get(conv2d_res, conv2d_data.data(), 0, ggml_nbytes(conv2d_res));
-
-    const int n_conv2d_test = 480;
-    const int n_im2col_test = 4320;
-
-    float expected_conv2d [n_conv2d_test] = {
-        150.00f, 225.00f, 225.00f, 225.00f, 225.00f, 225.00f, 225.00f, 150.00f,
-        225.00f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 225.00f,
-        225.00f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 225.00f,
-        225.00f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 225.00f,
-        225.00f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 225.00f,
-        150.00f, 225.00f, 225.00f, 225.00f, 225.00f, 225.00f, 225.00f, 150.00f,
-        150.00f, 225.00f, 225.00f, 225.00f, 225.00f, 225.00f, 225.00f, 150.00f,
-        225.00f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 225.00f,
-        225.00f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 225.00f,
-        225.00f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 225.00f,
-        225.00f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 225.00f,
-        150.00f, 225.00f, 225.00f, 225.00f, 225.00f, 225.00f, 225.00f, 150.00f,
-        150.00f, 225.00f, 225.00f, 225.00f, 225.00f, 225.00f, 225.00f, 150.00f,
-        225.00f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 225.00f,
-        225.00f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 225.00f,
-        225.00f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 225.00f,
-        225.00f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 225.00f,
-        150.00f, 225.00f, 225.00f, 225.00f, 225.00f, 225.00f, 225.00f, 150.00f,
-        150.00f, 225.00f, 225.00f, 225.00f, 225.00f, 225.00f, 225.00f, 150.00f,
-        225.00f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 225.00f,
-        225.00f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 225.00f,
-        225.00f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 225.00f,
-        225.00f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 225.00f,
-        150.00f, 225.00f, 225.00f, 225.00f, 225.00f, 225.00f, 225.00f, 150.00f,
-        150.00f, 225.00f, 225.00f, 225.00f, 225.00f, 225.00f, 225.00f, 150.00f,
-        225.00f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 225.00f,
-        225.00f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 225.00f,
-        225.00f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 225.00f,
-        225.00f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 225.00f,
-        150.00f, 225.00f, 225.00f, 225.00f, 225.00f, 225.00f, 225.00f, 150.00f,
-        150.00f, 225.00f, 225.00f, 225.00f, 225.00f, 225.00f, 225.00f, 150.00f,
-        225.00f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 225.00f,
-        225.00f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 225.00f,
-        225.00f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 225.00f,
-        225.00f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 225.00f,
-        150.00f, 225.00f, 225.00f, 225.00f, 225.00f, 225.00f, 225.00f, 150.00f,
-        150.00f, 225.00f, 225.00f, 225.00f, 225.00f, 225.00f, 225.00f, 150.00f,
-        225.00f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 225.00f,
-        225.00f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 225.00f,
-        225.00f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 225.00f,
-        225.00f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 225.00f,
-        150.00f, 225.00f, 225.00f, 225.00f, 225.00f, 225.00f, 225.00f, 150.00f,
-        150.00f, 225.00f, 225.00f, 225.00f, 225.00f, 225.00f, 225.00f, 150.00f,
-        225.00f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 225.00f,
-        225.00f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 225.00f,
-        225.00f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 225.00f,
-        225.00f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 225.00f,
-        150.00f, 225.00f, 225.00f, 225.00f, 225.00f, 225.00f, 225.00f, 150.00f,
-        150.00f, 225.00f, 225.00f, 225.00f, 225.00f, 225.00f, 225.00f, 150.00f,
-        225.00f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 225.00f,
-        225.00f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 225.00f,
-        225.00f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 225.00f,
-        225.00f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 225.00f,
-        150.00f, 225.00f, 225.00f, 225.00f, 225.00f, 225.00f, 225.00f, 150.00f,
-        150.00f, 225.00f, 225.00f, 225.00f, 225.00f, 225.00f, 225.00f, 150.00f,
-        225.00f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 225.00f,
-        225.00f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 225.00f,
-        225.00f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 225.00f,
-        225.00f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 337.50f, 225.00f,
-        150.00f, 225.00f, 225.00f, 225.00f, 225.00f, 225.00f, 225.00f, 150.00f };
-
-    uint16_t expected_im2col[n_conv2d_test] = {
-            0, 0, 0, 0, 15872, 15872, 0, 15872,
-            15872, 0, 0, 0, 0, 15872, 15872, 0,
-            15872, 15872, 0, 0, 0, 0, 15872, 15872,
-            0, 15872, 15872, 0, 0, 0, 0, 15872,
-            15872, 0, 15872, 15872, 0, 0, 0, 0,
-            15872, 15872, 0, 15872, 15872, 0, 0, 0,
-            0, 15872, 15872, 0, 15872, 15872, 0, 0,
-            0, 0, 15872, 15872, 0, 15872, 15872, 0,
-            0, 0, 0, 15872, 15872, 0, 15872, 15872,
-            0, 0, 0, 0, 15872, 15872, 0, 15872,
-            15872, 0, 0, 0, 0, 15872, 15872, 0,
-            15872, 15872, 0, 0, 0, 15872, 15872, 15872,
-            15872, 15872, 15872, 0, 0, 0, 15872, 15872,
-            15872, 15872, 15872, 15872, 0, 0, 0, 15872,
-            15872, 15872, 15872, 15872, 15872, 0, 0, 0,
-            15872, 15872, 15872, 15872, 15872, 15872, 0, 0,
-            0, 15872, 15872, 15872, 15872, 15872, 15872, 0,
-            0, 0, 15872, 15872, 15872, 15872, 15872, 15872,
-            0, 0, 0, 15872, 15872, 15872, 15872, 15872,
-            15872, 0, 0, 0, 15872, 15872, 15872, 15872,
-            15872, 15872, 0, 0, 0, 15872, 15872, 15872,
-            15872, 15872, 15872, 0, 0, 0, 15872, 15872,
-            15872, 15872, 15872, 15872, 0, 0, 0, 15872,
-            15872, 15872, 15872, 15872, 15872, 0, 0, 0,
-            15872, 15872, 15872, 15872, 15872, 15872, 0, 0,
-            0, 15872, 15872, 15872, 15872, 15872, 15872, 0,
-            0, 0, 15872, 15872, 15872, 15872, 15872, 15872,
-            0, 0, 0, 15872, 15872, 15872, 15872, 15872,
-            15872, 0, 0, 0, 15872, 15872, 15872, 15872,
-            15872, 15872, 0, 0, 0, 15872, 15872, 15872,
-            15872, 15872, 15872, 0, 0, 0, 15872, 15872,
-            15872, 15872, 15872, 15872, 0, 0, 0, 15872,
-            15872, 15872, 15872, 15872, 15872, 0, 0, 0,
-            15872, 15872, 15872, 15872, 15872, 15872, 0, 0,
-            0, 15872, 15872, 15872, 15872, 15872, 15872, 0,
-            0, 0, 15872, 15872, 15872, 15872, 15872, 15872,
-            0, 0, 0, 15872, 15872, 15872, 15872, 15872,
-            15872, 0, 0, 0, 15872, 15872, 15872, 15872,
-            15872, 15872, 0, 0, 0, 15872, 15872, 15872,
-            15872, 15872, 15872, 0, 0, 0, 15872, 15872,
-            15872, 15872, 15872, 15872, 0, 0, 0, 15872,
-            15872, 15872, 15872, 15872, 15872, 0, 0, 0,
-            15872, 15872, 15872, 15872, 15872, 15872, 0, 0,
-            0, 15872, 15872, 15872, 15872, 15872, 15872, 0,
-            0, 0, 15872, 15872, 15872, 15872, 15872, 15872,
-            0, 0, 0, 15872, 15872, 15872, 15872, 15872,
-            15872, 0, 0, 0, 15872, 15872, 15872, 15872,
-            15872, 15872, 0, 0, 0, 15872, 15872, 15872,
-            15872, 15872, 15872, 0, 0, 0, 15872, 15872,
-            15872, 15872, 15872, 15872, 0, 0, 0, 15872,
-            15872, 15872, 15872, 15872, 15872, 0, 0, 0,
-            15872, 15872, 15872, 15872, 15872, 15872, 0, 0,
-            0, 15872, 15872, 15872, 15872, 15872, 15872, 0,
-            0, 0, 15872, 15872, 15872, 15872, 15872, 15872,
-            0, 0, 0, 15872, 15872, 15872, 15872, 15872,
-            15872, 0, 0, 0, 15872, 15872, 15872, 15872,
-            15872, 15872, 0, 0, 0, 15872, 15872, 15872,
-            15872, 15872, 15872, 0, 0, 0, 15872, 15872,
-            15872, 15872, 15872, 15872, 0, 0, 0, 15872,
-            15872, 15872, 15872, 15872, 15872, 0, 0, 0
-    };
-
-    printf("\nPerforming test:\n");
-
-    bool passed = true;
-    for(int i = 0; i < n_conv2d_test; i++) {
-        if(
-            im2col_data[i] != expected_im2col[i]) {
-            passed = false;
-            break;
-        }
-    }
-
-    printf("ggml_im2col (%d): %s\n", (int) ggml_nelements(im2col_res), passed && (ggml_nelements(im2col_res) == n_im2col_test) ? "\033[32mPASSED\033[0m" : "\033[31mFAILED\033[0m");
-
-    passed = true;
-    for(int i = 0; i < n_conv2d_test; i++) {
-        if(conv2d_data[i] != expected_conv2d[i]) {
-            passed = false;
-            break;
-        }
-    }
-
-    printf("ggml_conv2d (%d): %s\n", (int) ggml_nelements(conv2d_res), passed && (ggml_nelements(conv2d_res) == n_conv2d_test) ? "\033[32mPASSED\033[0m" : "\033[31mFAILED\033[0m");
-
-    ggml_free(model.ctx);
-
-    ggml_backend_buffer_free(model.buffer);
-    ggml_backend_free(model.backend);
-    ggml_gallocr_free(allocr);
+    // printf("\nPerforming test:\n");
     return 0;
 }

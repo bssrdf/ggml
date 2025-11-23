@@ -1,4 +1,5 @@
 #include "binbcast.cuh"
+#include "convert.cuh"
 #include <cstdint>
 #include <utility>
 
@@ -72,14 +73,18 @@ static __global__ void k_bin_bcast(const src0_t *         src0,
     for (int i0 = i0s; i0 < ne0; i0 += blockDim.x * gridDim.x) {
         const uint32_t i10 = fastmodulo(i0, ne10);
 
-        float result = src0_row ? (float) src0_row[i0] : 0.0f;
+        // float result = src0_row ? (float) src0_row[i0] : 0.0f;
+        float result = src0_row ? ggml_cuda_cast<float>(src0_row[i0]) : 0.0f;
         if constexpr (sizeof...(src1_ptrs) > 0) {
-            result = (..., (result = bin_op(result, (float)src1s[i_src1 + i10])));
+            // result = (..., (result = bin_op(result, (float)src1s[i_src1 + i10])));
+            result = (..., (result = bin_op(result, ggml_cuda_cast<float>(src1s[i_src1 + i10]))));
         } else {
-            result = bin_op(result, (float)src1[i_src1 + i10]);
+            // result = bin_op(result, (float)src1[i_src1 + i10]);
+            result = bin_op(result, ggml_cuda_cast<float>(src1[i_src1 + i10]));
         }
 
-        dst_row[i0] = (dst_t) result;
+        // dst_row[i0] = (dst_t) result;
+        dst_row[i0] = ggml_cuda_cast<dst_t>(result);
     }
 }
 
@@ -135,14 +140,19 @@ static __global__ void k_bin_bcast_unravel(const src0_t *         src0,
 
     const int i10 = fastmodulo(i0, ne10);
 
-    float result = src0_row ? (float) src0_row[i0] : 0.0f;
+    // float result = src0_row ? (float) src0_row[i0] : 0.0f;
+    float result = src0_row ? ggml_cuda_cast<float>(src0_row[i0]) : 0.0f;
+
     if constexpr (sizeof...(src1_ptrs) > 0) {
-        result = (..., (result = bin_op(result, (float)src1s[i_src1 + i10])));
+        // result = (..., (result = bin_op(result, (float)src1s[i_src1 + i10])));
+        result = (..., (result = bin_op(result, ggml_cuda_cast<float>(src1s[i_src1 + i10]))));
     } else {
-        result = bin_op(result, (float)src1[i_src1 + i10]);
+        // result = bin_op(result, (float)src1[i_src1 + i10]);
+        result = bin_op(result, ggml_cuda_cast<float>(src1[i_src1 + i10]));
     }
 
-    dst_row[i0] = (dst_t) result;
+    // dst_row[i0] = (dst_t) result;
+    dst_row[i0] = ggml_cuda_cast<dst_t>(result);
 }
 
 template <float (*bin_op)(const float, const float), typename src0_t, typename src1_t, typename dst_t, size_t... I>

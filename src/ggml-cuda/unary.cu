@@ -96,7 +96,8 @@ static __global__ void unary_op_kernel(const T * x, T * dst, const int k) {
         return;
     }
 
-    dst[i] = (T)op((float)x[i]);
+    // dst[i] = (T)op((float)x[i]);
+    dst[i] = ggml_cuda_cast<T>(op(ggml_cuda_cast<float>(x[i])));
 }
 
 template <float (*op)(float), typename T>
