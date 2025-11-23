@@ -126,8 +126,6 @@ if (CUDAToolkit_FOUND)
         list(APPEND CUDA_FLAGS -lineinfo)
     endif()
 
-    list(APPEND CUDA_FLAGS -g -G)
-
     if (CUDAToolkit_VERSION VERSION_GREATER_EQUAL "12.8")
         # Options are:
         # - none (not recommended)

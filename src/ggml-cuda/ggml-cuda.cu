@@ -2952,7 +2952,8 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                     continue;
                 }
 
-                static bool disable_fusion = (getenv("GGML_CUDA_DISABLE_FUSION") != nullptr);
+                // static bool disable_fusion = (getenv("GGML_CUDA_DISABLE_FUSION") != nullptr);
+                static bool disable_fusion = true;
                 if (!disable_fusion) {
 
                     if (ggml_cuda_can_fuse(cgraph, i, ggml_cuda_topk_moe_ops(/*with norm*/ true), {})) {
@@ -3064,27 +3065,63 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                 //     }
                 // }
                 // if(strcmp(node->name, "node_94") == 0) {
-                    // ggml_tensor * src = node->src[1];
-                    // printf("0  %s, %s, %s \n", src->name, ggml_op_name(src->op), ggml_type_name(src->type));
-                    // if(src->type == GGML_TYPE_F16){
-                    //     std::vector<half> data(ggml_nelements(src));
-                    //     ggml_backend_tensor_get(src, data.data(), 0, ggml_nbytes(src));
-                    //     printf("src1[");
-                    //     bool ab = false;
-                    //     for(int i = 0; i < data.size() ; i++) {
-                    //         // if(isnan(data[i])){
-                    //         //     printf("A nan %s, %s, %d \n", src->name, ggml_op_name(src->op), i);
-                    //         //     abort();
-                    //         // }
-                    //         float val = __half2float(data[i]);
-                    //         if(isnan(val))
-                    //            ab = true;
-                    //         printf("%.3f,", val);
-                    //     }
-                    //     printf("]\n");
-                    //     if(ab) abort();
-                    // }
-                    
+                // if(strcmp(node->name, "timestep_scaled") == 0) {
+                // if(strcmp(node->name, "label_emb_0") == 0) {
+                // if(strcmp(node->name, "bench_end") == 0) {
+                // if(strcmp(node->name, "last-1") == 0) {
+                // if(strcmp(node->name, "bench-start") == 0) {
+                // const char *t_name = "input_block_1_resblock";
+                // const char *t_name = "input_block_att_1_resblock";
+                const char *t_name = "input_block_2_resblock";
+                const char *t_name1 = "input_block_3_resblock";
+                // const char *t_name = "input_block_8_resblock"; // diff
+                // const char *t_name = "input_block_4_resblock"; // same
+                // const char *t_name = "input_block_5_resblock"; //
+                // const char *t_name = "input_block_7_resblock"; // diff
+                // const char *t_name = "input_block_6_resblock"; // diff
+                // const char *t_name = "before-middle-block";
+                // const char *t_name = "bench-start";
+                // const char *t_name = "after-middle-block";
+                // const char *t_name = "last-1";
+                // const char *t_name = "last-2";
+                // const char *t_name = "groupnorm_norm";
+                // const char *t_name = "after_groupnorm_norm";
+                // const char *t_name = "last-3";
+                // const char *t_name = "out_block_8_resblock"; // same
+                // const char *t_name = "output_blocks.5.2"; // same
+                if(strcmp(node->name, t_name) == 0 || strcmp(node->name, t_name1) == 0) {
+                    ggml_tensor * src = node;
+                    printf(" %s, %s, (%zu, %zu, %zu, %zu)\n", src->name,
+                                ggml_op_name(src->op), src->ne[0], src->ne[1],
+                            src->ne[2], src->ne[3]);
+                    if(src->type == GGML_TYPE_F16){
+                        std::vector<half> data(ggml_nelements(src));
+                        ggml_backend_tensor_get(src, data.data(), 0, ggml_nbytes(src));
+                        printf("[");
+                        // bool ab = false;
+                        int nt = data.size() <= 128 ? data.size() : 128;
+                        for(int i = 0; i < nt; i++) {
+                            float val = __half2float(data[i]);
+                            // if(isnan(val))
+                            //    ab = true;
+                            printf("%f,", val);
+                        }
+                        printf("]\n");
+                        // if(ab) abort();
+                    }
+                    if(src->type == GGML_TYPE_F32){
+                        std::vector<float> data(ggml_nelements(src));
+                        ggml_backend_tensor_get(src, data.data(), 0, ggml_nbytes(src));
+                        int nt = data.size() <= 128 ? data.size() : 128;
+                        printf("[");
+                        for(int i = 0; i < nt; i++) {
+                            float val = data[i];
+                            printf("%f,", val);
+                        }
+                        printf("]\n");
+                    }
+                }
+
                     // if(src->type == GGML_TYPE_F32){
                     //     std::vector<float> data(ggml_nelements(src));
                     //     ggml_backend_tensor_get(src, data.data(), 0, ggml_nbytes(src));
@@ -3166,7 +3203,6 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                     //         std::vector<half> data0(ggml_nelements(node->src[0]));
                     //         ggml_backend_tensor_get(node->src[0], data0.data(), 0, ggml_nbytes(node->src[0]));
                     //         printf("src0[");
-                    //         pos = 0;
                     //         // for(int i = (pos-1)*node->src[1]->ne[0]; i < data0.size() ; i++) {
                     //         for(int i = pos*node->src[1]->ne[0]; i < (pos+1)*node->src[1]->ne[0]; i++) {
                     //             float val = __half2float(data0[i]);

@@ -3107,7 +3107,7 @@ struct ggml_tensor * ggml_mul_mat(
     GGML_ASSERT(!ggml_is_transposed(a));
 
     const int64_t ne[4] = { a->ne[1], b->ne[1], b->ne[2], b->ne[3] };
-    enum GGML_TYPE type;
+    enum ggml_type type;
     if(b->type == GGML_TYPE_F16){
         type = GGML_TYPE_F16;
     } else if (b->type == GGML_TYPE_BF16) {
