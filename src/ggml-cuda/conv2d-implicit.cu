@@ -1029,7 +1029,7 @@ static void conv2d_implicit_cuda_f16(ggml_backend_cuda_context & ctx, const inpu
             }
         }
 
-        cudaFuncSetAttribute(conv2d_implicit_kernel<float, BM_dim, BN_dim, BK_dim, WM_dim, WN_dim, WK_dim, 0, NumThreads>,
+        cudaFuncSetAttribute(conv2d_implicit_kernel<input_T, BM_dim, BN_dim, BK_dim, WM_dim, WN_dim, WK_dim, 0, NumThreads>,
             cudaFuncAttributeMaxDynamicSharedMemorySize,    65536); // set shared memory limit to 64KB which is maximum for sm_75
         dim3 gridDim(BlocksN, BlocksM);
         dim3 blockDim(ThreadsN, ThreadsM);
@@ -1105,7 +1105,7 @@ void ggml_cuda_op_conv2d_implicit(ggml_backend_cuda_context & ctx, ggml_tensor *
         if(input->type == GGML_TYPE_F32) {
           conv2d_implicit_cuda_f16<float>(ctx, X_D, (const half *) K_D, Y_D, cc, params, st);
         } else {
-          conv2d_implicit_cuda_f16(ctx, (const half *)X_D, (const half *) K_D, (half *)Y_D, cc, params, st);
+          conv2d_implicit_cuda_f16<half>(ctx, (const half *)X_D, (const half *) K_D, (half *)Y_D, cc, params, st);
         }
     } else {
         conv2d_implicit_cuda_f32(ctx, X_D, K_D, Y_D, cc, params, st);

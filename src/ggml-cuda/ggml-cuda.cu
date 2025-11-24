@@ -3034,7 +3034,18 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
 #else
                 GGML_UNUSED(integrated);
 #endif // NDEBUG
-
+                // printf("computing %s, %s  (%zu, %zu, %zu, %zu)\n", node->name, ggml_op_name(node->op),
+                //                 node->ne[0], node->ne[1], node->ne[2], node->ne[3]);
+                // if(node->src[0] != nullptr){
+                //      printf("NODE A nan %s, %s, (%zu, %zu, %zu, %zu)\n", node->src[0]->name,
+                //                 ggml_op_name(node->src[0]->op), node->src[0]->ne[0], node->src[0]->ne[1],
+                //             node->src[0]->ne[2], node->src[0]->ne[3]);
+                // }
+                // if(node->src[1] != nullptr){
+                //     printf("NODE A nan %s, %s, (%zu, %zu, %zu, %zu)\n", node->src[1]->name,
+                //                 ggml_op_name(node->src[1]->op), node->src[1]->ne[0], node->src[1]->ne[1],
+                //                 node->src[1]->ne[2], node->src[1]->ne[3]);
+                // }
                 bool ok = ggml_cuda_compute_forward(*cuda_ctx, node);
                 // std::vector<float> dataf(ggml_nelements(node));
                 // std::vector<half> data(ggml_nelements(node));

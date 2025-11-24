@@ -280,7 +280,8 @@ static std::vector<std::tuple<int, int, int, int, int, int>> configs = {
         // std::make_tuple(1280,1280,26,38,3,3),
         // std::make_tuple(1920,640,32,32,3,3)
         // std::make_tuple(1280,1280,16,16,3,3),
-        std::make_tuple(4,128,16,16,3,3),
+        // std::make_tuple(4,128,16,16,3,3),
+        std::make_tuple(640,640,96,96,3,3),
         // std::make_tuple(32,12,141,133,3,3),
         // std::make_tuple(32,6,141,133,3,3),
         // std::make_tuple(32,12,141,121,3,3),
