@@ -1303,8 +1303,10 @@ static __global__ void flash_attn_ext_f16(
 
     const int gqa_ratio = ne02 / ne12; // With grouped query attention there are > 1 Q matrices per K, V matrix.
 
-    const int stride_Q1   = nb01 / sizeof(float2);
-    const int stride_Q2   = nb02 / sizeof(float2);
+    // const int stride_Q1   = nb01 / sizeof(float2);
+    // const int stride_Q2   = nb02 / sizeof(float2);
+    const int stride_Q1   = nb01 / sizeof(T2);
+    const int stride_Q2   = nb02 / sizeof(T2);
     const int stride_K    = nb11 / sizeof(half2);
     const int stride_mask = nb31 / sizeof(half2);
 

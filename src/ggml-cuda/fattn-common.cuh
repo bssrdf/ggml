@@ -1019,6 +1019,8 @@ void launch_fattn(
     //     mask ? mask->nb[1] : 0, mask ? mask->nb[2] : 0, mask ? mask->nb[3] : 0
     // );
     // } else if (dst->type == GGML_TYPE_F32) {
+    // printf("stride_Q1 = %d, stride_Q2 = %d \n", Q->nb[1]/sizeof(float2),Q->nb[2]/sizeof(float2));
+    // printf("stride_Q1 = %d, stride_Q2 = %d \n", Q->nb[1]/sizeof(half2),Q->nb[2]/sizeof(half2));
     fattn_kernel<<<blocks_num, block_dim, nbytes_shared, main_stream>>>(
         (const char *) Q->data,
         K_data,

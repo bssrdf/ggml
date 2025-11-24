@@ -110,15 +110,16 @@ void load_model(test_model & model, bool use_gpu = false) {
     // int IW = 8, IH = 6, N = 1;
     int M = 1028, N = 1, K = 2816;
 
-    model.hsk = 128;
-    model.hsv = 128;
-    model.nh = 32;
+    model.hsk = 64;
+    model.hsv = 64;
+    model.nh = 20;
     model.kv = 96;
-    model.nb = 8;
+    model.nb = 1024;
     model.type_KV = GGML_TYPE_F16;
 
-    int64_t kv = 96, nb = 8;
-    int64_t nh = 32;
+    int64_t kv = 256;
+    int64_t nb = model.nb;
+    int64_t nh = model.nh;
 
     const int64_t hsk_padded = GGML_PAD(model.hsk, ggml_blck_size(model.type_KV));
     const int64_t hsv_padded = GGML_PAD(model.hsv, ggml_blck_size(model.type_KV));
@@ -308,6 +309,11 @@ void load_model(test_model & model, bool use_gpu = false) {
 
     init_tensor_kq_mask(model.m);
 
+    // printf(" k->ne[1] = %zu\n", model.k32->ne[1]);
+    printf(" k->ne[0] = %zu k->ne[1] = %zu, k->ne[2] = %zu\n", model.k32->ne[0], model.k32->ne[1], model.k32->ne[2]);
+    printf(" v->ne[0] = %zu v->ne[1] = %zu, v->ne[2] = %zu\n", model.v32->ne[0], model.v32->ne[1], model.v32->ne[2]);
+    printf(" q->ne[0] = %zu q->ne[1] = %zu, q->ne[2] = %zu\n", model.q32->ne[0], model.q32->ne[1], model.q32->ne[2]);
+
 }
 
 struct ggml_cgraph * build_graph(const test_model& model) {
@@ -337,6 +343,8 @@ struct ggml_cgraph * build_graph(const test_model& model) {
              1.0f/sqrtf(model.hsk), model.max_bias, model.logit_softcap);
     ggml_set_name(out16, "res16");
     ggml_build_forward_expand(gf, out16);
+    int64_t *ne = out16->ne;
+    printf("kqv: scale = %f, (%zu, %zu, %zu, %zu) \n", 1.0f/sqrtf(model.hsk), ne[0], ne[1], ne[2], ne[3]);
 
     ggml_free(ctx0);
     return gf;
@@ -401,7 +409,19 @@ int main(void)
     ggml_backend_tensor_get(gemm_res2, gemm_data2.data(), 0, ggml_nbytes(gemm_res2));
 
     for(int i = 0; i < gemm_data.size(); i++) {
-        printf("%d: %f, %f\n", i, gemm_data2[i], ggml_fp16_to_fp32(gemm_data[i]));
+        float r16 = ggml_fp16_to_fp32(gemm_data[i]);
+        // printf("%d: %f, %f\n", i, gemm_data2[i], ggml_fp16_to_fp32(gemm_data[i]));
+        float diff = fabs(gemm_data2[i] - r16);
+        if(diff > 0.001f) {
+                printf("(%f, %f, %f, %d) \n",
+                gemm_data2[i], r16, diff, i);
+            break;
+        }
+    }
+
+    for(int i = 0; i < gemm_data.size(); i++) {
+        float r16 = ggml_fp16_to_fp32(gemm_data[i]);
+        printf("%d: %f, %f\n", i, gemm_data2[i], r16);
     }
 
     ggml_free(model.ctx);

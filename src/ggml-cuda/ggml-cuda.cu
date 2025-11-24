@@ -3072,8 +3072,8 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                 // if(strcmp(node->name, "bench-start") == 0) {
                 // const char *t_name = "input_block_1_resblock";
                 // const char *t_name = "input_block_att_1_resblock";
-                const char *t_name = "input_block_2_resblock";
-                const char *t_name1 = "input_block_3_resblock";
+                // const char *t_name = "input_block_2_resblock";
+                // const char *t_name1 = "input_block_3_resblock";
                 // const char *t_name = "input_block_8_resblock"; // diff
                 // const char *t_name = "input_block_4_resblock"; // same
                 // const char *t_name = "input_block_5_resblock"; //
@@ -3089,38 +3089,38 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                 // const char *t_name = "last-3";
                 // const char *t_name = "out_block_8_resblock"; // same
                 // const char *t_name = "output_blocks.5.2"; // same
-                if(strcmp(node->name, t_name) == 0 || strcmp(node->name, t_name1) == 0) {
-                    ggml_tensor * src = node;
-                    printf(" %s, %s, (%zu, %zu, %zu, %zu)\n", src->name,
-                                ggml_op_name(src->op), src->ne[0], src->ne[1],
-                            src->ne[2], src->ne[3]);
-                    if(src->type == GGML_TYPE_F16){
-                        std::vector<half> data(ggml_nelements(src));
-                        ggml_backend_tensor_get(src, data.data(), 0, ggml_nbytes(src));
-                        printf("[");
-                        // bool ab = false;
-                        int nt = data.size() <= 128 ? data.size() : 128;
-                        for(int i = 0; i < nt; i++) {
-                            float val = __half2float(data[i]);
-                            // if(isnan(val))
-                            //    ab = true;
-                            printf("%f,", val);
-                        }
-                        printf("]\n");
-                        // if(ab) abort();
-                    }
-                    if(src->type == GGML_TYPE_F32){
-                        std::vector<float> data(ggml_nelements(src));
-                        ggml_backend_tensor_get(src, data.data(), 0, ggml_nbytes(src));
-                        int nt = data.size() <= 128 ? data.size() : 128;
-                        printf("[");
-                        for(int i = 0; i < nt; i++) {
-                            float val = data[i];
-                            printf("%f,", val);
-                        }
-                        printf("]\n");
-                    }
-                }
+                // if(strcmp(node->name, t_name) == 0 || strcmp(node->name, t_name1) == 0) {
+                //     ggml_tensor * src = node;
+                //     printf(" %s, %s, (%zu, %zu, %zu, %zu)\n", src->name,
+                //                 ggml_op_name(src->op), src->ne[0], src->ne[1],
+                //             src->ne[2], src->ne[3]);
+                //     if(src->type == GGML_TYPE_F16){
+                //         std::vector<half> data(ggml_nelements(src));
+                //         ggml_backend_tensor_get(src, data.data(), 0, ggml_nbytes(src));
+                //         printf("[");
+                //         // bool ab = false;
+                //         int nt = data.size() <= 128 ? data.size() : 128;
+                //         for(int i = 0; i < nt; i++) {
+                //             float val = __half2float(data[i]);
+                //             // if(isnan(val))
+                //             //    ab = true;
+                //             printf("%f,", val);
+                //         }
+                //         printf("]\n");
+                //         // if(ab) abort();
+                //     }
+                //     if(src->type == GGML_TYPE_F32){
+                //         std::vector<float> data(ggml_nelements(src));
+                //         ggml_backend_tensor_get(src, data.data(), 0, ggml_nbytes(src));
+                //         int nt = data.size() <= 128 ? data.size() : 128;
+                //         printf("[");
+                //         for(int i = 0; i < nt; i++) {
+                //             float val = data[i];
+                //             printf("%f,", val);
+                //         }
+                //         printf("]\n");
+                //     }
+                // }
 
                     // if(src->type == GGML_TYPE_F32){
                     //     std::vector<float> data(ggml_nelements(src));
