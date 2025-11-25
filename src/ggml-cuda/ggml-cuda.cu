@@ -1925,6 +1925,12 @@ static void ggml_cuda_mul_mat_batched_cublas_impl(ggml_backend_cuda_context & ct
             nbd2 /= sizeof(float) / sizeof(cuda_t);
             nbd3 /= sizeof(float) / sizeof(cuda_t);
         }
+    } else if (dst->type == GGML_TYPE_F16){
+        dst_t = (char *) dst_ddf;
+        cu_compute_type = CUBLAS_COMPUTE_16F;
+        cu_data_type = CUDA_R_16F;
+        // nbd2 /= sizeof(float) / sizeof(cuda_t);
+        // nbd3 /= sizeof(float) / sizeof(cuda_t);
     } else {
         dst_t = (char *) dst_ddf;
         cu_compute_type = CUBLAS_COMPUTE_32F;
@@ -2100,7 +2106,7 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
     } else if (!split && (use_batched_cublas_f16 || use_batched_cublas_bf16 || use_batched_cublas_f32)
         && !ggml_is_transposed(src0) && !ggml_is_transposed(src1) && src1->ne[2]*src1->ne[3] > 1) {
         // general KQ + KQV multi-batch without FlashAttention
-        GGML_ASSERT(dst->type != GGML_TYPE_F16);
+        // GGML_ASSERT(dst->type != GGML_TYPE_F16);
         ggml_cuda_mul_mat_batched_cublas(ctx, src0, src1, dst);
     } else if (use_mul_mat_vec_f) {
         ggml_cuda_op_mul_mat(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_vec_f, nullptr);
