@@ -1921,16 +1921,16 @@ static void ggml_cuda_mul_mat_batched_cublas_impl(ggml_backend_cuda_context & ct
         if constexpr (src0_type == GGML_TYPE_F32) {
             dst_t = (char *) dst_ddf;  // Direct F32 output
         } else {
-            dst_t = (char *) dst_temp.alloc(ne_dst);
-            nbd2 /= sizeof(float) / sizeof(cuda_t);
-            nbd3 /= sizeof(float) / sizeof(cuda_t);
+            if (dst->type == GGML_TYPE_F16){
+                dst_t = (char *) dst_ddf;
+                cu_compute_type = CUBLAS_COMPUTE_16F;
+                cu_data_type = CUDA_R_16F;
+            } else {
+                dst_t = (char *) dst_temp.alloc(ne_dst);
+                nbd2 /= sizeof(float) / sizeof(cuda_t);
+                nbd3 /= sizeof(float) / sizeof(cuda_t);
+            }
         }
-    } else if (dst->type == GGML_TYPE_F16){
-        dst_t = (char *) dst_ddf;
-        cu_compute_type = CUBLAS_COMPUTE_16F;
-        cu_data_type = CUDA_R_16F;
-        // nbd2 /= sizeof(float) / sizeof(cuda_t);
-        // nbd3 /= sizeof(float) / sizeof(cuda_t);
     } else {
         dst_t = (char *) dst_ddf;
         cu_compute_type = CUBLAS_COMPUTE_32F;
@@ -2005,7 +2005,7 @@ static void ggml_cuda_mul_mat_batched_cublas_impl(ggml_backend_cuda_context & ct
     }
 
     // Convert output back to F32 if needed
-    if (dst->op_params[0] == GGML_PREC_DEFAULT && cu_data_type != CUDA_R_32F) {
+    if (dst->op_params[0] == GGML_PREC_DEFAULT && cu_data_type != CUDA_R_32F && dst->type != GGML_TYPE_F16) {
         const to_fp32_cuda_t to_fp32_cuda = ggml_get_to_fp32_cuda(traits::ggml_type_val);
         to_fp32_cuda(dst_temp.get(), dst_ddf, ne_dst, main_stream);
     }

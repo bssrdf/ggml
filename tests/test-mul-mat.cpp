@@ -41,6 +41,7 @@ void load_model(test_model & model, bool use_gpu = false) {
     // int KW = 3, KH = 3, IC = 10, OC = 10;
     // int IW = 8, IH = 6, N = 1;
     int M = 1028, N = 1, K = 2816;
+    int L = 4;
 
     // Initialize adata
     std::vector<float> adata(M*K);
@@ -54,8 +55,8 @@ void load_model(test_model & model, bool use_gpu = false) {
     ggml_fp32_to_fp16_row(adata.data(), hadata.data(), M*K);
 
     // Initialize bdata
-    std::vector<float> bdata(N*K);
-    for (int i = 0; i < N*K; i++) {
+    std::vector<float> bdata(N*K*L);
+    for (int i = 0; i < N*K*L; i++) {
         // bdata[i] = 1.5f;
         float r = -1.f + static_cast <float> (rand()) /( static_cast <float> (RAND_MAX/(1.f-(-1.f))));
         bdata[i] = r;
@@ -67,15 +68,15 @@ void load_model(test_model & model, bool use_gpu = false) {
     // }
     // printf("]\n");
 
-    std::vector<ggml_fp16_t> hbdata(N*K);
-    ggml_fp32_to_fp16_row(bdata.data(), hbdata.data(), N*K);
+    std::vector<ggml_fp16_t> hbdata(N*L*K);
+    ggml_fp32_to_fp16_row(bdata.data(), hbdata.data(), N*L*K);
 
 
     size_t buffer_size = 0;
     {
         buffer_size += M * K * ggml_type_size(GGML_TYPE_F16); // tensor a
-        buffer_size += N * K * ggml_type_size(GGML_TYPE_F16); // tensor b
-        buffer_size += N * K * ggml_type_size(GGML_TYPE_F32); // tensor b2
+        buffer_size += N * K * L * ggml_type_size(GGML_TYPE_F16); // tensor b
+        buffer_size += N * K * L * ggml_type_size(GGML_TYPE_F32); // tensor b2
         buffer_size += 1024; // overhead
     }
 
@@ -124,8 +125,8 @@ void load_model(test_model & model, bool use_gpu = false) {
 
     // create tensors
     model.a = ggml_new_tensor_4d(model.ctx, GGML_TYPE_F16, K, M, 1, 1);
-    model.b = ggml_new_tensor_4d(model.ctx, GGML_TYPE_F16, K, N, 1, 1);
-    model.b2 = ggml_new_tensor_4d(model.ctx, GGML_TYPE_F32, K, N, 1, 1);
+    model.b = ggml_new_tensor_4d(model.ctx, GGML_TYPE_F16, K, N, L, 1);
+    model.b2 = ggml_new_tensor_4d(model.ctx, GGML_TYPE_F32, K, N, L, 1);
 
     // create a allocator
     struct ggml_tallocr alloc = ggml_tallocr_new(model.buffer);

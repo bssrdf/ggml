@@ -178,7 +178,7 @@ static void ggml_cpy_flt_cuda(
     if (transposed) {
         GGML_ASSERT(ne == ne00*ne01*ne02);  // ne[3] is 1 assumed
         int ne00n, ne01n, ne02n;
-        if (nb00 < nb02) {
+        if (nb00 <= nb02) {
             ne00n = ne00;
             ne01n = ne01;
             ne02n = ne02;
@@ -186,9 +186,10 @@ static void ggml_cpy_flt_cuda(
             ne00n = ne00;
             ne01n = ne01*ne02;
             ne02n = 1;
-        } else {
-            GGML_ASSERT(false);
         }
+        // } else {
+        //     GGML_ASSERT(false);
+        // }
 
         dim3 dimGrid( (ne01n + CUDA_CPY_TILE_DIM_2D - 1) / CUDA_CPY_TILE_DIM_2D,
                       (ne00n + CUDA_CPY_TILE_DIM_2D - 1) / CUDA_CPY_TILE_DIM_2D,
@@ -362,7 +363,9 @@ void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, gg
 
     cudaStream_t main_stream = ctx.stream();
 
-    const bool can_be_transposed = nb01 == (int64_t)ggml_element_size(src0) && src0->ne[3] == 1;
+    const bool can_be_transposed = nb01 == (int64_t)ggml_element_size(src0)
+    && src0->ne[3] == 1 && nb02 == ne00 * ne01 * (int64_t)ggml_element_size(src0);
+
 
     char * src0_ddc = (char *) src0->data;
     char * src1_ddc = (char *) src1->data;
