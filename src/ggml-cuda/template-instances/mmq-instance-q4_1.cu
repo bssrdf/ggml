@@ -2,4 +2,5 @@
 
 #include "../mmq.cuh"
 
-DECL_MMQ_CASE(GGML_TYPE_Q4_1);
+DECL_MMQ_CASE(GGML_TYPE_Q4_1, float);
+DECL_MMQ_CASE(GGML_TYPE_Q4_1, half);

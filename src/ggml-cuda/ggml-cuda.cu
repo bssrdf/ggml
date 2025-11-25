@@ -1171,11 +1171,19 @@ ggml_backend_buffer_type_t ggml_backend_cuda_host_buffer_type() {
 
 /// kernels
 
-typedef void (*ggml_cuda_op_mul_mat_t)(
-    ggml_backend_cuda_context & ctx,
-    const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst, const char * src0_dd_i, const float * src1_ddf_i,
-    const char * src1_ddq_i, float * dst_dd_i, const int64_t row_low, const int64_t row_high, const int64_t src1_ncols,
-    const int64_t src1_padded_row_size, cudaStream_t stream);
+// typedef void (*ggml_cuda_op_mul_mat_t)(
+//     ggml_backend_cuda_context & ctx,
+//     const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst, const char * src0_dd_i, const float * src1_ddf_i,
+//     const char * src1_ddq_i, float * dst_dd_i, const int64_t row_low, const int64_t row_high, const int64_t src1_ncols,
+//     const int64_t src1_padded_row_size, cudaStream_t stream);
+template<typename T>
+using  ggml_cuda_op_mul_mat_t = void (*ggml_cuda_op_mul_mat_t)(
+        ggml_backend_cuda_context & ctx,
+        // const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst, const char * src0_dd_i, const float * src1_ddf_i,
+        const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst, const char * src0_dd_i, const T * src1_ddf_i,
+        // const char * src1_ddq_i, float * dst_dd_i, const int64_t row_low, const int64_t row_high, const int64_t src1_ncols,
+        const char * src1_ddq_i, T * dst_dd_i, const int64_t row_low, const int64_t row_high, const int64_t src1_ncols,
+        const int64_t src1_padded_row_size, cudaStream_t stream);
 
 
 
@@ -1452,11 +1460,12 @@ static cudaError_t ggml_cuda_Memcpy2DPeerAsync(
 #endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 }
 
-
+template<typename T>
 static void ggml_cuda_op_mul_mat(
     ggml_backend_cuda_context & ctx,
     const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst, ggml_cuda_op_mul_mat_t op,
-    quantize_cuda_t quantize_src1) {
+    // quantize_cuda_t quantize_src1) {
+    quantize_cuda_t<T> quantize_src1) {
 
     const int64_t ne00 = src0->ne[0];
     const int64_t ne01 = src0->ne[1];
@@ -1520,15 +1529,19 @@ static void ggml_cuda_op_mul_mat(
         int cc;
 
         ggml_cuda_pool_alloc<char>   src0_dd_alloc;
-        ggml_cuda_pool_alloc<float> src1_ddf_alloc;
+        // ggml_cuda_pool_alloc<float> src1_ddf_alloc;
+        ggml_cuda_pool_alloc<T> src1_ddf_alloc;
         ggml_cuda_pool_alloc<char>  src1_ddq_alloc;
-        ggml_cuda_pool_alloc<float>   dst_dd_alloc;
+        // ggml_cuda_pool_alloc<float>   dst_dd_alloc;
+        ggml_cuda_pool_alloc<T>   dst_dd_alloc;
 
 
         char  *  src0_dd = nullptr;
-        float * src1_ddf = nullptr; // float
+        // float * src1_ddf = nullptr; // float
+        T * src1_ddf = nullptr; // float
         char  * src1_ddq = nullptr; // q8_1
-        float *   dst_dd = nullptr;
+        // float *   dst_dd = nullptr;
+        T *   dst_dd = nullptr;
 
         int64_t  row_low;
         int64_t row_high;
@@ -1600,14 +1613,16 @@ static void ggml_cuda_op_mul_mat(
         }
 
         if (src1_on_device && src1_is_contiguous) {
-            dev[id].src1_ddf = (float *) src1->data;
+            // dev[id].src1_ddf = (float *) src1->data;
+            dev[id].src1_ddf = (T *) src1->data;
         } else {
             dev[id].src1_ddf = dev[id].src1_ddf_alloc.alloc(ctx.pool(id), ggml_nelements(src1));
         }
 
         if (quantize_src1) {
             size_t src_1_ddq_size = nrows1*src1_padded_col_size*q8_1_ts/q8_1_bs;
-            if (quantize_src1 == quantize_mmq_q8_1_cuda) {
+            // if (quantize_src1 == quantize_mmq_q8_1_cuda) {
+            if (quantize_src1 == quantize_mmq_q8_1_cuda<T>) {
                 src_1_ddq_size += get_mmq_x_max_host(dev[id].cc)*sizeof(block_q8_1_mmq);
             }
             dev[id].src1_ddq = dev[id].src1_ddq_alloc.alloc(ctx.pool(id), src_1_ddq_size);
@@ -1622,7 +1637,8 @@ static void ggml_cuda_op_mul_mat(
         }
 
         if (dst_on_device) {
-            dev[id].dst_dd = (float *) dst->data;
+            // dev[id].dst_dd = (float *) dst->data;
+            dev[id].dst_dd = (T *) dst->data;
         } else {
             const size_t size_dst_ddf = split ? (dev[id].row_high - dev[id].row_low)*ne1 : ggml_nelements(dst);
             dev[id].dst_dd = dev[id].dst_dd_alloc.alloc(ctx.pool(id), size_dst_ddf);
@@ -1663,7 +1679,8 @@ static void ggml_cuda_op_mul_mat(
                 const int64_t i02 = i0 % ne12;
 
                 size_t src1_ddq_i_offset = i0*ne11 * src1_padded_col_size*q8_1_ts/q8_1_bs;
-                if (quantize_src1 == quantize_mmq_q8_1_cuda) {
+                // if (quantize_src1 == quantize_mmq_q8_1_cuda) {
+                if (quantize_src1 == quantize_mmq_q8_1_cuda<T>) {
                     src1_ddq_i_offset += src1_col_0 * sizeof(block_q8_1_mmq);
                 } else {
                     src1_ddq_i_offset += src1_col_0 * src1_padded_col_size*q8_1_ts/q8_1_bs;
@@ -1672,9 +1689,11 @@ static void ggml_cuda_op_mul_mat(
                 // for split tensors the data begins at i0 == i0_offset_low
                 const size_t nbytes_src0_matrix = ne01*ne00*src0_ts / src0_bs;
                 char  *  src0_dd_i =  dev[id].src0_dd + ((i03/i03_divisor)*ne02 + (i02/i02_divisor)) * nbytes_src0_matrix;
-                float * src1_ddf_i = dev[id].src1_ddf + (i0*ne11 + src1_col_0) * ne10;
+                // float * src1_ddf_i = dev[id].src1_ddf + (i0*ne11 + src1_col_0) * ne10;
+                T * src1_ddf_i = dev[id].src1_ddf + (i0*ne11 + src1_col_0) * ne10;
                 char  * src1_ddq_i = dev[id].src1_ddq +  src1_ddq_i_offset;
-                float *   dst_dd_i =   dev[id].dst_dd + (i0*ne1  + src1_col_0) * (dst_on_device ? ne0 : row_diff);
+                // float *   dst_dd_i =   dev[id].dst_dd + (i0*ne1  + src1_col_0) * (dst_on_device ? ne0 : row_diff);
+                T *   dst_dd_i =   dev[id].dst_dd + (i0*ne1  + src1_col_0) * (dst_on_device ? ne0 : row_diff);
                 // printf(" %d, offste %d \n", i0, (i0*ne1  + src1_col_0) * (dst_on_device ? ne0 : row_diff));
                 // the main device memory buffer can be on VRAM scratch, with space for all partial results
                 // in that case an offset on dst_ddf_i is needed
@@ -1687,7 +1706,8 @@ static void ggml_cuda_op_mul_mat(
                     if (id != ctx.device) {
                         if (quantize_src1) {
                             char * src1_ddq_i_source = dev[ctx.device].src1_ddq + src1_ddq_i_offset;
-                            if (quantize_src1 == quantize_mmq_q8_1_cuda) {
+                            // if (quantize_src1 == quantize_mmq_q8_1_cuda) {
+                            if (quantize_src1 == quantize_mmq_q8_1_cuda<T>) {
                                 const size_t pitch = ne11*sizeof(block_q8_1_mmq);
                                 const size_t width = src1_ncols*sizeof(block_q8_1_mmq);
                                 const size_t height = src1_padded_col_size/(4*QK8_1);
@@ -2109,17 +2129,29 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         // GGML_ASSERT(dst->type != GGML_TYPE_F16);
         ggml_cuda_mul_mat_batched_cublas(ctx, src0, src1, dst);
     } else if (use_mul_mat_vec_f) {
-        ggml_cuda_op_mul_mat(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_vec_f, nullptr);
+        if(src1->type == GGML_TYPE_F32)
+            ggml_cuda_op_mul_mat<float>(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_vec_f, nullptr);
+        else
+            ggml_cuda_op_mul_mat<half>(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_vec_f, nullptr);
     } else if (use_mul_mat_vec_q) {
-        ggml_cuda_op_mul_mat(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_vec_q, quantize_row_q8_1_cuda);
+        if(src1->type == GGML_TYPE_F32)
+            ggml_cuda_op_mul_mat<float>(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_vec_q, quantize_row_q8_1_cuda);
+        else
+            ggml_cuda_op_mul_mat<half>(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_vec_q, quantize_row_q8_1_cuda);
     } else if (use_mul_mat_q) {
-        ggml_cuda_op_mul_mat(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_q, quantize_mmq_q8_1_cuda);
+        if(src1->type == GGML_TYPE_F32)
+            ggml_cuda_op_mul_mat<float>(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_q, quantize_mmq_q8_1_cuda<float>);
+        else
+            ggml_cuda_op_mul_mat<half>(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_q, quantize_mmq_q8_1_cuda<half>);
     } else {
         // printf("ggml_cuda_mul_mat_cublas: %s, %s, (%zu, %zu, %zu), (%zu, %zu, %zu)\n",
         //    ggml_type_name(src0->type), ggml_type_name(src1->type),
         // src0->ne[0], src0->ne[1], src0->ne[2],
         // src1->ne[0], src1->ne[1], src1->ne[2]);
-        ggml_cuda_op_mul_mat(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_cublas, nullptr);
+        if(src1->type == GGML_TYPE_F32)
+            ggml_cuda_op_mul_mat<float>(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_cublas, nullptr);
+        else
+            ggml_cuda_op_mul_mat<half>(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_cublas, nullptr);
     }
 }
 

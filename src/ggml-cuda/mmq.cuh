@@ -3,6 +3,7 @@
 #include "common.cuh"
 #include "vecdotq.cuh"
 #include "mma.cuh"
+// #include "convert.cuh"
 
 #include <climits>
 #include <cstdint>
@@ -13,10 +14,29 @@ using namespace ggml_cuda_mma;
 #define MMQ_ITER_K 256
 #define MMQ_NWARPS 8
 
+template<typename dst_t, typename src_t>
+ __host__ __device__ inline dst_t ggml_cuda_cast_simple(src_t x) {
+    if constexpr (std::is_same_v<dst_t, src_t>) {
+        return x;
+    } else if constexpr(std::is_same_v<dst_t, nv_bfloat16>) {
+        return __float2bfloat16(float(x));
+    } else if constexpr(std::is_same_v<src_t, nv_bfloat16>) {
+        return __bfloat162float(x);
+    } else if constexpr(std::is_same_v<dst_t, int32_t>) {
+        return int32_t(x);
+    } else {
+        return float(x);
+    }
+}
+
 typedef void (*load_tiles_mmq_t)(const char * __restrict__ x, int * x_tile, const int kbx0, const int i_max, const int stride);
 typedef void (*vec_dot_mmq_t)(const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00);
-typedef void (*mmq_write_back_t)(const float * __restrict__ sum, const int32_t * __restrict__ get_rows_to_sorted,
-    float * __restrict__ dst, const int stride, const int i_max, const int j_max);
+// typedef void (*mmq_write_back_t)(const float * __restrict__ sum, const int32_t * __restrict__ get_rows_to_sorted,
+//     float * __restrict__ dst, const int stride, const int i_max, const int j_max);
+template<typename T>
+using mmq_write_back_t = void (*)(const float * __restrict__ sum, const int32_t * __restrict__ get_rows_to_sorted,
+    T * __restrict__ dst, const int stride, const int i_max, const int j_max);
+
 
 enum mmq_q8_1_ds_layout {
     MMQ_Q8_1_DS_LAYOUT_D4,
@@ -2812,9 +2832,11 @@ template <int mmq_y, bool need_check> static __device__ __forceinline__ void loa
     }
 }
 
-template<int mmq_x, int mmq_y, bool need_check>
+// template<int mmq_x, int mmq_y, bool need_check>
+template<int mmq_x, int mmq_y, bool need_check, typename dst_T>
 static __device__ __forceinline__ void mmq_write_back_dp4a(
-        const float * __restrict__ sum, const int32_t * __restrict__ ids_dst, float * __restrict__ dst,
+        // const float * __restrict__ sum, const int32_t * __restrict__ ids_dst, float * __restrict__ dst,
+        const float * __restrict__ sum, const int32_t * __restrict__ ids_dst, dst_T * __restrict__ dst,
         const int stride, const int i_max, const int j_max) {
     constexpr int nwarps = mmq_get_nwarps_device();
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
@@ -2835,14 +2857,16 @@ static __device__ __forceinline__ void mmq_write_back_dp4a(
                 continue;
             }
 
-            dst[ids_dst[j]*stride + i] = sum[(j0/nwarps) * (mmq_y/warp_size) + i0/warp_size];
+            // dst[ids_dst[j]*stride + i] = sum[(j0/nwarps) * (mmq_y/warp_size) + i0/warp_size];
+            dst[ids_dst[j]*stride + i] = ggml_cuda_cast_simple<dst_T>(sum[(j0/nwarps) * (mmq_y/warp_size) + i0/warp_size]);
         }
     }
 }
-
-template<ggml_type type, int mmq_x, int mmq_y, bool need_check>
+// template<ggml_type type, int mmq_x, int mmq_y, bool need_check>
+template<ggml_type type, int mmq_x, int mmq_y, bool need_check, typename dst_T>
 static __device__ __forceinline__ void mmq_write_back_mma(
-        const float * __restrict__ sum, const int * __restrict__ ids_dst, float * __restrict__ dst,
+        // const float * __restrict__ sum, const int * __restrict__ ids_dst, float * __restrict__ dst,
+        const float * __restrict__ sum, const int * __restrict__ ids_dst, dst_T * __restrict__ dst,
         const int stride, const int i_max, const int j_max) {
 
     constexpr int granularity = mmq_get_granularity_device(mmq_x);
@@ -2883,7 +2907,8 @@ static __device__ __forceinline__ void mmq_write_back_mma(
                     continue;
                 }
 
-                dst[ids_dst[j]*stride + i] = sum[(j0/tile_C::J + n)*tile_C::ne + l];
+                // dst[ids_dst[j]*stride + i] = sum[(j0/tile_C::J + n)*tile_C::ne + l];
+                dst[ids_dst[j]*stride + i] = ggml_cuda_cast_simple<dst_T>(sum[(j0/tile_C::J + n)*tile_C::ne + l]);
             }
         }
     }
@@ -3046,10 +3071,12 @@ struct mmq_type_traits<mmq_x, mmq_y, need_check, GGML_TYPE_IQ4_XS> {
     static constexpr vec_dot_mmq_t    vec_dot_dp4a = vec_dot_q8_0_q8_1_dp4a<mmq_x, mmq_y>;
 };
 
-template <ggml_type type, int mmq_x, bool need_check, bool fixup>
+// template <ggml_type type, int mmq_x, bool need_check, bool fixup>
+template <ggml_type type, int mmq_x, bool need_check, bool fixup, typename dst_T>
 static __device__ __forceinline__ void mul_mat_q_process_tile(
         const char * __restrict__ x, const int offset_x, const int * __restrict__ y,
-        const int * __restrict__ ids_dst, float * __restrict__ dst, float * __restrict__ tmp_fixup,
+        // const int * __restrict__ ids_dst, float * __restrict__ dst, float * __restrict__ tmp_fixup,
+        const int * __restrict__ ids_dst, dst_T * __restrict__ dst, float * __restrict__ tmp_fixup,
         const int stride_row_x, const int ncols_y, const int stride_col_dst,
         const int tile_x_max_i, const int tile_y_max_j, const int kb0_start, const int kb0_stop) {
 
@@ -3065,10 +3092,12 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
 
 #if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE)
     constexpr vec_dot_mmq_t    vec_dot    = mmq_type_traits<mmq_x, mmq_y, need_check, type>::vec_dot_mma;
-    constexpr mmq_write_back_t write_back = mmq_write_back_mma<type, mmq_x, mmq_y, need_check>;
+    // constexpr mmq_write_back_t write_back = mmq_write_back_mma<type, mmq_x, mmq_y, need_check>;
+    constexpr mmq_write_back_t<dst_T> write_back = mmq_write_back_mma<type, mmq_x, mmq_y, need_check, dst_T>;
 #else
     constexpr vec_dot_mmq_t    vec_dot    = mmq_type_traits<mmq_x, mmq_y, need_check, type>::vec_dot_dp4a;
-    constexpr mmq_write_back_t write_back = mmq_write_back_dp4a<mmq_x, mmq_y, need_check>;
+    // constexpr mmq_write_back_t write_back = mmq_write_back_dp4a<mmq_x, mmq_y, need_check>;
+   // constexpr mmq_write_back_t<dst_T> write_back = mmq_write_back_dp4a<mmq_x, mmq_y, need_check, dst_T>;
 #endif // defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE)
 
     constexpr int blocks_per_iter = MMQ_ITER_K / qk;
@@ -3112,8 +3141,18 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
     }
 
     if (fixup) {
+#if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE)
+        constexpr mmq_write_back_t<float> write_back = mmq_write_back_mma<type, mmq_x, mmq_y, need_check, float>;
+#else
+        constexpr mmq_write_back_t<float> write_back = mmq_write_back_dp4a<mmq_x, mmq_y, need_check, float>;
+#endif
         write_back(sum, ids_dst, tmp_fixup + blockIdx.x*(mmq_x*mmq_y), mmq_y, mmq_y, mmq_x);
     } else {
+#if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE)
+        constexpr mmq_write_back_t<dst_T> write_back = mmq_write_back_mma<type, mmq_x, mmq_y, need_check, dst_T>;
+#else
+        constexpr mmq_write_back_t<dst_T> write_back = mmq_write_back_dp4a<mmq_x, mmq_y, need_check, dst_T>;
+#endif
         write_back(sum, ids_dst, dst, stride_col_dst, tile_x_max_i, tile_y_max_j);
     }
 }
@@ -3121,7 +3160,8 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
 
 // The mul_mat_q kernel implements "stream-k" work partitioning as described in https://arxiv.org/abs/2301.03598
 
-template <ggml_type type, int mmq_x, bool need_check>
+// template <ggml_type type, int mmq_x, bool need_check>
+template <ggml_type type, int mmq_x, bool need_check, typename dst_T>
 #if defined(GGML_USE_HIP)
 #if defined(RDNA4) || defined(RDNA3) || defined(RDNA2) || defined(CDNA) || defined(GCN)
     __launch_bounds__(ggml_cuda_get_physical_warp_size()*mmq_get_nwarps_device(), 2)
@@ -3135,7 +3175,8 @@ template <ggml_type type, int mmq_x, bool need_check>
 #endif // defined(GGML_USE_HIP)
 static __global__ void mul_mat_q(
         const char * __restrict__ x, const int * __restrict__ y, const int32_t * __restrict__ ids_dst,
-        const int32_t * __restrict__ expert_bounds, float * __restrict__ dst, float * __restrict__ tmp_fixup,
+        // const int32_t * __restrict__ expert_bounds, float * __restrict__ dst, float * __restrict__ tmp_fixup,
+        const int32_t * __restrict__ expert_bounds, dst_T * __restrict__ dst, float * __restrict__ tmp_fixup,
         const int ncols_x, const int nrows_x, const int ncols_dst, const int stride_row_x, const int ncols_y, const int stride_col_dst,
         const int channel_ratio, const int nchannels_y, const int stride_channel_x, const int stride_channel_y, const int stride_channel_dst,
         const int sample_ratio, const int nsamples_y, const int stride_sample_x, const int stride_sample_y, const int stride_sample_dst,
@@ -3222,7 +3263,8 @@ static __global__ void mul_mat_q(
         const int offset_x = (wt/sample_ratio)*stride_sample_x + (zt/channel_ratio)*stride_channel_x + it*mmq_y*stride_row_x;
 
         constexpr bool fixup = false;
-        mul_mat_q_process_tile<type, mmq_x, need_check, fixup>
+        // mul_mat_q_process_tile<type, mmq_x, need_check, fixup>
+        mul_mat_q_process_tile<type, mmq_x, need_check, fixup, dst_T>
             (x, offset_x, y + offset_y, ids_dst_shared, dst + offset_dst, tmp_fixup, stride_row_x, ncols_y, stride_col_dst,
              tile_x_max_i, tile_y_max_j, 0, ncols_x/qk);
         return;
@@ -3300,7 +3342,8 @@ static __global__ void mul_mat_q(
         const int offset_x = (wt/sample_ratio)*stride_sample_x + (zt/channel_ratio)*stride_channel_x + it*mmq_y*stride_row_x;
 
         constexpr bool fixup = false; // All but (potentially) the last iterations write their data to dst rather than the fixup buffer.
-        mul_mat_q_process_tile<type, mmq_x, need_check, fixup>
+        // mul_mat_q_process_tile<type, mmq_x, need_check, fixup>
+        mul_mat_q_process_tile<type, mmq_x, need_check, fixup, dst_T>
             (x, offset_x, y + offset_y, ids_dst_shared, dst + offset_dst, tmp_fixup, stride_row_x, ncols_y, stride_col_dst,
              tile_x_max_i, tile_y_max_j, kb0_start, kb0_stop);
 
@@ -3367,15 +3410,18 @@ static __global__ void mul_mat_q(
     const int offset_x = (wt/sample_ratio)*stride_sample_x + (zt/channel_ratio)*stride_channel_x + it*mmq_y*stride_row_x;
 
     constexpr bool fixup = true; // Last index writes its data to fixup buffer to avoid data races with other blocks.
-    mul_mat_q_process_tile<type, mmq_x, need_check, fixup>
+    // mul_mat_q_process_tile<type, mmq_x, need_check, fixup>
+    mul_mat_q_process_tile<type, mmq_x, need_check, fixup, dst_T>
         (x, offset_x, y + offset_y, ids_dst_shared, dst + offset_dst, tmp_fixup, stride_row_x, ncols_y, stride_col_dst,
          tile_x_max_i, tile_y_max_j, kb0_start, kb0_stop);
 }
 
 
-template <ggml_type type, int mmq_x, bool need_check>
+// template <ggml_type type, int mmq_x, bool need_check>
+template <ggml_type type, int mmq_x, bool need_check, typename dst_T>
 static __global__ void mul_mat_q_stream_k_fixup(
-        const int32_t * ids_dst, const int32_t * expert_bounds, float * __restrict__ dst, const float * __restrict__ tmp_last_tile,
+        // const int32_t * ids_dst, const int32_t * expert_bounds, float * __restrict__ dst, const float * __restrict__ tmp_last_tile,
+        const int32_t * ids_dst, const int32_t * expert_bounds, dst_T * __restrict__ dst, const float * __restrict__ tmp_last_tile,
         const int ncols_x, const int nrows_x, const int ncols_dst, const int stride_col_dst,
         const int nchannels_y, const int stride_channel_dst, const int nsamples_y, const int stride_sample_dst,
         const int ncols_max) {
@@ -3482,7 +3528,8 @@ static __global__ void mul_mat_q_stream_k_fixup(
                     continue;
                 }
 
-                dst[j*stride_col_dst + i] += sum[(j0/nwarps) * (mmq_y/warp_size) + i0/warp_size];
+                // dst[j*stride_col_dst + i] += sum[(j0/nwarps) * (mmq_y/warp_size) + i0/warp_size];
+                dst[j*stride_col_dst + i] += ggml_cuda_cast_simple<dst_T>(sum[(j0/nwarps) * (mmq_y/warp_size) + i0/warp_size]);
             }
         }
         return;
@@ -3520,13 +3567,15 @@ static __global__ void mul_mat_q_stream_k_fixup(
                 continue;
             }
 
-            dst[ids_dst_shared[j]*stride_col_dst + i] += sum[(j0/nwarps) * (mmq_y/warp_size) + i0/warp_size];
+            dst[ids_dst_shared[j]*stride_col_dst + i] += ggml_cuda_cast_simple<dst_T>(sum[(j0/nwarps) * (mmq_y/warp_size) + i0/warp_size]);
         }
     }
 }
 
+template<typename T>
 struct mmq_args {
-    const char * x; ggml_type type_x; const int * y; const int32_t * ids_dst; const int32_t * expert_bounds; float * dst;
+    // const char * x; ggml_type type_x; const int * y; const int32_t * ids_dst; const int32_t * expert_bounds; float * dst;
+    const char * x; ggml_type type_x; const int * y; const int32_t * ids_dst; const int32_t * expert_bounds; T * dst;
     int64_t ncols_x; int64_t nrows_x; int64_t ncols_dst; int64_t stride_row_x; int64_t ncols_y; int64_t nrows_dst;
     int64_t nchannels_x; int64_t nchannels_y; int64_t stride_channel_x; int64_t stride_channel_y; int64_t stride_channel_dst;
     int64_t nsamples_x; int64_t nsamples_y; int64_t stride_sample_x; int64_t stride_sample_y; int64_t stride_sample_dst;
@@ -3543,8 +3592,10 @@ static size_t mmq_get_nbytes_shared(const int mmq_x, const int mmq_y, const int 
     return nbs_ids + nbs_x + GGML_PAD(nbs_y, nwarps*warp_size*sizeof(int));
 }
 
-template <ggml_type type, int mmq_x>
-static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & args, cudaStream_t stream) {
+// template <ggml_type type, int mmq_x>
+template <ggml_type type, int mmq_x, typename T>
+// static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & args, cudaStream_t stream) {
+static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args<T> & args, cudaStream_t stream) {
     const int id = ggml_cuda_get_device();
     const int cc = ggml_cuda_info().devices[id].cc;
     const int nsm = ggml_cuda_info().devices[id].nsm;
@@ -3556,8 +3607,8 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
 
     const int nbytes_shared = mmq_get_nbytes_shared<type>(mmq_x, mmq_y, cc, warp_size, nwarps);
 
-    CUDA_SET_SHARED_MEMORY_LIMIT((mul_mat_q<type, mmq_x, false>), nbytes_shared);
-    CUDA_SET_SHARED_MEMORY_LIMIT((mul_mat_q<type, mmq_x,  true>), nbytes_shared);
+    CUDA_SET_SHARED_MEMORY_LIMIT((mul_mat_q<type, mmq_x, false, T>), nbytes_shared);
+    CUDA_SET_SHARED_MEMORY_LIMIT((mul_mat_q<type, mmq_x,  true, T>), nbytes_shared);
 
     const int nty  = (args.nrows_x   + mmq_y - 1) / mmq_y;
     const int ntx  = (args.ncols_max + mmq_x - 1) / mmq_x;
@@ -3572,7 +3623,8 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
     if (!args.use_stream_k) {
         if (args.nrows_x % mmq_y == 0) {
             constexpr bool need_check = false;
-            mul_mat_q<type, mmq_x, need_check><<<block_nums_xy_tiling, block_dims, nbytes_shared, stream>>>
+            // mul_mat_q<type, mmq_x, need_check><<<block_nums_xy_tiling, block_dims, nbytes_shared, stream>>>
+            mul_mat_q<type, mmq_x, need_check, T><<<block_nums_xy_tiling, block_dims, nbytes_shared, stream>>>
                 (args.x, args.y, args.ids_dst, args.expert_bounds, args.dst, nullptr,
                  args.ncols_x, args.nrows_x, args.ncols_dst, args.stride_row_x, args.ncols_y, args.nrows_dst,
                  channel_ratio, args.nchannels_y, args.stride_channel_x, args.stride_channel_y, args.stride_channel_dst,
@@ -3580,7 +3632,8 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
                  args.ncols_max);
         } else {
             constexpr bool need_check = true;
-            mul_mat_q<type, mmq_x, need_check><<<block_nums_xy_tiling, block_dims, nbytes_shared, stream>>>
+            // mul_mat_q<type, mmq_x, need_check><<<block_nums_xy_tiling, block_dims, nbytes_shared, stream>>>
+            mul_mat_q<type, mmq_x, need_check, T><<<block_nums_xy_tiling, block_dims, nbytes_shared, stream>>>
                 (args.x, args.y, args.ids_dst, args.expert_bounds, args.dst, nullptr,
                  args.ncols_x, args.nrows_x, args.ncols_dst, args.stride_row_x, args.ncols_y, args.nrows_dst,
                  channel_ratio, args.nchannels_y, args.stride_channel_x, args.stride_channel_y, args.stride_channel_dst,
@@ -3601,7 +3654,8 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
 
     if (args.nrows_x % mmq_y == 0) {
         constexpr bool need_check = false;
-        mul_mat_q<type, mmq_x, need_check><<<block_nums_stream_k, block_dims, nbytes_shared, stream>>>
+        // mul_mat_q<type, mmq_x, need_check><<<block_nums_stream_k, block_dims, nbytes_shared, stream>>>
+        mul_mat_q<type, mmq_x, need_check, T><<<block_nums_stream_k, block_dims, nbytes_shared, stream>>>
             (args.x, args.y, args.ids_dst, args.expert_bounds, args.dst, tmp_fixup.ptr,
              args.ncols_x, args.nrows_x, args.ncols_dst, args.stride_row_x, args.ncols_y, args.nrows_dst,
              channel_ratio, args.nchannels_y, args.stride_channel_x, args.stride_channel_y, args.stride_channel_dst,
@@ -3612,13 +3666,15 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
             return;
         }
 
-        mul_mat_q_stream_k_fixup<type, mmq_x, need_check><<<block_nums_stream_k, block_dims, 0, stream>>>
+        // mul_mat_q_stream_k_fixup<type, mmq_x, need_check><<<block_nums_stream_k, block_dims, 0, stream>>>
+        mul_mat_q_stream_k_fixup<type, mmq_x, need_check, T><<<block_nums_stream_k, block_dims, 0, stream>>>
             (args.ids_dst, args.expert_bounds, args.dst, tmp_fixup.ptr, args.ncols_x, args.nrows_x, args.ncols_dst,
              args.nrows_dst, args.nchannels_y, args.stride_channel_dst, args.nsamples_y, args.stride_sample_dst,
              args.ncols_max);
     } else {
         constexpr bool need_check = true;
-        mul_mat_q<type, mmq_x, need_check><<<block_nums_stream_k, block_dims, nbytes_shared, stream>>>
+        // mul_mat_q<type, mmq_x, need_check><<<block_nums_stream_k, block_dims, nbytes_shared, stream>>>
+        mul_mat_q<type, mmq_x, need_check, T><<<block_nums_stream_k, block_dims, nbytes_shared, stream>>>
             (args.x, args.y, args.ids_dst, args.expert_bounds, args.dst, tmp_fixup.ptr,
              args.ncols_x, args.nrows_x, args.ncols_dst, args.stride_row_x, args.ncols_y, args.nrows_dst,
              channel_ratio, args.nchannels_y, args.stride_channel_x, args.stride_channel_y, args.stride_channel_dst,
@@ -3629,15 +3685,18 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
             return;
         }
 
-        mul_mat_q_stream_k_fixup<type, mmq_x, need_check><<<block_nums_stream_k, block_dims, 0, stream>>>
+        // mul_mat_q_stream_k_fixup<type, mmq_x, need_check><<<block_nums_stream_k, block_dims, 0, stream>>>
+        mul_mat_q_stream_k_fixup<type, mmq_x, need_check, T><<<block_nums_stream_k, block_dims, 0, stream>>>
             (args.ids_dst, args.expert_bounds, args.dst, tmp_fixup.ptr, args.ncols_x, args.nrows_x, args.ncols_dst,
              args.nrows_dst, args.nchannels_y, args.stride_channel_dst, args.nsamples_y, args.stride_sample_dst,
              args.ncols_max);
     }
 }
 
-template <ggml_type type>
-void mul_mat_q_case(ggml_backend_cuda_context & ctx, const mmq_args & args, cudaStream_t stream) {
+// template <ggml_type type>
+template <ggml_type type, typename T>
+// void mul_mat_q_case(ggml_backend_cuda_context & ctx, const mmq_args & args, cudaStream_t stream) {
+void mul_mat_q_case(ggml_backend_cuda_context & ctx, const mmq_args<T> & args, cudaStream_t stream) {
     const int    id     = ggml_cuda_get_device();
     const int    cc     = ggml_cuda_info().devices[id].cc;
     const size_t smpbo  = ggml_cuda_info().devices[id].smpbo;
@@ -3667,52 +3726,68 @@ void mul_mat_q_case(ggml_backend_cuda_context & ctx, const mmq_args & args, cuda
 
     switch (mmq_x_best) {
         case   8:
-            launch_mul_mat_q<type,   8>(ctx, args, stream);
+            // launch_mul_mat_q<type,   8>(ctx, args, stream);
+            launch_mul_mat_q<type,   8,   T>(ctx, args, stream);
             break;
         case  16:
-            launch_mul_mat_q<type,  16>(ctx, args, stream);
+            // launch_mul_mat_q<type,  16>(ctx, args, stream);
+            launch_mul_mat_q<type,  16,   T>(ctx, args, stream);
             break;
         case  24:
-            launch_mul_mat_q<type,  24>(ctx, args, stream);
+            // launch_mul_mat_q<type,  24>(ctx, args, stream);
+            launch_mul_mat_q<type,  24,   T>(ctx, args, stream);
             break;
         case  32:
-            launch_mul_mat_q<type,  32>(ctx, args, stream);
+            // launch_mul_mat_q<type,  32>(ctx, args, stream);
+            launch_mul_mat_q<type,  32,   T>(ctx, args, stream);
             break;
         case  40:
-            launch_mul_mat_q<type,  40>(ctx, args, stream);
+            // launch_mul_mat_q<type,  40>(ctx, args, stream);
+            launch_mul_mat_q<type,  40,   T>(ctx, args, stream);
             break;
         case  48:
-            launch_mul_mat_q<type,  48>(ctx, args, stream);
+            // launch_mul_mat_q<type,  48>(ctx, args, stream);
+            launch_mul_mat_q<type,  48,   T>(ctx, args, stream);
             break;
         case  56:
-            launch_mul_mat_q<type,  56>(ctx, args, stream);
+            // launch_mul_mat_q<type,  56>(ctx, args, stream);
+            launch_mul_mat_q<type,  56,   T>(ctx, args, stream);
             break;
         case  64:
-            launch_mul_mat_q<type,  64>(ctx, args, stream);
+            // launch_mul_mat_q<type,  64>(ctx, args, stream);
+            launch_mul_mat_q<type,  64,   T>(ctx, args, stream);
             break;
         case  72:
-            launch_mul_mat_q<type,  72>(ctx, args, stream);
+            // launch_mul_mat_q<type,  72>(ctx, args, stream);
+            launch_mul_mat_q<type,  72,   T>(ctx, args, stream);
             break;
         case  80:
-            launch_mul_mat_q<type,  80>(ctx, args, stream);
+            // launch_mul_mat_q<type,  80>(ctx, args, stream);
+            launch_mul_mat_q<type,  80,   T>(ctx, args, stream);
             break;
         case  88:
-            launch_mul_mat_q<type,  88>(ctx, args, stream);
+            // launch_mul_mat_q<type,  88>(ctx, args, stream);
+            launch_mul_mat_q<type,  88,   T>(ctx, args, stream);
             break;
         case  96:
-            launch_mul_mat_q<type,  96>(ctx, args, stream);
+            // launch_mul_mat_q<type,  96>(ctx, args, stream);
+            launch_mul_mat_q<type,  96,   T>(ctx, args, stream);
             break;
         case 104:
-            launch_mul_mat_q<type, 104>(ctx, args, stream);
+            // launch_mul_mat_q<type, 104>(ctx, args, stream);
+            launch_mul_mat_q<type, 104,   T>(ctx, args, stream);
             break;
         case 112:
-            launch_mul_mat_q<type, 112>(ctx, args, stream);
+            // launch_mul_mat_q<type, 112>(ctx, args, stream);
+            launch_mul_mat_q<type, 112,   T>(ctx, args, stream);
             break;
         case 120:
-            launch_mul_mat_q<type, 120>(ctx, args, stream);
+            // launch_mul_mat_q<type, 120>(ctx, args, stream);
+            launch_mul_mat_q<type, 120,   T>(ctx, args, stream);
             break;
         case 128:
-            launch_mul_mat_q<type, 128>(ctx, args, stream);
+            // launch_mul_mat_q<type, 128>(ctx, args, stream);
+            launch_mul_mat_q<type, 128,   T>(ctx, args, stream);
             break;
         default:
             fprintf(stderr, "mmq_x_best=%d\n", mmq_x_best);
@@ -3721,28 +3796,71 @@ void mul_mat_q_case(ggml_backend_cuda_context & ctx, const mmq_args & args, cuda
     }
 }
 
-#define DECL_MMQ_CASE(type)                                                        \
-    template void mul_mat_q_case<type>(ggml_backend_cuda_context & ctx, const mmq_args & args, cudaStream_t stream) \
+// #define DECL_MMQ_CASE(type)                                                        \
+//     template void mul_mat_q_case<type>(ggml_backend_cuda_context & ctx, const mmq_args & args, cudaStream_t stream) \
 
-extern DECL_MMQ_CASE(GGML_TYPE_Q4_0);
-extern DECL_MMQ_CASE(GGML_TYPE_Q4_1);
-extern DECL_MMQ_CASE(GGML_TYPE_Q5_0);
-extern DECL_MMQ_CASE(GGML_TYPE_Q5_1);
-extern DECL_MMQ_CASE(GGML_TYPE_Q8_0);
-extern DECL_MMQ_CASE(GGML_TYPE_MXFP4);
-extern DECL_MMQ_CASE(GGML_TYPE_Q2_K);
-extern DECL_MMQ_CASE(GGML_TYPE_Q3_K);
-extern DECL_MMQ_CASE(GGML_TYPE_Q4_K);
-extern DECL_MMQ_CASE(GGML_TYPE_Q5_K);
-extern DECL_MMQ_CASE(GGML_TYPE_Q6_K);
-extern DECL_MMQ_CASE(GGML_TYPE_IQ2_XXS);
-extern DECL_MMQ_CASE(GGML_TYPE_IQ2_XS);
-extern DECL_MMQ_CASE(GGML_TYPE_IQ2_S);
-extern DECL_MMQ_CASE(GGML_TYPE_IQ3_XXS);
-extern DECL_MMQ_CASE(GGML_TYPE_IQ3_S);
-extern DECL_MMQ_CASE(GGML_TYPE_IQ1_S);
-extern DECL_MMQ_CASE(GGML_TYPE_IQ4_NL);
-extern DECL_MMQ_CASE(GGML_TYPE_IQ4_XS);
+#define DECL_MMQ_CASE(type, dst_type)                                                        \
+    template void mul_mat_q_case<type, dst_type>(ggml_backend_cuda_context & ctx, const mmq_args<dst_type> & args, cudaStream_t stream) \
+
+// extern DECL_MMQ_CASE(GGML_TYPE_Q4_0);
+// extern DECL_MMQ_CASE(GGML_TYPE_Q4_1);
+// extern DECL_MMQ_CASE(GGML_TYPE_Q5_0);
+// extern DECL_MMQ_CASE(GGML_TYPE_Q5_1);
+// extern DECL_MMQ_CASE(GGML_TYPE_Q8_0);
+// extern DECL_MMQ_CASE(GGML_TYPE_MXFP4);
+// extern DECL_MMQ_CASE(GGML_TYPE_Q2_K);
+// extern DECL_MMQ_CASE(GGML_TYPE_Q3_K);
+// extern DECL_MMQ_CASE(GGML_TYPE_Q4_K);
+// extern DECL_MMQ_CASE(GGML_TYPE_Q5_K);
+// extern DECL_MMQ_CASE(GGML_TYPE_Q6_K);
+// extern DECL_MMQ_CASE(GGML_TYPE_IQ2_XXS);
+// extern DECL_MMQ_CASE(GGML_TYPE_IQ2_XS);
+// extern DECL_MMQ_CASE(GGML_TYPE_IQ2_S);
+// extern DECL_MMQ_CASE(GGML_TYPE_IQ3_XXS);
+// extern DECL_MMQ_CASE(GGML_TYPE_IQ3_S);
+// extern DECL_MMQ_CASE(GGML_TYPE_IQ1_S);
+// extern DECL_MMQ_CASE(GGML_TYPE_IQ4_NL);
+// extern DECL_MMQ_CASE(GGML_TYPE_IQ4_XS);
+
+extern DECL_MMQ_CASE(GGML_TYPE_Q4_0, float);
+extern DECL_MMQ_CASE(GGML_TYPE_Q4_1, float);
+extern DECL_MMQ_CASE(GGML_TYPE_Q5_0, float);
+extern DECL_MMQ_CASE(GGML_TYPE_Q5_1, float);
+extern DECL_MMQ_CASE(GGML_TYPE_Q8_0, float);
+extern DECL_MMQ_CASE(GGML_TYPE_MXFP4, float);
+extern DECL_MMQ_CASE(GGML_TYPE_Q2_K, float);
+extern DECL_MMQ_CASE(GGML_TYPE_Q3_K, float);
+extern DECL_MMQ_CASE(GGML_TYPE_Q4_K, float);
+extern DECL_MMQ_CASE(GGML_TYPE_Q5_K, float);
+extern DECL_MMQ_CASE(GGML_TYPE_Q6_K, float);
+extern DECL_MMQ_CASE(GGML_TYPE_IQ2_XXS, float);
+extern DECL_MMQ_CASE(GGML_TYPE_IQ2_XS, float);
+extern DECL_MMQ_CASE(GGML_TYPE_IQ2_S, float);
+extern DECL_MMQ_CASE(GGML_TYPE_IQ3_XXS, float);
+extern DECL_MMQ_CASE(GGML_TYPE_IQ3_S, float);
+extern DECL_MMQ_CASE(GGML_TYPE_IQ1_S, float);
+extern DECL_MMQ_CASE(GGML_TYPE_IQ4_NL, float);
+extern DECL_MMQ_CASE(GGML_TYPE_IQ4_XS, float);
+
+extern DECL_MMQ_CASE(GGML_TYPE_Q4_0, half);
+extern DECL_MMQ_CASE(GGML_TYPE_Q4_1, half);
+extern DECL_MMQ_CASE(GGML_TYPE_Q5_0, half);
+extern DECL_MMQ_CASE(GGML_TYPE_Q5_1, half);
+extern DECL_MMQ_CASE(GGML_TYPE_Q8_0, half);
+extern DECL_MMQ_CASE(GGML_TYPE_MXFP4, half);
+extern DECL_MMQ_CASE(GGML_TYPE_Q2_K, half);
+extern DECL_MMQ_CASE(GGML_TYPE_Q3_K, half);
+extern DECL_MMQ_CASE(GGML_TYPE_Q4_K, half);
+extern DECL_MMQ_CASE(GGML_TYPE_Q5_K, half);
+extern DECL_MMQ_CASE(GGML_TYPE_Q6_K, half);
+extern DECL_MMQ_CASE(GGML_TYPE_IQ2_XXS, half);
+extern DECL_MMQ_CASE(GGML_TYPE_IQ2_XS, half);
+extern DECL_MMQ_CASE(GGML_TYPE_IQ2_S, half);
+extern DECL_MMQ_CASE(GGML_TYPE_IQ3_XXS, half);
+extern DECL_MMQ_CASE(GGML_TYPE_IQ3_S, half);
+extern DECL_MMQ_CASE(GGML_TYPE_IQ1_S, half);
+extern DECL_MMQ_CASE(GGML_TYPE_IQ4_NL, half);
+extern DECL_MMQ_CASE(GGML_TYPE_IQ4_XS, half);
 
 // -------------------------------------------------------------------------------------------------------------------------
 
