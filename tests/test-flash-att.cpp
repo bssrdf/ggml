@@ -110,11 +110,11 @@ void load_model(test_model & model, bool use_gpu = false) {
     // int IW = 8, IH = 6, N = 1;
     int M = 1028, N = 1, K = 2816;
 
-    model.hsk = 64;
-    model.hsv = 64;
-    model.nh = 20;
+    model.hsk = 128;
+    model.hsv = 128;
+    model.nh = 24;
     model.kv = 96;
-    model.nb = 1024;
+    model.nb = 4352;
     model.type_KV = GGML_TYPE_F16;
 
     int64_t kv = 256;
@@ -334,12 +334,16 @@ struct ggml_cgraph * build_graph(const test_model& model) {
 
     // split conv2d in fundamental methods for test unit
     // struct ggml_tensor* res = ggml_mul_mat(ctx0, model.a, model.b);
-    ggml_tensor * out32 = ggml_flash_attn_ext(ctx0, model.q32, model.k32, model.v32, model.m,
+    // ggml_tensor * out32 = ggml_flash_attn_ext(ctx0, model.q32, model.k32, model.v32, model.m,
+    //          1.0f/sqrtf(model.hsk), model.max_bias, model.logit_softcap);
+    ggml_tensor * out32 = ggml_flash_attn_ext(ctx0, model.q32, model.k32, model.v32, nullptr,
              1.0f/sqrtf(model.hsk), model.max_bias, model.logit_softcap);
     ggml_set_name(out32, "res32");
     ggml_build_forward_expand(gf, out32);
 
-    ggml_tensor * out16 = ggml_flash_attn_ext(ctx0, model.q16, model.k16, model.v16, model.m,
+    // ggml_tensor * out16 = ggml_flash_attn_ext(ctx0, model.q16, model.k16, model.v16, model.m,
+    //          1.0f/sqrtf(model.hsk), model.max_bias, model.logit_softcap);
+    ggml_tensor * out16 = ggml_flash_attn_ext(ctx0, model.q16, model.k16, model.v16, nullptr,
              1.0f/sqrtf(model.hsk), model.max_bias, model.logit_softcap);
     ggml_set_name(out16, "res16");
     ggml_build_forward_expand(gf, out16);
@@ -419,10 +423,10 @@ int main(void)
         }
     }
 
-    for(int i = 0; i < gemm_data.size(); i++) {
-        float r16 = ggml_fp16_to_fp32(gemm_data[i]);
-        printf("%d: %f, %f\n", i, gemm_data2[i], r16);
-    }
+    // for(int i = 0; i < gemm_data.size(); i++) {
+    //     float r16 = ggml_fp16_to_fp32(gemm_data[i]);
+    //     printf("%d: %f, %f\n", i, gemm_data2[i], r16);
+    // }
 
     ggml_free(model.ctx);
 

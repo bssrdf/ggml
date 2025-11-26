@@ -57,8 +57,32 @@ union Int2ToUShort4 {
     ushort4 u4;
 };
 
+template void quantize_row_q8_1_cuda<float>(
+        // const float * x, const int32_t * ids, void * vy,
+        const float * x, const int32_t * ids, void * vy,
+        ggml_type type_src0, int64_t ne00, int64_t s01, int64_t s02, int64_t s03,
+        int64_t ne0, int64_t ne1, int64_t ne2, int64_t ne3, cudaStream_t stream);
 
-template <mmq_q8_1_ds_layout ds_layout, typename T = float>
+template void quantize_row_q8_1_cuda<half>(
+        // const float * x, const int32_t * ids, void * vy,
+        const half * x, const int32_t * ids, void * vy,
+        ggml_type type_src0, int64_t ne00, int64_t s01, int64_t s02, int64_t s03,
+        int64_t ne0, int64_t ne1, int64_t ne2, int64_t ne3, cudaStream_t stream);
+
+template void quantize_mmq_q8_1_cuda<float>(
+        // const float * x, const int32_t * ids, void * vy,
+        const float * x, const int32_t * ids, void * vy,
+        ggml_type type_src0, int64_t ne00, int64_t s01, int64_t s02, int64_t s03,
+        int64_t ne0, int64_t ne1, int64_t ne2, int64_t ne3, cudaStream_t stream);
+
+template void quantize_mmq_q8_1_cuda<half>(
+        // const float * x, const int32_t * ids, void * vy,
+        const half * x, const int32_t * ids, void * vy,
+        ggml_type type_src0, int64_t ne00, int64_t s01, int64_t s02, int64_t s03,
+        int64_t ne0, int64_t ne1, int64_t ne2, int64_t ne3, cudaStream_t stream);
+
+
+template <mmq_q8_1_ds_layout ds_layout, typename T>
 static __global__ void quantize_mmq_q8_1(
         // const float * __restrict__ x, const int32_t * __restrict__ ids, void * __restrict__ vy,
         const T * __restrict__ x, const int32_t * __restrict__ ids, void * __restrict__ vy,

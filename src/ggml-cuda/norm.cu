@@ -768,8 +768,10 @@ void ggml_cuda_op_rms_norm(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const int64_t s01 = nb01 / ts0;
     const int64_t s02 = nb02 / ts0;
     const int64_t s03 = nb03 / ts0;
-
-    rms_norm_f32_cuda(src0_d, dst_d, ne00, ne01, ne02, ne03, s01, s02, s03, eps, stream);
+    if(src0->type == GGML_TYPE_F32)
+        rms_norm_f32_cuda(src0_d, dst_d, ne00, ne01, ne02, ne03, s01, s02, s03, eps, stream);
+    else
+        rms_norm_f16_cuda((const half*)src0_d, (half *)dst_d, ne00, ne01, ne02, ne03, s01, s02, s03, eps, stream);
 }
 
 void ggml_cuda_op_rms_norm_fused(ggml_backend_cuda_context & ctx, ggml_tensor * dst, ggml_tensor * mul_tensor) {
