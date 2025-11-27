@@ -1296,8 +1296,6 @@ static void ggml_cuda_op_mul_mat_cublas(
         if constexpr (std:: is_same_v<T, float>) {
             const to_fp32_cuda_t to_fp32_cuda = ggml_get_to_fp32_cuda(GGML_TYPE_BF16);
             to_fp32_cuda(dst_bf16.get(), dst_dd_i, row_diff*src1_ncols, stream);
-        } else {
-            GGML_ASSERT(false);
         }
     } else if (fast_fp16_hardware_available(cc) && use_fp16) {
         // convert src0 and src1 to fp16, multiply as fp16, convert dst to fp32
@@ -2027,6 +2025,10 @@ static void ggml_cuda_mul_mat_batched_cublas_impl(ggml_backend_cuda_context & ct
                 dst_t = (char *) dst_ddf;
                 cu_compute_type = CUBLAS_COMPUTE_16F;
                 cu_data_type = CUDA_R_16F;
+            } else if (dst->type == GGML_TYPE_BF16){
+                dst_t = (char *) dst_ddf;
+                cu_compute_type = CUBLAS_COMPUTE_32F;
+                cu_data_type = CUDA_R_16BF;
             } else {
                 dst_t = (char *) dst_temp.alloc(ne_dst);
                 nbd2 /= sizeof(float) / sizeof(cuda_t);
@@ -2107,7 +2109,7 @@ static void ggml_cuda_mul_mat_batched_cublas_impl(ggml_backend_cuda_context & ct
     }
 
     // Convert output back to F32 if needed
-    if (dst->op_params[0] == GGML_PREC_DEFAULT && cu_data_type != CUDA_R_32F && dst->type != GGML_TYPE_F16) {
+    if (dst->op_params[0] == GGML_PREC_DEFAULT && cu_data_type != CUDA_R_32F && dst->type != GGML_TYPE_F16 && dst->type != GGML_TYPE_BF16) {
         const to_fp32_cuda_t to_fp32_cuda = ggml_get_to_fp32_cuda(traits::ggml_type_val);
         to_fp32_cuda(dst_temp.get(), dst_ddf, ne_dst, main_stream);
     }
@@ -2226,6 +2228,8 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         // src1->ne[0], src1->ne[1], src1->ne[2]);
         if(src1->type == GGML_TYPE_F32)
             ggml_cuda_op_mul_mat<float>(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_vec_q<float>, quantize_row_q8_1_cuda<float>);
+        else if(src1->type == GGML_TYPE_BF16)
+            ggml_cuda_op_mul_mat<nv_bfloat16>(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_vec_q<nv_bfloat16>, quantize_row_q8_1_cuda<nv_bfloat16>);
         else
             ggml_cuda_op_mul_mat<half>(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_vec_q<half>, quantize_row_q8_1_cuda<half>);
     } else if (use_mul_mat_q) {
@@ -2235,6 +2239,8 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         // src1->ne[0], src1->ne[1], src1->ne[2]);
         if(src1->type == GGML_TYPE_F32)
             ggml_cuda_op_mul_mat<float>(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_q<float>, quantize_mmq_q8_1_cuda<float>);
+        else if(src1->type == GGML_TYPE_BF16)
+            ggml_cuda_op_mul_mat<nv_bfloat16>(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_q<nv_bfloat16>, quantize_mmq_q8_1_cuda<nv_bfloat16>);
         else
             ggml_cuda_op_mul_mat<half>(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_q<half>, quantize_mmq_q8_1_cuda<half>);
     } else {
@@ -2244,6 +2250,8 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         // src1->ne[0], src1->ne[1], src1->ne[2]);
         if(src1->type == GGML_TYPE_F32)
             ggml_cuda_op_mul_mat<float>(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_cublas<float>, nullptr);
+        else if(src1->type == GGML_TYPE_BF16)
+            ggml_cuda_op_mul_mat<nv_bfloat16>(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_cublas<nv_bfloat16>, nullptr);
         else
             ggml_cuda_op_mul_mat<half>(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_cublas<half>, nullptr);
     }

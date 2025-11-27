@@ -3093,7 +3093,7 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
 #if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE)
     constexpr vec_dot_mmq_t    vec_dot    = mmq_type_traits<mmq_x, mmq_y, need_check, type>::vec_dot_mma;
     // constexpr mmq_write_back_t write_back = mmq_write_back_mma<type, mmq_x, mmq_y, need_check>;
-    constexpr mmq_write_back_t<dst_T> write_back = mmq_write_back_mma<type, mmq_x, mmq_y, need_check, dst_T>;
+    // constexpr mmq_write_back_t<dst_T> write_back = mmq_write_back_mma<type, mmq_x, mmq_y, need_check, dst_T>;
 #else
     constexpr vec_dot_mmq_t    vec_dot    = mmq_type_traits<mmq_x, mmq_y, need_check, type>::vec_dot_dp4a;
     // constexpr mmq_write_back_t write_back = mmq_write_back_dp4a<mmq_x, mmq_y, need_check>;
@@ -3841,6 +3841,26 @@ extern DECL_MMQ_CASE(GGML_TYPE_IQ3_S, float);
 extern DECL_MMQ_CASE(GGML_TYPE_IQ1_S, float);
 extern DECL_MMQ_CASE(GGML_TYPE_IQ4_NL, float);
 extern DECL_MMQ_CASE(GGML_TYPE_IQ4_XS, float);
+
+extern DECL_MMQ_CASE(GGML_TYPE_Q4_0, nv_bfloat16);
+extern DECL_MMQ_CASE(GGML_TYPE_Q4_1, nv_bfloat16);
+extern DECL_MMQ_CASE(GGML_TYPE_Q5_0, nv_bfloat16);
+extern DECL_MMQ_CASE(GGML_TYPE_Q5_1, nv_bfloat16);
+extern DECL_MMQ_CASE(GGML_TYPE_Q8_0, nv_bfloat16);
+extern DECL_MMQ_CASE(GGML_TYPE_MXFP4, nv_bfloat16);
+extern DECL_MMQ_CASE(GGML_TYPE_Q2_K, nv_bfloat16);
+extern DECL_MMQ_CASE(GGML_TYPE_Q3_K, nv_bfloat16);
+extern DECL_MMQ_CASE(GGML_TYPE_Q4_K, nv_bfloat16);
+extern DECL_MMQ_CASE(GGML_TYPE_Q5_K, nv_bfloat16);
+extern DECL_MMQ_CASE(GGML_TYPE_Q6_K, nv_bfloat16);
+extern DECL_MMQ_CASE(GGML_TYPE_IQ2_XXS, nv_bfloat16);
+extern DECL_MMQ_CASE(GGML_TYPE_IQ2_XS, nv_bfloat16);
+extern DECL_MMQ_CASE(GGML_TYPE_IQ2_S, nv_bfloat16);
+extern DECL_MMQ_CASE(GGML_TYPE_IQ3_XXS, nv_bfloat16);
+extern DECL_MMQ_CASE(GGML_TYPE_IQ3_S, nv_bfloat16);
+extern DECL_MMQ_CASE(GGML_TYPE_IQ1_S, nv_bfloat16);
+extern DECL_MMQ_CASE(GGML_TYPE_IQ4_NL, nv_bfloat16);
+extern DECL_MMQ_CASE(GGML_TYPE_IQ4_XS, nv_bfloat16);
 
 extern DECL_MMQ_CASE(GGML_TYPE_Q4_0, half);
 extern DECL_MMQ_CASE(GGML_TYPE_Q4_1, half);

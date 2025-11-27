@@ -250,6 +250,15 @@ template void ggml_cuda_op_mul_mat_q<float>(
     const char * src1_ddq_i, float * dst_dd_i, const int64_t row_low, const int64_t row_high, const int64_t src1_ncols,
     const int64_t src1_padded_row_size, cudaStream_t stream);
 
+template void ggml_cuda_op_mul_mat_q<nv_bfloat16>(
+    ggml_backend_cuda_context & ctx,
+    // const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst, const char * src0_dd_i, const float * src1_ddf_i,
+    const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst, const char * src0_dd_i, const nv_bfloat16 * src1_ddf_i,
+    // const char * src1_ddq_i, float * dst_dd_i, const int64_t row_low, const int64_t row_high, const int64_t src1_ncols,
+    const char * src1_ddq_i, nv_bfloat16 * dst_dd_i, const int64_t row_low, const int64_t row_high, const int64_t src1_ncols,
+    const int64_t src1_padded_row_size, cudaStream_t stream);
+
+
 template void ggml_cuda_op_mul_mat_q<half>(
     ggml_backend_cuda_context & ctx,
     // const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst, const char * src0_dd_i, const float * src1_ddf_i,
@@ -296,6 +305,15 @@ void ggml_cuda_op_mul_mat_q(
     if (src1->type == GGML_TYPE_F32) {
         const mmq_args<float> args = {
             src0_dd_i, src0->type, (const int *) src1_ddq_i, nullptr, nullptr, (float *)dst_dd_i,
+            ne00, row_diff, src1_ncols, stride01, ne11, nrows_dst,
+            1, 1, 0, 0, 0,
+            1, 1, 0, 0, 0,
+            use_stream_k, src1_ncols};
+
+        ggml_cuda_mul_mat_q_switch_type(ctx, args, stream);
+    } else if (src1->type == GGML_TYPE_BF16) {
+        const mmq_args<nv_bfloat16> args = {
+            src0_dd_i, src0->type, (const int *) src1_ddq_i, nullptr, nullptr, (nv_bfloat16 *)dst_dd_i,
             ne00, row_diff, src1_ncols, stride01, ne11, nrows_dst,
             1, 1, 0, 0, 0,
             1, 1, 0, 0, 0,

@@ -63,6 +63,13 @@ template void quantize_row_q8_1_cuda<float>(
         ggml_type type_src0, int64_t ne00, int64_t s01, int64_t s02, int64_t s03,
         int64_t ne0, int64_t ne1, int64_t ne2, int64_t ne3, cudaStream_t stream);
 
+template void quantize_row_q8_1_cuda<nv_bfloat16>(
+        // const float * x, const int32_t * ids, void * vy,
+        const nv_bfloat16 * x, const int32_t * ids, void * vy,
+        ggml_type type_src0, int64_t ne00, int64_t s01, int64_t s02, int64_t s03,
+        int64_t ne0, int64_t ne1, int64_t ne2, int64_t ne3, cudaStream_t stream);
+
+
 template void quantize_row_q8_1_cuda<half>(
         // const float * x, const int32_t * ids, void * vy,
         const half * x, const int32_t * ids, void * vy,
@@ -74,6 +81,13 @@ template void quantize_mmq_q8_1_cuda<float>(
         const float * x, const int32_t * ids, void * vy,
         ggml_type type_src0, int64_t ne00, int64_t s01, int64_t s02, int64_t s03,
         int64_t ne0, int64_t ne1, int64_t ne2, int64_t ne3, cudaStream_t stream);
+
+template void quantize_mmq_q8_1_cuda<nv_bfloat16>(
+        // const float * x, const int32_t * ids, void * vy,
+        const nv_bfloat16 * x, const int32_t * ids, void * vy,
+        ggml_type type_src0, int64_t ne00, int64_t s01, int64_t s02, int64_t s03,
+        int64_t ne0, int64_t ne1, int64_t ne2, int64_t ne3, cudaStream_t stream);
+
 
 template void quantize_mmq_q8_1_cuda<half>(
         // const float * x, const int32_t * ids, void * vy,
@@ -129,8 +143,17 @@ static __global__ void quantize_mmq_q8_1(
         xi.y = __half2float(__ushort_as_half(u.u4.y));
         xi.z = __half2float(__ushort_as_half(u.u4.z));
         xi.w = __half2float(__ushort_as_half(u.u4.w));
+    } else if constexpr (std::is_same_v<T, nv_bfloat16>) {
+        const int2 * x4 = (const int2 *) x;
+        int2 x2 = i0 < ne00 ? x4[(i03*s03 + i02*s02 + i01*s01 + i00)/4] : make_int2(0, 0);
+        Int2ToUShort4 u;
+        u.i2 = x2;
+        xi.x = __bfloat162float(__ushort_as_bfloat16(u.u4.x));
+        xi.y = __bfloat162float(__ushort_as_bfloat16(u.u4.y));
+        xi.z = __bfloat162float(__ushort_as_bfloat16(u.u4.z));
+        xi.w = __bfloat162float(__ushort_as_bfloat16(u.u4.w));
     } else {
-        GGML_ASSERT(false, "T must be float or half");
+        GGML_ASSERT(false, "T must be float or half or nv_bf16");
     }
 
     float amax = fabsf(xi.x);

@@ -146,6 +146,14 @@ template void ggml_cuda_op_mul_mat_vec_q<float>(
     const char * src1_ddq_i, float * dst_dd_i, const int64_t row_low, const int64_t row_high, const int64_t src1_ncols,
     const int64_t src1_padded_row_size, cudaStream_t stream);
 
+template void ggml_cuda_op_mul_mat_vec_q<nv_bfloat16>(
+    ggml_backend_cuda_context & ctx,
+    // const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst, const char * src0_dd_i, const float * src1_ddf_i,
+    const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst, const char * src0_dd_i, const nv_bfloat16 * src1_ddf_i,
+    // const char * src1_ddq_i, float * dst_dd_i, const int64_t row_low, const int64_t row_high, const int64_t src1_ncols,
+    const char * src1_ddq_i, nv_bfloat16 * dst_dd_i, const int64_t row_low, const int64_t row_high, const int64_t src1_ncols,
+    const int64_t src1_padded_row_size, cudaStream_t stream);
+
 
 template void ggml_cuda_op_mul_mat_vec_q<half>(
     ggml_backend_cuda_context & ctx,
@@ -540,8 +548,8 @@ static void mul_mat_vec_q_switch_type(
 
 void ggml_cuda_mul_mat_vec_q(
         ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * ids, ggml_tensor * dst) {
-    GGML_ASSERT(        src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_F16);
-    GGML_ASSERT(        dst->type  == GGML_TYPE_F32 || dst->type  == GGML_TYPE_F16);
+    GGML_ASSERT(        src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_F16 || src1->type == GGML_TYPE_BF16 );
+    GGML_ASSERT(        dst->type  == GGML_TYPE_F32 || dst->type  == GGML_TYPE_F16 || dst->type  == GGML_TYPE_BF16);
     GGML_ASSERT(!ids || ids->type  == GGML_TYPE_I32); // Optional, used for batched GGML_MUL_MAT_ID.
 
     GGML_TENSOR_BINARY_OP_LOCALS;
@@ -582,6 +590,8 @@ void ggml_cuda_mul_mat_vec_q(
         const int64_t s13 = src1->nb[3] / ts_src1;
         if(src1->type == GGML_TYPE_F32)
             quantize_row_q8_1_cuda<float>(src1_d, nullptr, src1_q8_1.get(), src0->type, ne10, s11, s12, s13, ne10_padded, ne11, ne12, ne13, stream);
+        else if(src1->type == GGML_TYPE_BF16)
+            quantize_row_q8_1_cuda<nv_bfloat16>((const nv_bfloat16*)src1_d, nullptr, src1_q8_1.get(), src0->type, ne10, s11, s12, s13, ne10_padded, ne11, ne12, ne13, stream);
         else
             quantize_row_q8_1_cuda<half>((const half *)src1_d, nullptr, src1_q8_1.get(), src0->type, ne10, s11, s12, s13, ne10_padded, ne11, ne12, ne13, stream);
 
@@ -609,6 +619,12 @@ void ggml_cuda_mul_mat_vec_q(
     if(src1->type == GGML_TYPE_F32){
         mul_mat_vec_q_switch_type<float>(
             src0->data, src0->type, src1_q8_1.get(), ids_d, dst_d, ne00,
+            ne01,              ncols_dst,     s01, stride_col_y,     stride_col_dst,
+            ne02, nchannels_y, nchannels_dst, s02, stride_channel_y, stride_channel_dst,
+            ne03,              ne3,           s03, s13,              s3,                 stream);
+    } else if (src1->type == GGML_TYPE_BF16){
+        mul_mat_vec_q_switch_type<nv_bfloat16>(
+            src0->data, src0->type, src1_q8_1.get(), ids_d, (nv_bfloat16 *)dst_d, ne00,
             ne01,              ncols_dst,     s01, stride_col_y,     stride_col_dst,
             ne02, nchannels_y, nchannels_dst, s02, stride_channel_y, stride_channel_dst,
             ne03,              ne3,           s03, s13,              s3,                 stream);
@@ -650,6 +666,10 @@ void ggml_cuda_op_mul_mat_vec_q(
     if (src1->type == GGML_TYPE_F32) {
         mul_mat_vec_q_switch_type<float>(
             src0_dd_i, src0->type, src1_ddq_i, nullptr, (float *)dst_dd_i, ne00, row_diff, src1_ncols, stride_row_x, stride_col_y, nrows_dst,
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, stream);
+    } else if (src1->type == GGML_TYPE_BF16) {
+        mul_mat_vec_q_switch_type<nv_bfloat16>(
+            src0_dd_i, src0->type, src1_ddq_i, nullptr, (nv_bfloat16 *)dst_dd_i, ne00, row_diff, src1_ncols, stride_row_x, stride_col_y, nrows_dst,
             1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, stream);
     } else {
         mul_mat_vec_q_switch_type<half>(
