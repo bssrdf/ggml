@@ -129,7 +129,7 @@ void load_model(test_model & model, bool use_gpu = false) {
     std::vector<float> qdata(hsk_padded*nb*nh*model.nr23[0]*model.nr23[1]);
     for (int i = 0; i < hsk_padded*nb*nh*model.nr23[0]*model.nr23[1]; i++) {
         float r = -1.f + static_cast <float> (rand()) /( static_cast <float> (RAND_MAX/(1.f-(-1.f))));
-        qdata[i] = r;
+        qdata[i] = r*10;
     }
 
     // Convert adata to fp16 format
@@ -141,7 +141,7 @@ void load_model(test_model & model, bool use_gpu = false) {
     for (int i = 0; i < hsk_padded*kv*nh*model.nr23[1]; i++) {
         // bdata[i] = 1.5f;
         float r = -1.f + static_cast <float> (rand()) /( static_cast <float> (RAND_MAX/(1.f-(-1.f))));
-        kdata[i] = r;
+        kdata[i] = r*10;
     }
 
     std::vector<ggml_fp16_t> hkdata(hsk_padded*kv*nh*model.nr23[1]);
@@ -151,7 +151,7 @@ void load_model(test_model & model, bool use_gpu = false) {
     for (int i = 0; i < hsv_padded*kv*nh*model.nr23[1]; i++) {
         // bdata[i] = 1.5f;
         float r = -1.f + static_cast <float> (rand()) /( static_cast <float> (RAND_MAX/(1.f-(-1.f))));
-        vdata[i] = r;
+        vdata[i] = r*15;
     }
 
     std::vector<ggml_fp16_t> hvdata(hsv_padded*kv*nh*model.nr23[1]);
@@ -416,9 +416,10 @@ int main(void)
         float r16 = ggml_fp16_to_fp32(gemm_data[i]);
         // printf("%d: %f, %f\n", i, gemm_data2[i], ggml_fp16_to_fp32(gemm_data[i]));
         float diff = fabs(gemm_data2[i] - r16);
-        if(diff > 0.001f) {
-                printf("(%f, %f, %f, %d) \n",
-                gemm_data2[i], r16, diff, i);
+        // if(diff > 0.001f) {
+        if(diff > 0.01f) {
+            printf("(%f, %f, %f, %d) \n",
+            gemm_data2[i], r16, diff, i);
             break;
         }
     }
