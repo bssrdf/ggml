@@ -62,6 +62,12 @@ static __device__ __forceinline__ half2 ggml_cuda_movmatrix(const half2 x) {
     return ret;
 }
 
+static __device__ __forceinline__ nv_bfloat162 ggml_cuda_movmatrix(const nv_bfloat162 x) {
+    nv_bfloat162 ret;
+    *((int *) &ret) = ggml_cuda_movmatrix(*((const int *) &x));
+    return ret;
+}
+
 namespace ggml_cuda_mma {
 
     template <int I_, int J_, typename T>
@@ -210,8 +216,28 @@ namespace ggml_cuda_mma {
         return ret;
     }
 
+
+    template <int I, int J>
+    static __device__ __forceinline__ tile<I, J/2, nv_bfloat162> get_bfloat2(const tile<I, J, float> & tile_float) {
+        tile<I, J/2, nv_bfloat162> ret;
+#pragma unroll
+        for (int l0 = 0; l0 < tile_float.ne; l0 += 2) {
+            ret.x[l0/2] =  __floats2bfloat162_rn(tile_float.x[l0 + 0], tile_float.x[l0 + 1]);
+        }
+        return ret;
+    }
+
+
     static __device__ __forceinline__ tile<8, 8, half2> get_transposed(const tile<16, 4, half2> & t) {
         tile<8, 8, half2> ret;
+        ret.x[0] = ggml_cuda_movmatrix(t.x[0]);
+        ret.x[1] = ggml_cuda_movmatrix(t.x[1]);
+
+        return ret;
+    }
+
+    static __device__ __forceinline__ tile<8, 8, nv_bfloat162> get_transposed(const tile<16, 4, nv_bfloat162> & t) {
+        tile<8, 8, nv_bfloat162> ret;
         ret.x[0] = ggml_cuda_movmatrix(t.x[0]);
         ret.x[1] = ggml_cuda_movmatrix(t.x[1]);
 

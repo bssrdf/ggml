@@ -613,7 +613,7 @@ static __global__ void flash_attn_mask_to_KV_max(
 
 #pragma unroll
         for (int j = 0; j < ncols1; ++j) {
-            const float2 tmp = __half22float2(mask[j*s31 + KV_max_sj/2 + tid]);
+            const float2 tmp =  __half22float2(mask[j*s31 + KV_max_sj/2 + tid]);
             all_inf = all_inf && int(isinf(tmp.x)) && int(isinf(tmp.y));
         }
 
@@ -812,8 +812,8 @@ void launch_fattn(
 
     ggml_tensor * KQV = dst;
 
-    GGML_ASSERT(Q->type == GGML_TYPE_F32 || Q->type == GGML_TYPE_F16);
-    GGML_ASSERT(KQV->type == GGML_TYPE_F32 || KQV->type == GGML_TYPE_F16);
+    GGML_ASSERT(Q->type == GGML_TYPE_F32   ||   Q->type == GGML_TYPE_F16 ||   Q->type == GGML_TYPE_BF16);
+    GGML_ASSERT(KQV->type == GGML_TYPE_F32 || KQV->type == GGML_TYPE_F16 || KQV->type == GGML_TYPE_BF16);
 
 
     GGML_ASSERT(      Q->nb[0] == ggml_element_size(Q));
@@ -830,8 +830,8 @@ void launch_fattn(
     const int cc  = ggml_cuda_info().devices[id].cc;
     const int nsm = ggml_cuda_info().devices[id].nsm;
 
-    ggml_cuda_pool_alloc<half>   K_f16(pool);
-    ggml_cuda_pool_alloc<half>   V_f16(pool);
+    ggml_cuda_pool_alloc<half>    K_f16(pool);
+    ggml_cuda_pool_alloc<half>    V_f16(pool);
     ggml_cuda_pool_alloc<int>    KV_max(pool);
     ggml_cuda_pool_alloc<float>  dst_tmp(pool);
     ggml_cuda_pool_alloc<float2> dst_tmp_meta(pool);
@@ -870,10 +870,12 @@ void launch_fattn(
             nb12 = K->ne[1] * nb11;
             nb13 = K->ne[2] * nb12;
         }
+
         K_data = (char *) K_f16.ptr;
     }
 
     if (V && need_f16_V && V->type != GGML_TYPE_F16) {
+
         const size_t bs = ggml_blck_size(V->type);
         const size_t ts = ggml_type_size(V->type);
 
@@ -919,7 +921,7 @@ void launch_fattn(
 
         KV_max.alloc(ne_KV_max);
         flash_attn_mask_to_KV_max<ncols1><<<blocks_num_KV_max, block_dim_KV_max, 0, main_stream>>>
-            ((const half2 *) mask->data, KV_max.ptr, iter_k, s31, s33);
+        ((const half2 *) mask->data, KV_max.ptr, iter_k, s31, s33);
         CUDA_CHECK(cudaGetLastError());
     }
 
@@ -1037,7 +1039,6 @@ void launch_fattn(
         mask ? mask->ne[1] : 0, mask ? mask->ne[2] : 0, mask ? mask->ne[3] : 0,
         mask ? mask->nb[1] : 0, mask ? mask->nb[2] : 0, mask ? mask->nb[3] : 0
     );
-    // }
     CUDA_CHECK(cudaGetLastError());
 
     if (stream_k) {
@@ -1048,6 +1049,10 @@ void launch_fattn(
                 flash_attn_stream_k_fixup<half, DV, ncols1, ncols2>
                 <<<blocks_num_combine, block_dim_combine, 0, main_stream>>>
                 ((half *) KQV->data, dst_tmp_meta.ptr, Q->ne[1], Q->ne[2], Q->ne[3], K->ne[1]);
+            else if (dst->type == GGML_TYPE_BF16)
+                flash_attn_stream_k_fixup<nv_bfloat16, DV, ncols1, ncols2>
+                <<<blocks_num_combine, block_dim_combine, 0, main_stream>>>
+                ((nv_bfloat16 *) KQV->data, dst_tmp_meta.ptr, Q->ne[1], Q->ne[2], Q->ne[3], K->ne[1]);
             else if (dst->type == GGML_TYPE_F32)
                 flash_attn_stream_k_fixup<float, DV, ncols1, ncols2>
                 <<<blocks_num_combine, block_dim_combine, 0, main_stream>>>

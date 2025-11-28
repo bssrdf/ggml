@@ -13,6 +13,7 @@ typedef tile<16, 16, float> tile_C_KQ_16;
 typedef tile<16,  4, half2> tile_C_VKQ;
 typedef tile<16,  8, half2> tile_C_VKQ_16;
 
+
 // Config options for specific head sizes.
 // Should not affect results, only speed/register pressure/shared memory use.
 //
@@ -882,6 +883,9 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
                     if constexpr (std::is_same_v<T2, float2>) {
                         const float2 tmp = Q_f2[(jt*ncols1 + j)*stride_Q1 + c*stride_Q2 + k];
                         tile_Q[jc*stride_tile_Q + k] = scale_h2 * make_half2(tmp.x, tmp.y);
+                    } else if constexpr (std::is_same_v<T2, nv_bfloat162>) {
+                        const nv_bfloat162 tmp = Q_f2[(jt*ncols1 + j)*stride_Q1 + c*stride_Q2 + k];
+                        tile_Q[jc*stride_tile_Q + k] = scale_h2 * make_half2(__bfloat162float(tmp.x), __bfloat162float(tmp.y));
                     } else {
                         tile_Q[jc*stride_tile_Q + k] = scale_h2 * Q_f2[(jt*ncols1 + j)*stride_Q1 + c*stride_Q2 + k];
                     }
@@ -1234,6 +1238,8 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
                         } else {
                             if constexpr (std::is_same_v<T2, float2>) {
                                 dstk[((jt*ncols1 + j_dst)*ne02 + c_dst)*(DV/2) + k00 + k] = dstk_val;
+                            } else if constexpr (std::is_same_v<T2, nv_bfloat162>) {
+                                dstk[((jt*ncols1 + j_dst)*ne02 + c_dst)*(DV/2) + k00 + k] = __float22bfloat162_rn(dstk_val);
                             } else {
                                 dstk[((jt*ncols1 + j_dst)*ne02 + c_dst)*(DV/2) + k00 + k] = make_half2(dstk_val.x, dstk_val.y);
                             }
@@ -1469,11 +1475,14 @@ void ggml_cuda_flash_attn_ext_mma_f16_case(ggml_backend_cuda_context & ctx, ggml
     memcpy(&logit_softcap, (const float *) KQV->op_params + 2, sizeof(float));
 
     fattn_kernel_t<half> fattn_kernel_f16;
+    fattn_kernel_t<nv_bfloat16> fattn_kernel_bf16;
     fattn_kernel_t<float> fattn_kernel;
     if (logit_softcap == 0.0f) {
         constexpr bool use_logit_softcap = false;
         if(dst->type == GGML_TYPE_F16)
             fattn_kernel_f16 = flash_attn_ext_f16<half, half2, DKQ, DV, ncols1, ncols2, nwarps, ntiles, use_logit_softcap, mla>;
+        else if(dst->type == GGML_TYPE_BF16)
+            fattn_kernel_bf16 = flash_attn_ext_f16<nv_bfloat16, nv_bfloat162, DKQ, DV, ncols1, ncols2, nwarps, ntiles, use_logit_softcap, mla>;
         else if (dst->type == GGML_TYPE_F32)
             fattn_kernel = flash_attn_ext_f16<float, float2, DKQ, DV, ncols1, ncols2, nwarps, ntiles, use_logit_softcap, mla>;
         else
@@ -1484,6 +1493,8 @@ void ggml_cuda_flash_attn_ext_mma_f16_case(ggml_backend_cuda_context & ctx, ggml
         if (!shared_memory_limit_raised[id]) {
             if(dst->type == GGML_TYPE_F16)
                 CUDA_CHECK(cudaFuncSetAttribute(fattn_kernel_f16, cudaFuncAttributeMaxDynamicSharedMemorySize, nbytes_shared_total));
+            else if(dst->type == GGML_TYPE_BF16)
+                CUDA_CHECK(cudaFuncSetAttribute(fattn_kernel_bf16, cudaFuncAttributeMaxDynamicSharedMemorySize, nbytes_shared_total));
             else
                 CUDA_CHECK(cudaFuncSetAttribute(fattn_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, nbytes_shared_total));
             shared_memory_limit_raised[id] = true;
@@ -1493,6 +1504,8 @@ void ggml_cuda_flash_attn_ext_mma_f16_case(ggml_backend_cuda_context & ctx, ggml
         constexpr bool use_logit_softcap = true;
         if(dst->type == GGML_TYPE_F16)
             fattn_kernel_f16 = flash_attn_ext_f16<half, half2, DKQ, DV, ncols1, ncols2, nwarps, ntiles, use_logit_softcap, mla>;
+        else if(dst->type == GGML_TYPE_BF16)
+            fattn_kernel_bf16 = flash_attn_ext_f16<nv_bfloat16, nv_bfloat162, DKQ, DV, ncols1, ncols2, nwarps, ntiles, use_logit_softcap, mla>;
         else if (dst->type == GGML_TYPE_F32)
             fattn_kernel = flash_attn_ext_f16<float, float2, DKQ, DV, ncols1, ncols2, nwarps, ntiles, use_logit_softcap, mla>;
         else
@@ -1502,6 +1515,8 @@ void ggml_cuda_flash_attn_ext_mma_f16_case(ggml_backend_cuda_context & ctx, ggml
         if (!shared_memory_limit_raised[id]) {
             if(dst->type == GGML_TYPE_F16)
                 CUDA_CHECK(cudaFuncSetAttribute(fattn_kernel_f16, cudaFuncAttributeMaxDynamicSharedMemorySize, nbytes_shared_total));
+            else if(dst->type == GGML_TYPE_BF16)
+                CUDA_CHECK(cudaFuncSetAttribute(fattn_kernel_bf16, cudaFuncAttributeMaxDynamicSharedMemorySize, nbytes_shared_total));
             else
                 CUDA_CHECK(cudaFuncSetAttribute(fattn_kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, nbytes_shared_total));
             shared_memory_limit_raised[id] = true;
@@ -1511,6 +1526,9 @@ void ggml_cuda_flash_attn_ext_mma_f16_case(ggml_backend_cuda_context & ctx, ggml
     if(dst->type == GGML_TYPE_F16)
         launch_fattn<half, DV, ncols1, ncols2>
         (ctx, dst, fattn_kernel_f16, nwarps, nbytes_shared_total, FATTN_KQ_STRIDE, true, true, true);
+    else if (dst->type == GGML_TYPE_BF16)
+        launch_fattn<nv_bfloat16, DV, ncols1, ncols2>
+        (ctx, dst, fattn_kernel_bf16, nwarps, nbytes_shared_total, FATTN_KQ_STRIDE, true, true, true);
     else if (dst->type == GGML_TYPE_F32)
         launch_fattn<float, DV, ncols1, ncols2>
         (ctx, dst, fattn_kernel, nwarps, nbytes_shared_total, FATTN_KQ_STRIDE, true, true, true);

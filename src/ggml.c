@@ -5106,9 +5106,9 @@ struct ggml_tensor * ggml_flash_attn_ext(
     // permute(0, 2, 1, 3)
     int64_t ne[4] = { v->ne[0], q->ne[2], q->ne[1], q->ne[3] };
     enum ggml_type result_type;
-    if(q->type == GGML_TYPE_F16 || k->type == GGML_TYPE_F16 || v->type == GGML_TYPE_F16) {
+    if(q->type == GGML_TYPE_F16) {
         result_type = GGML_TYPE_F16;
-    } else if(q->type == GGML_TYPE_BF16 || k->type == GGML_TYPE_BF16 || v->type == GGML_TYPE_BF16) {
+    } else if(q->type == GGML_TYPE_BF16) {
         result_type = GGML_TYPE_BF16;
     } else {
         result_type = GGML_TYPE_F32;
