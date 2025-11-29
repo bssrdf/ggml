@@ -3092,8 +3092,8 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                     continue;
                 }
 
-                static bool disable_fusion = (getenv("GGML_CUDA_DISABLE_FUSION") != nullptr);
-                // static bool disable_fusion = true;
+                // static bool disable_fusion = (getenv("GGML_CUDA_DISABLE_FUSION") != nullptr);
+                static bool disable_fusion = true;
                 if (!disable_fusion) {
 
                     if (ggml_cuda_can_fuse(cgraph, i, ggml_cuda_topk_moe_ops(/*with norm*/ true), {})) {
@@ -3268,222 +3268,344 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                 // const char *t_name = "node_3113"; // not same
                 // const char *t_name = "node_3024"; // not same
                 // const char *t_name = "node_3102"; // not same
-                // int disp_n = 128;
-                // bool ab = false, abi=false;
-                // CUDA_CHECK(cudaDeviceSynchronize());
-                // // if(strcmp(node->name, t_name) == 0) {
+                int disp_n = 128;
+                bool ab = false, abi=false;
                 // if(node->type == GGML_TYPE_F16){
+                // if(node->op == GGML_OP_CONCAT){
                 //     ggml_tensor * src = node;
-                //     printf(" %s, %s, %s, (%zu, %zu, %zu, %zu)\n", src->name,
+                //     printf("node %s, %s, %s, (%zu, %zu, %zu, %zu)\n", src->name,
                 //                ggml_type_name(src->type), ggml_op_name(src->op), src->ne[0], src->ne[1],
                 //             src->ne[2], src->ne[3]);
-                //     if(src->type == GGML_TYPE_F16){
-                //         std::vector<half> data(ggml_nelements(src));
-                //         ggml_backend_tensor_get(src, data.data(), 0, ggml_nbytes(src));
-                //         printf("[");
-                //         float vmin=1.e16f, vmax=-1.e16f;
-                //         int nt = data.size();
-                //         for(int k = 0; k < nt; k++) {
-                //             float val = __half2float(data[k]);
-                //             vmin = min(vmin, val);
-                //             vmax = max(vmax, val);
-                //             if(k < disp_n)
-                //                 printf("%f,", val);
-                //             if(isnan(val)){
-                //                ab = true;
-                //                break;
-                //             }
-                //             if(isinf(val)){
-                //                abi = true;
-                //                break;
-                //             }
-                //         }
-                //         printf("] vmin,vmax %f, %f\n", vmin,vmax);
-                //         // if(ab) abort();
-                //     }
-                //     if(ab || abi){
-                //         if (ab)
-                //             printf(" is nan \n");
-                //         else
-                //             printf(" is inf \n");
-                //     // if(src->type == GGML_TYPE_F32){
-                //     //     std::vector<float> data(ggml_nelements(src));
-                //     //     ggml_backend_tensor_get(src, data.data(), 0, ggml_nbytes(src));
-                //     //     int nt = data.size() <= 128 ? data.size() : 128;
-                //     //     printf("[");
-                //     //     for(int k = 0; k < nt; k++) {
-                //     //         float val = data[k];
-                //     //         printf("%f,", val);
-                //     //     }
-                //     //     printf("]\n");
-                //     // }
                 //     if(node->src[0]){
-                //         ggml_tensor * src = node->src[0];
-                //         printf(" %s, %s, (%zu, %zu, %zu, %zu)\n", src->name,
-                //                     ggml_op_name(src->op), src->ne[0], src->ne[1],
+                //         src = node->src[0];
+                //         printf("src0 %s, %s, %s, (%zu, %zu, %zu, %zu)\n", src->name,
+                //                 ggml_type_name(src->type), ggml_op_name(src->op), src->ne[0], src->ne[1],
                 //                 src->ne[2], src->ne[3]);
-                //         if(src->type == GGML_TYPE_F16){
-                //             std::vector<half> data(ggml_nelements(src));
-                //             ggml_backend_tensor_get(src, data.data(), 0, ggml_nbytes(src));
-                //             printf("src0 [");
-                //             float vmin=1.e16f, vmax=-1.e16f;
-                //             // int nt = data.size() <= 128 ? data.size() : 128;
-                //             int nt = data.size();
-                //             for(int k = 0; k < nt; k++) {
-                //                 float val = __half2float(data[k]);
-                //                 vmin = min(vmin, val);
-                //                 vmax = max(vmax, val);
-                //                 if(k < disp_n)
-                //                     printf("%f,", val);
-                //             }
-                //             printf("]\n");
-                //             printf(" vmin, vmax: %f, %f \n", vmin, vmax);
-                //             // if(ab) abort();
-                //         }
-                //         if(src->type == GGML_TYPE_F32){
-                //             std::vector<float> data(ggml_nelements(src));
-                //             ggml_backend_tensor_get(src, data.data(), 0, ggml_nbytes(src));
-                //             float vmin=1.e16f, vmax=-1.e16f;
-                //             // int nt = data.size() <= 128 ? data.size() : 128;
-                //             int nt = data.size();
-                //             printf("src0 [");
-                //             for(int k = 0; k < nt; k++) {
-                //                 float val = data[k];
-                //                 vmin = min(vmin, val);
-                //                 vmax = max(vmax, val);
-                //                 if(k < disp_n)
-                //                     printf("%f,", val);
-                //             }
-                //             printf("]\n");
-                //             printf(" vmin, vmax: %f, %f \n", vmin, vmax);
-                //         }
                 //     }
                 //     if(node->src[1]){
-                //         ggml_tensor * src = node->src[1];
-                //         printf(" %s, %s, (%zu, %zu, %zu, %zu)\n", src->name,
-                //                     ggml_op_name(src->op), src->ne[0], src->ne[1],
+                //         src = node->src[1];
+                //         printf("src1 %s, %s, %s, (%zu, %zu, %zu, %zu)\n", src->name,
+                //                 ggml_type_name(src->type), ggml_op_name(src->op), src->ne[0], src->ne[1],
                 //                 src->ne[2], src->ne[3]);
-                //         if(src->type == GGML_TYPE_F16){
-                //             std::vector<half> data(ggml_nelements(src));
-                //             ggml_backend_tensor_get(src, data.data(), 0, ggml_nbytes(src));
-                //             printf("src1 [");
-                //             float vmin=1.e16f, vmax=-1.e16f;
-                //             // int nt = data.size() <= 128 ? data.size() : 128;
-                //             int nt = data.size();
-                //             for(int k = 0; k < nt; k++) {
-                //                 float val = __half2float(data[k]);
-                //                 vmin = min(vmin, val);
-                //                 vmax = max(vmax, val);
-                //                 if(k < disp_n)
-                //                     printf("%f,", val);
-                //             }
-                //             printf("]\n");
-                //             printf(" vmin, vmax: %f, %f \n", vmin, vmax);
-                //             // if(ab) abort();
-                //         }
-                //         if(src->type == GGML_TYPE_F32){
-                //             std::vector<float> data(ggml_nelements(src));
-                //             ggml_backend_tensor_get(src, data.data(), 0, ggml_nbytes(src));
-                //             float vmin=1.e16f, vmax=-1.e16f;
-                //             // int nt = data.size() <= 128 ? data.size() : 128;
-                //             int nt = data.size();
-                //             printf("src1 [");
-                //             for(int k = 0; k < nt; k++) {
-                //                 float val = data[k];
-                //                 vmin = min(vmin, val);
-                //                 vmax = max(vmax, val);
-                //                 if(k < disp_n)
-                //                     printf("%f,", val);
-                //             }
-                //             printf("]\n");
-                //             printf(" vmin, vmax: %f, %f \n", vmin, vmax);
-                //         }
                 //     }
-                //     if(node->src[2]){
-                //         ggml_tensor * src = node->src[2];
-                //         printf(" %s, %s, (%zu, %zu, %zu, %zu)\n", src->name,
-                //                     ggml_op_name(src->op), src->ne[0], src->ne[1],
-                //                 src->ne[2], src->ne[3]);
-                //         if(src->type == GGML_TYPE_F16){
-                //             std::vector<half> data(ggml_nelements(src));
-                //             ggml_backend_tensor_get(src, data.data(), 0, ggml_nbytes(src));
-                //             printf("src2 [");
-                //             float vmin=1.e16f, vmax=-1.e16f;
-                //             // int nt = data.size() <= 128 ? data.size() : 128;
-                //             int nt = data.size();
-                //             for(int k = 0; k < nt; k++) {
-                //                 float val = __half2float(data[k]);
-                //                 vmin = min(vmin, val);
-                //                 vmax = max(vmax, val);
-                //                 if(k < disp_n)
-                //                     printf("%f,", val);
-                //             }
-                //             printf("]\n");
-                //             printf(" vmin, vmax: %f, %f \n", vmin, vmax);
-                //             // if(ab) abort();
-                //         }
-                //         if(src->type == GGML_TYPE_F32){
-                //             std::vector<float> data(ggml_nelements(src));
-                //             ggml_backend_tensor_get(src, data.data(), 0, ggml_nbytes(src));
-                //             float vmin=1.e16f, vmax=-1.e16f;
-                //             // int nt = data.size() <= 128 ? data.size() : 128;
-                //             int nt = data.size();
-                //             printf("src2 [");
-                //             for(int k = 0; k < nt; k++) {
-                //                 float val = data[k];
-                //                 vmin = min(vmin, val);
-                //                 vmax = max(vmax, val);
-                //                 if(k < disp_n)
-                //                     printf("%f,", val);
-                //             }
-                //             printf("]\n");
-                //             printf(" vmin, vmax: %f, %f \n", vmin, vmax);
-                //         }
-                //     }
-                //     if(node->src[3]){
-                //         ggml_tensor * src = node->src[3];
-                //         printf(" %s, %s, (%zu, %zu, %zu, %zu)\n", src->name,
-                //                     ggml_op_name(src->op), src->ne[0], src->ne[1],
-                //                 src->ne[2], src->ne[3]);
-                //         if(src->type == GGML_TYPE_F16){
-                //             std::vector<half> data(ggml_nelements(src));
-                //             ggml_backend_tensor_get(src, data.data(), 0, ggml_nbytes(src));
-                //             printf("src3 [");
-                //             float vmin=1.e16f, vmax=-1.e16f;
-                //             // int nt = data.size() <= 128 ? data.size() : 128;
-                //             int nt = data.size();
-                //             for(int k = 0; k < nt; k++) {
-                //                 float val = __half2float(data[k]);
-                //                 vmin = min(vmin, val);
-                //                 vmax = max(vmax, val);
-                //                 if(k < disp_n)
-                //                     printf("%f,", val);
-                //             }
-                //             printf("]\n");
-                //             printf(" vmin, vmax: %f, %f \n", vmin, vmax);
-                //             // if(ab) abort();
-                //         }
-                //         if(src->type == GGML_TYPE_F32){
-                //             std::vector<float> data(ggml_nelements(src));
-                //             ggml_backend_tensor_get(src, data.data(), 0, ggml_nbytes(src));
-                //             float vmin=1.e16f, vmax=-1.e16f;
-                //             // int nt = data.size() <= 128 ? data.size() : 128;
-                //             int nt = data.size();
-                //             printf("src3 [");
-                //             for(int k = 0; k < nt; k++) {
-                //                 float val = data[k];
-                //                 vmin = min(vmin, val);
-                //                 vmax = max(vmax, val);
-                //                 if(k < disp_n)
-                //                     printf("%f,", val);
-                //             }
-                //             printf("]\n");
-                //             printf(" vmin, vmax: %f, %f \n", vmin, vmax);
-                //         }
-                //     }
-                //     abort();
                 // }
-                // }
+                CUDA_CHECK(cudaDeviceSynchronize());
+                // // if(strcmp(node->name, t_name) == 0) {
+                // if(node->type == GGML_TYPE_BF16){
+                if(node->type == GGML_TYPE_F32){
+                // if(false){
+                // if(node->type == GGML_TYPE_F16){
+                    ggml_tensor * src = node;
+                    printf(" %s, %s, %s, (%zu, %zu, %zu, %zu)\n", src->name,
+                               ggml_type_name(src->type), ggml_op_name(src->op), src->ne[0], src->ne[1],
+                            src->ne[2], src->ne[3]);
+                    // src = node->src[0];
+                    // printf(" %s, %s, %s (%zu, %zu, %zu, %zu)\n", src->name,
+                    //             ggml_type_name(src->type), ggml_op_name(src->op), src->ne[0], src->ne[1],
+                    //         src->ne[2], src->ne[3]);
+                    // src = node;
+                    
+                    int pos = -1;
+                    if(src->type == GGML_TYPE_F32){
+                    // if(src->type == GGML_TYPE_F16){
+                    // if(src->type == GGML_TYPE_BF16){
+                        // std::vector<half> data(ggml_nelements(src));
+                        // std::vector<nv_bfloat16> data(ggml_nelements(src));
+                        std::vector<float> data(ggml_nelements(src));
+                        ggml_backend_tensor_get(src, data.data(), 0, ggml_nbytes(src));
+                        printf("[");
+                        float vmin=1.e16f, vmax=-1.e16f;
+                        int nt = data.size();
+                        for(int k = 0; k < nt; k++) {
+                            // float val = __half2float(data[k]);
+                            // float val = __bfloat162float(data[k]);
+                            float val = data[k];
+                            vmin = min(vmin, val);
+                            vmax = max(vmax, val);
+                            if(k < disp_n)
+                                printf("%f,", val);
+                            if(isnan(val)){
+                               ab = true;
+                               pos = k;
+                               break;
+                            }
+                            if(isinf(val)){
+                               abi = true;
+                               pos = k;
+                               break;
+                            }
+                        }
+                        printf("] vmin,vmax %f, %f\n", vmin,vmax);
+                        // if(ab) abort();
+                    }
+                 //}
+                    if(ab || abi){
+                        if (ab)
+                            printf(" is nan \n");
+                        else
+                            printf(" is inf \n");
+                        // std::vector<nv_bfloat16> data(ggml_nelements(src));
+                        std::vector<float> data(ggml_nelements(src));
+                        ggml_backend_tensor_get(src, data.data(), 0, ggml_nbytes(src));
+                        printf("[");
+                        int nt = data.size();
+                        for(int k = 0; k < nt; k++) {
+                            // float val = __half2float(data[k]);
+                            // float val = __bfloat162float(data[k]);
+                            float val = data[k];
+                            if(k > pos-100 && k < pos+100)
+                                printf("%f,", val);
+                        }
+                    // if(src->type == GGML_TYPE_F32){
+                    //     std::vector<float> data(ggml_nelements(src));
+                    //     ggml_backend_tensor_get(src, data.data(), 0, ggml_nbytes(src));
+                    //     int nt = data.size() <= 128 ? data.size() : 128;
+                    //     printf("[");
+                    //     for(int k = 0; k < nt; k++) {
+                    //         float val = data[k];
+                    //         printf("%f,", val);
+                    //     }
+                        printf("]\n");
+                    // }
+                    if(node->src[0]){
+                        ggml_tensor * src = node->src[0];
+                        printf("00 %s, %s, %s (%zu, %zu, %zu, %zu)\n", src->name,
+                                    ggml_type_name(src->type), ggml_op_name(src->op), src->ne[0], src->ne[1],
+                                src->ne[2], src->ne[3]);
+                        if(src->type == GGML_TYPE_F16){
+                            std::vector<half> data(ggml_nelements(src));
+                            ggml_backend_tensor_get(src, data.data(), 0, ggml_nbytes(src));
+                            printf("src0 [");
+                            float vmin=1.e16f, vmax=-1.e16f;
+                            // int nt = data.size() <= 128 ? data.size() : 128;
+                            int nt = data.size();
+                            for(int k = 0; k < nt; k++) {
+                                float val = __half2float(data[k]);
+                                vmin = min(vmin, val);
+                                vmax = max(vmax, val);
+                                if(k < disp_n)
+                                    printf("%f,", val);
+                            }
+                            printf("]\n");
+                            printf(" vmin, vmax: %f, %f \n", vmin, vmax);
+                            // if(ab) abort();
+                        }
+                        if(src->type == GGML_TYPE_BF16){
+                            std::vector<nv_bfloat16> data(ggml_nelements(src));
+                            ggml_backend_tensor_get(src, data.data(), 0, ggml_nbytes(src));
+                            printf("src0 [");
+                            float vmin=1.e16f, vmax=-1.e16f;
+                            // int nt = data.size() <= 128 ? data.size() : 128;
+                            int nt = data.size();
+                            for(int k = 0; k < nt; k++) {
+                                float val = __bfloat162float(data[k]);
+                                vmin = min(vmin, val);
+                                vmax = max(vmax, val);
+                                if(k < disp_n)
+                                    printf("%f,", val);
+                            }
+                            printf("]\n");
+                            printf(" vmin, vmax: %f, %f \n", vmin, vmax);
+                            // if(ab) abort();
+                        }
+                        if(src->type == GGML_TYPE_F32){
+                            std::vector<float> data(ggml_nelements(src));
+                            ggml_backend_tensor_get(src, data.data(), 0, ggml_nbytes(src));
+                            float vmin=1.e16f, vmax=-1.e16f;
+                            // int nt = data.size() <= 128 ? data.size() : 128;
+                            int nt = data.size();
+                            printf("src0 [");
+                            for(int k = 0; k < nt; k++) {
+                                float val = data[k];
+                                vmin = min(vmin, val);
+                                vmax = max(vmax, val);
+                                if(k < disp_n)
+                                    printf("%f,", val);
+                            }
+                            printf("]\n");
+                            printf(" vmin, vmax: %f, %f \n", vmin, vmax);
+                        }
+                    }
+                    if(node->src[1]){
+                        ggml_tensor * src = node->src[1];
+                        printf("AA %s, %s, %s, (%zu, %zu, %zu, %zu)\n", src->name,
+                                    ggml_type_name(src->type), ggml_op_name(src->op), src->ne[0], src->ne[1],
+                                src->ne[2], src->ne[3]);
+                        if(src->type == GGML_TYPE_F16){
+                            std::vector<half> data(ggml_nelements(src));
+                            ggml_backend_tensor_get(src, data.data(), 0, ggml_nbytes(src));
+                            printf("src1 [");
+                            float vmin=1.e16f, vmax=-1.e16f;
+                            // int nt = data.size() <= 128 ? data.size() : 128;
+                            int nt = data.size();
+                            for(int k = 0; k < nt; k++) {
+                                float val = __half2float(data[k]);
+                                vmin = min(vmin, val);
+                                vmax = max(vmax, val);
+                                if(k < disp_n)
+                                    printf("%f,", val);
+                            }
+                            printf("]\n");
+                            printf(" vmin, vmax: %f, %f \n", vmin, vmax);
+                            // if(ab) abort();
+                        }
+                        if(src->type == GGML_TYPE_BF16){
+                            std::vector<nv_bfloat16> data(ggml_nelements(src));
+                            ggml_backend_tensor_get(src, data.data(), 0, ggml_nbytes(src));
+                            printf("src1 [");
+                            float vmin=1.e16f, vmax=-1.e16f;
+                            // int nt = data.size() <= 128 ? data.size() : 128;
+                            int nt = data.size();
+                            for(int k = 0; k < nt; k++) {
+                                float val = __bfloat162float(data[k]);
+                                vmin = min(vmin, val);
+                                vmax = max(vmax, val);
+                                if(k < disp_n)
+                                    printf("%f,", val);
+                            }
+                            printf("]\n");
+                            printf(" vmin, vmax: %f, %f \n", vmin, vmax);
+                            // if(ab) abort();
+                        }
+                        if(src->type == GGML_TYPE_F32){
+                            std::vector<float> data(ggml_nelements(src));
+                            ggml_backend_tensor_get(src, data.data(), 0, ggml_nbytes(src));
+                            float vmin=1.e16f, vmax=-1.e16f;
+                            // int nt = data.size() <= 128 ? data.size() : 128;
+                            int nt = data.size();
+                            printf("src1 [");
+                            for(int k = 0; k < nt; k++) {
+                                float val = data[k];
+                                vmin = min(vmin, val);
+                                vmax = max(vmax, val);
+                                if(k < disp_n)
+                                    printf("%f,", val);
+                            }
+                            printf("]\n");
+                            printf(" vmin, vmax: %f, %f \n", vmin, vmax);
+                        }
+                    }
+                    if(node->src[2]){
+                        ggml_tensor * src = node->src[2];
+                        printf("BB %s, %s, %s (%zu, %zu, %zu, %zu)\n", src->name,
+                                   ggml_type_name(src->type), ggml_op_name(src->op), src->ne[0], src->ne[1],
+                                src->ne[2], src->ne[3]);
+                        if(src->type == GGML_TYPE_F16){
+                            std::vector<half> data(ggml_nelements(src));
+                            ggml_backend_tensor_get(src, data.data(), 0, ggml_nbytes(src));
+                            printf("src2 [");
+                            float vmin=1.e16f, vmax=-1.e16f;
+                            // int nt = data.size() <= 128 ? data.size() : 128;
+                            int nt = data.size();
+                            for(int k = 0; k < nt; k++) {
+                                float val = __half2float(data[k]);
+                                vmin = min(vmin, val);
+                                vmax = max(vmax, val);
+                                if(k < disp_n)
+                                    printf("%f,", val);
+                            }
+                            printf("]\n");
+                            printf(" vmin, vmax: %f, %f \n", vmin, vmax);
+                            // if(ab) abort();
+                        }
+                        if(src->type == GGML_TYPE_BF16){
+                            std::vector<nv_bfloat16> data(ggml_nelements(src));
+                            ggml_backend_tensor_get(src, data.data(), 0, ggml_nbytes(src));
+                            printf("src2 [");
+                            float vmin=1.e16f, vmax=-1.e16f;
+                            // int nt = data.size() <= 128 ? data.size() : 128;
+                            int nt = data.size();
+                            for(int k = 0; k < nt; k++) {
+                                float val = __bfloat162float(data[k]);
+                                vmin = min(vmin, val);
+                                vmax = max(vmax, val);
+                                if(k < disp_n)
+                                    printf("%f,", val);
+                            }
+                            printf("]\n");
+                            printf(" vmin, vmax: %f, %f \n", vmin, vmax);
+                            // if(ab) abort();
+                        }
+                        if(src->type == GGML_TYPE_F32){
+                            std::vector<float> data(ggml_nelements(src));
+                            ggml_backend_tensor_get(src, data.data(), 0, ggml_nbytes(src));
+                            float vmin=1.e16f, vmax=-1.e16f;
+                            // int nt = data.size() <= 128 ? data.size() : 128;
+                            int nt = data.size();
+                            printf("src2 [");
+                            for(int k = 0; k < nt; k++) {
+                                float val = data[k];
+                                vmin = min(vmin, val);
+                                vmax = max(vmax, val);
+                                if(k < disp_n)
+                                    printf("%f,", val);
+                            }
+                            printf("]\n");
+                            printf(" vmin, vmax: %f, %f \n", vmin, vmax);
+                        }
+                    }
+                    if(node->src[3]){
+                        ggml_tensor * src = node->src[3];
+                        printf("CC %s, %s, %s, (%zu, %zu, %zu, %zu)\n", src->name,
+                                 ggml_type_name(src->type), ggml_op_name(src->op), src->ne[0], src->ne[1],
+                                src->ne[2], src->ne[3]);
+                        if(src->type == GGML_TYPE_F16){
+                            std::vector<half> data(ggml_nelements(src));
+                            ggml_backend_tensor_get(src, data.data(), 0, ggml_nbytes(src));
+                            printf("src3 [");
+                            float vmin=1.e16f, vmax=-1.e16f;
+                            // int nt = data.size() <= 128 ? data.size() : 128;
+                            int nt = data.size();
+                            for(int k = 0; k < nt; k++) {
+                                float val = __half2float(data[k]);
+                                vmin = min(vmin, val);
+                                vmax = max(vmax, val);
+                                if(k < disp_n)
+                                    printf("%f,", val);
+                            }
+                            printf("]\n");
+                            printf(" vmin, vmax: %f, %f \n", vmin, vmax);
+                            // if(ab) abort();
+                        }
+                        if(src->type == GGML_TYPE_BF16){
+                            std::vector<nv_bfloat16> data(ggml_nelements(src));
+                            ggml_backend_tensor_get(src, data.data(), 0, ggml_nbytes(src));
+                            printf("src3 [");
+                            float vmin=1.e16f, vmax=-1.e16f;
+                            // int nt = data.size() <= 128 ? data.size() : 128;
+                            int nt = data.size();
+                            for(int k = 0; k < nt; k++) {
+                                float val = __bfloat162float(data[k]);
+                                vmin = min(vmin, val);
+                                vmax = max(vmax, val);
+                                if(k < disp_n)
+                                    printf("%f,", val);
+                            }
+                            printf("]\n");
+                            printf(" vmin, vmax: %f, %f \n", vmin, vmax);
+                            // if(ab) abort();
+                        }
+                        if(src->type == GGML_TYPE_F32){
+                            std::vector<float> data(ggml_nelements(src));
+                            ggml_backend_tensor_get(src, data.data(), 0, ggml_nbytes(src));
+                            float vmin=1.e16f, vmax=-1.e16f;
+                            // int nt = data.size() <= 128 ? data.size() : 128;
+                            int nt = data.size();
+                            printf("src3 [");
+                            for(int k = 0; k < nt; k++) {
+                                float val = data[k];
+                                vmin = min(vmin, val);
+                                vmax = max(vmax, val);
+                                if(k < disp_n)
+                                    printf("%f,", val);
+                            }
+                            printf("]\n");
+                            printf(" vmin, vmax: %f, %f \n", vmin, vmax);
+                        }
+                    }
+                    abort();
+                }
+                }
 
                     // if(src->type == GGML_TYPE_F32){
                     //     std::vector<float> data(ggml_nelements(src));

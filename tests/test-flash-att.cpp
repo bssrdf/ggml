@@ -116,11 +116,13 @@ void load_model(test_model & model, bool use_gpu = false) {
     model.hsk = 128;
     model.hsv = 128;
     model.nh = 24;
-    model.kv = 96;
+    // model.kv = 96;
+    model.kv = 4352;
     model.nb = 4352;
     model.type_KV = GGML_TYPE_F16;
 
-    int64_t kv = 256;
+    // int64_t kv = 256;
+    int64_t kv = 4352;
     int64_t nb = model.nb;
     int64_t nh = model.nh;
 
@@ -132,7 +134,7 @@ void load_model(test_model & model, bool use_gpu = false) {
     std::vector<float> qdata(hsk_padded*nb*nh*model.nr23[0]*model.nr23[1]);
     for (int i = 0; i < hsk_padded*nb*nh*model.nr23[0]*model.nr23[1]; i++) {
         float r = -1.f + static_cast <float> (rand()) /( static_cast <float> (RAND_MAX/(1.f-(-1.f))));
-        qdata[i] = r*10;
+        qdata[i] = r*8;
     }
 
     // Convert adata to fp16 format
@@ -147,7 +149,7 @@ void load_model(test_model & model, bool use_gpu = false) {
     for (int i = 0; i < hsk_padded*kv*nh*model.nr23[1]; i++) {
         // bdata[i] = 1.5f;
         float r = -1.f + static_cast <float> (rand()) /( static_cast <float> (RAND_MAX/(1.f-(-1.f))));
-        kdata[i] = r*10;
+        kdata[i] = r*5;
     }
 
     std::vector<ggml_fp16_t> hkdata(hsk_padded*kv*nh*model.nr23[1]);
@@ -160,7 +162,7 @@ void load_model(test_model & model, bool use_gpu = false) {
     for (int i = 0; i < hsv_padded*kv*nh*model.nr23[1]; i++) {
         // bdata[i] = 1.5f;
         float r = -1.f + static_cast <float> (rand()) /( static_cast <float> (RAND_MAX/(1.f-(-1.f))));
-        vdata[i] = r*15;
+        vdata[i] = r*75;
     }
 
     std::vector<ggml_fp16_t> hvdata(hsv_padded*kv*nh*model.nr23[1]);
@@ -387,26 +389,26 @@ struct ggml_cgraph * build_graph(const test_model& model) {
 
     // split conv2d in fundamental methods for test unit
     // struct ggml_tensor* res = ggml_mul_mat(ctx0, model.a, model.b);
-    ggml_tensor * out32 = ggml_flash_attn_ext(ctx0, model.q32, model.k32, model.v32, model.m,
-             1.0f/sqrtf(model.hsk), model.max_bias, model.logit_softcap);
-    // ggml_tensor * out32 = ggml_flash_attn_ext(ctx0, model.q32, model.k32, model.v32, nullptr,
+    // ggml_tensor * out32 = ggml_flash_attn_ext(ctx0, model.q32, model.k32, model.v32, model.m,
     //          1.0f/sqrtf(model.hsk), model.max_bias, model.logit_softcap);
+    ggml_tensor * out32 = ggml_flash_attn_ext(ctx0, model.q32, model.k32, model.v32, nullptr,
+             1.0f/sqrtf(model.hsk), model.max_bias, model.logit_softcap);
     ggml_set_name(out32, "res32");
     ggml_build_forward_expand(gf, out32);
 
-    ggml_tensor * out16 = ggml_flash_attn_ext(ctx0, model.q16, model.k16, model.v16, model.m,
-             1.0f/sqrtf(model.hsk), model.max_bias, model.logit_softcap);
-    // ggml_tensor * out16 = ggml_flash_attn_ext(ctx0, model.q16, model.k16, model.v16, nullptr,
+    // ggml_tensor * out16 = ggml_flash_attn_ext(ctx0, model.q16, model.k16, model.v16, model.m,
     //          1.0f/sqrtf(model.hsk), model.max_bias, model.logit_softcap);
+    ggml_tensor * out16 = ggml_flash_attn_ext(ctx0, model.q16, model.k16, model.v16, nullptr,
+             1.0f/sqrtf(model.hsk), model.max_bias, model.logit_softcap);
     ggml_set_name(out16, "res16");
     ggml_build_forward_expand(gf, out16);
     int64_t *ne = out16->ne;
     printf("kqv: scale = %f, (%zu, %zu, %zu, %zu) \n", 1.0f/sqrtf(model.hsk), ne[0], ne[1], ne[2], ne[3]);
 
-    ggml_tensor * out_bf16 = ggml_flash_attn_ext(ctx0, model.q_bf16, model.k_bf16, model.v_bf16, model.m,
-             1.0f/sqrtf(model.hsk), model.max_bias, model.logit_softcap);
-    // ggml_tensor * out16 = ggml_flash_attn_ext(ctx0, model.q16, model.k16, model.v16, nullptr,
+    // ggml_tensor * out_bf16 = ggml_flash_attn_ext(ctx0, model.q_bf16, model.k_bf16, model.v_bf16, model.m,
     //          1.0f/sqrtf(model.hsk), model.max_bias, model.logit_softcap);
+    ggml_tensor * out_bf16 = ggml_flash_attn_ext(ctx0, model.q_bf16, model.k_bf16, model.v_bf16, nullptr,
+             1.0f/sqrtf(model.hsk), model.max_bias, model.logit_softcap);
     ggml_set_name(out_bf16, "res_bf16");
     ggml_build_forward_expand(gf, out_bf16);
 
@@ -477,19 +479,19 @@ int main(void)
     ggml_backend_tensor_get(gemm_res2, gemm_data2.data(), 0, ggml_nbytes(gemm_res2));
     ggml_backend_tensor_get(gemm_res3, gemm_data3.data(), 0, ggml_nbytes(gemm_res3));
 
-    for(int i = 0; i < gemm_data.size(); i++) {
-        float r16 = ggml_fp16_to_fp32(gemm_data[i]);
-        float rf16 = ggml_bf16_to_fp32(gemm_data3[i]);
-        // printf("%d: %f, %f\n", i, gemm_data2[i], ggml_fp16_to_fp32(gemm_data[i]));
-        float diff = fabs(gemm_data2[i] - r16);
-        float diff1 = fabs(gemm_data2[i] - rf16);
-        // if(diff > 0.001f) {
-        // if(diff > 0.01f || diff1 > 0.01f) {
-            printf("(%f, %f, %f, %f, %f, %d) \n",
-            gemm_data2[i], r16, rf16, diff, diff1, i);
-            // break;
-        // }
-    }
+    // for(int i = 0; i < gemm_data.size(); i++) {
+    //     float r16 = ggml_fp16_to_fp32(gemm_data[i]);
+    //     float rf16 = ggml_bf16_to_fp32(gemm_data3[i]);
+    //     // printf("%d: %f, %f\n", i, gemm_data2[i], ggml_fp16_to_fp32(gemm_data[i]));
+    //     float diff = fabs(gemm_data2[i] - r16);
+    //     float diff1 = fabs(gemm_data2[i] - rf16);
+    //     // if(diff > 0.001f) {
+    //     // if(diff > 0.01f || diff1 > 0.01f) {
+    //         printf("(%f, %f, %f, %f, %f, %d) \n",
+    //         gemm_data2[i], r16, rf16, diff, diff1, i);
+    //         // break;
+    //     // }
+    // }
 
     // for(int i = 0; i < gemm_data.size(); i++) {
     //     float r16 = ggml_fp16_to_fp32(gemm_data[i]);

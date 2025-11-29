@@ -91,8 +91,8 @@ static void ggml_cuda_mul_mat_q_switch_type(ggml_backend_cuda_context & ctx, con
 
 void ggml_cuda_mul_mat_q(
         ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * ids, ggml_tensor * dst) {
-    GGML_ASSERT(        src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_F16);
-    GGML_ASSERT(        dst->type  == GGML_TYPE_F32 || dst->type  == GGML_TYPE_F16);
+    GGML_ASSERT(        src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_F16 || src1->type == GGML_TYPE_BF16);
+    GGML_ASSERT(        dst->type  == GGML_TYPE_F32 || dst->type  == GGML_TYPE_F16 || dst->type  == GGML_TYPE_BF16);
     GGML_ASSERT(!ids || ids->type  == GGML_TYPE_I32); // Optional, used for batched GGML_MUL_MAT_ID.
 
     GGML_TENSOR_BINARY_OP_LOCALS;
@@ -148,6 +148,9 @@ void ggml_cuda_mul_mat_q(
             if (dst->type == GGML_TYPE_F32) {
                 quantize_mmq_q8_1_cuda<float>(src1_d, nullptr, src1_q8_1.get(), src0->type,
                     ne10, s11, s12, s13, ne10_padded, ne11, ne12, ne13, stream);
+            } else if (dst->type == GGML_TYPE_BF16) {
+                quantize_mmq_q8_1_cuda<nv_bfloat16>((const nv_bfloat16 *)src1_d, nullptr, src1_q8_1.get(), src0->type,
+                    ne10, s11, s12, s13, ne10_padded, ne11, ne12, ne13, stream);
             } else if (dst->type == GGML_TYPE_F16) {
                 quantize_mmq_q8_1_cuda<half>((const half *)src1_d, nullptr, src1_q8_1.get(), src0->type,
                     ne10, s11, s12, s13, ne10_padded, ne11, ne12, ne13, stream);
@@ -161,6 +164,14 @@ void ggml_cuda_mul_mat_q(
         if (src1->type == GGML_TYPE_F32) {
             const mmq_args<float> args = {
                 src0_d, src0->type, (const int *) src1_q8_1.ptr, nullptr, nullptr, dst_d,
+                ne00, ne01, ne1, s01, ne11, s1,
+                ne02, ne12, s02, s12, s2,
+                ne03, ne13, s03, s13, s3,
+                use_stream_k, ne1};
+            ggml_cuda_mul_mat_q_switch_type(ctx, args, stream);
+        } else if (src1->type == GGML_TYPE_BF16) {
+            const mmq_args<nv_bfloat16> args = {
+                src0_d, src0->type, (const int *) src1_q8_1.ptr, nullptr, nullptr, (nv_bfloat16 *)dst_d,
                 ne00, ne01, ne1, s01, ne11, s1,
                 ne02, ne12, s02, s12, s2,
                 ne03, ne13, s03, s13, s3,
