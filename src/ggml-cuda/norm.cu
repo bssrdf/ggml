@@ -347,8 +347,8 @@ static __global__ void rms_norm_f32(const float * x,
         } else {
             dst[col] = scale * x[col];
         }
-        if(threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 )
-           printf(" in rms_norm32 %d: %f, %f, %f, %f\n", col, dst[col], scale, mean, x[col]);
+        // if(threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0 && blockIdx.z == 0 )
+        //    printf(" in rms_norm32 %d: %f, %f, %f, %f\n", col, dst[col], scale, mean, x[col]);
     }
 }
 

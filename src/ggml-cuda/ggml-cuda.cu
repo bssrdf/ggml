@@ -1372,9 +1372,10 @@ static void ggml_cuda_op_mul_mat_cublas(
                     CUBLAS_COMPUTE_16F,
                     CUBLAS_GEMM_DEFAULT_TENSOR_OP));
 
-            if (dst->type == GGML_TYPE_F32) {
+            // if (dst->type == GGML_TYPE_F32) {
+            if constexpr (std::is_same_v<T, float>) {
                 const to_fp32_cuda_t to_fp32_cuda = ggml_get_to_fp32_cuda(GGML_TYPE_F16);
-                to_fp32_cuda(dst_f16.get(), (float *)dst_dd_i, row_diff*src1_ncols, stream);
+                to_fp32_cuda(dst_f16.get(), dst_dd_i, row_diff*src1_ncols, stream);
             }
             // std::vector<half> tmp_r(row_diff*src1_ncols);
             // cudaMemcpy(tmp_r.data(), dst_ddf_i, row_diff*src1_ncols * sizeof(half), cudaMemcpyDeviceToHost);
@@ -1944,6 +1945,9 @@ struct batched_mul_mat_traits<GGML_TYPE_F16> {
     static inline auto get_nc_converter(ggml_type src_type) { return ggml_get_to_fp16_nc_cuda(src_type); }
 };
 
+
+
+
 template<ggml_type src0_type>
 static void ggml_cuda_mul_mat_batched_cublas_impl(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     using traits = batched_mul_mat_traits<src0_type>;
@@ -2196,25 +2200,37 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
     if (!split && use_mul_mat_vec_f) {
         // the custom F16 vector kernel can be used over batched cuBLAS GEMM
         // but this is only faster for GPUs without tensor cores or with a thin src0 matrix (particularly KQV in attention)
-        // printf("ggml_cuda_mul_mat_vec_f: %s, %s, (%zu, %zu, %zu), (%zu, %zu, %zu)\n",
-        //    ggml_type_name(src0->type), ggml_type_name(src1->type),
-        // src0->ne[0], src0->ne[1], src0->ne[2],
-        // src1->ne[0], src1->ne[1], src1->ne[2]);
+        printf("ggml_cuda_mul_mat_vec_f: %s, %s, (%zu, %zu, %zu), (%zu, %zu, %zu)\n",
+           ggml_type_name(src0->type), ggml_type_name(src1->type),
+        src0->ne[0], src0->ne[1], src0->ne[2],
+        src1->ne[0], src1->ne[1], src1->ne[2]);
         ggml_cuda_mul_mat_vec_f(ctx, src0, src1, nullptr, dst);
     } else if (!split && use_mul_mat_f) {
+        printf("ggml_cuda_mul_mat_f: %s, %s, (%zu, %zu, %zu), (%zu, %zu, %zu)\n",
+           ggml_type_name(src0->type), ggml_type_name(src1->type),
+        src0->ne[0], src0->ne[1], src0->ne[2],
+        src1->ne[0], src1->ne[1], src1->ne[2]);
         ggml_cuda_mul_mat_f(ctx, src0, src1, nullptr, dst);
     } else if (!split && use_mul_mat_vec_q) {
-        // printf("ggml_cuda_mul_mat_vec_q: %s, %s, (%zu, %zu, %zu), (%zu, %zu, %zu)\n",
-        //    ggml_type_name(src0->type), ggml_type_name(src1->type),
-        // src0->ne[0], src0->ne[1], src0->ne[2],
-        // src1->ne[0], src1->ne[1], src1->ne[2]);
+        printf("ggml_cuda_mul_mat_vec_q: %s, %s, (%zu, %zu, %zu), (%zu, %zu, %zu)\n",
+           ggml_type_name(src0->type), ggml_type_name(src1->type),
+        src0->ne[0], src0->ne[1], src0->ne[2],
+        src1->ne[0], src1->ne[1], src1->ne[2]);
         ggml_cuda_mul_mat_vec_q(ctx, src0, src1, nullptr, dst);
     } else if (!split && use_mul_mat_q) {
+        printf("ggml_cuda_mul_mat_q: %s, %s, (%zu, %zu, %zu), (%zu, %zu, %zu)\n",
+           ggml_type_name(src0->type), ggml_type_name(src1->type),
+        src0->ne[0], src0->ne[1], src0->ne[2],
+        src1->ne[0], src1->ne[1], src1->ne[2]);
         ggml_cuda_mul_mat_q(ctx, src0, src1, nullptr, dst);
     } else if (!split && (use_batched_cublas_f16 || use_batched_cublas_bf16 || use_batched_cublas_f32)
         && !ggml_is_transposed(src0) && !ggml_is_transposed(src1) && src1->ne[2]*src1->ne[3] > 1) {
         // general KQ + KQV multi-batch without FlashAttention
         // GGML_ASSERT(dst->type != GGML_TYPE_F16);
+        printf("ggml_cuda_mul_mat_batched_cublas: %s, %s, (%zu, %zu, %zu), (%zu, %zu, %zu)\n",
+           ggml_type_name(src0->type), ggml_type_name(src1->type),
+        src0->ne[0], src0->ne[1], src0->ne[2],
+        src1->ne[0], src1->ne[1], src1->ne[2]);
         ggml_cuda_mul_mat_batched_cublas(ctx, src0, src1, dst);
     } else if (use_mul_mat_vec_f) {
         if(src1->type == GGML_TYPE_F32)
@@ -2222,10 +2238,10 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         else
             ggml_cuda_op_mul_mat<half>(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_vec_f<half>, nullptr);
     } else if (use_mul_mat_vec_q) {
-        // printf("ggml_cuda_op_mul_mat_vec_q: %s, %s, (%zu, %zu, %zu), (%zu, %zu, %zu)\n",
-        //    ggml_type_name(src0->type), ggml_type_name(src1->type),
-        // src0->ne[0], src0->ne[1], src0->ne[2],
-        // src1->ne[0], src1->ne[1], src1->ne[2]);
+        printf("ggml_cuda_op_mul_mat_vec_q: %s, %s, (%zu, %zu, %zu), (%zu, %zu, %zu)\n",
+           ggml_type_name(src0->type), ggml_type_name(src1->type),
+        src0->ne[0], src0->ne[1], src0->ne[2],
+        src1->ne[0], src1->ne[1], src1->ne[2]);
         if(src1->type == GGML_TYPE_F32)
             ggml_cuda_op_mul_mat<float>(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_vec_q<float>, quantize_row_q8_1_cuda<float>);
         else if(src1->type == GGML_TYPE_BF16)
@@ -2233,10 +2249,10 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         else
             ggml_cuda_op_mul_mat<half>(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_vec_q<half>, quantize_row_q8_1_cuda<half>);
     } else if (use_mul_mat_q) {
-        // printf("ggml_cuda_op_mul_mat_q: %s, %s, (%zu, %zu, %zu), (%zu, %zu, %zu)\n",
-        //    ggml_type_name(src0->type), ggml_type_name(src1->type),
-        // src0->ne[0], src0->ne[1], src0->ne[2],
-        // src1->ne[0], src1->ne[1], src1->ne[2]);
+        printf("ggml_cuda_op_mul_mat_q: %s, %s, (%zu, %zu, %zu), (%zu, %zu, %zu)\n",
+           ggml_type_name(src0->type), ggml_type_name(src1->type),
+        src0->ne[0], src0->ne[1], src0->ne[2],
+        src1->ne[0], src1->ne[1], src1->ne[2]);
         if(src1->type == GGML_TYPE_F32)
             ggml_cuda_op_mul_mat<float>(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_q<float>, quantize_mmq_q8_1_cuda<float>);
         else if(src1->type == GGML_TYPE_BF16)
@@ -2244,10 +2260,10 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         else
             ggml_cuda_op_mul_mat<half>(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_q<half>, quantize_mmq_q8_1_cuda<half>);
     } else {
-        // printf("ggml_cuda_mul_mat_cublas: %s, %s, (%zu, %zu, %zu), (%zu, %zu, %zu)\n",
-        //    ggml_type_name(src0->type), ggml_type_name(src1->type),
-        // src0->ne[0], src0->ne[1], src0->ne[2],
-        // src1->ne[0], src1->ne[1], src1->ne[2]);
+        printf("ggml_cuda_mul_mat_cublas: %s, %s, (%zu, %zu, %zu), (%zu, %zu, %zu)\n",
+           ggml_type_name(src0->type), ggml_type_name(src1->type),
+        src0->ne[0], src0->ne[1], src0->ne[2],
+        src1->ne[0], src1->ne[1], src1->ne[2]);
         if(src1->type == GGML_TYPE_F32)
             ggml_cuda_op_mul_mat<float>(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_cublas<float>, nullptr);
         else if(src1->type == GGML_TYPE_BF16)
@@ -3174,8 +3190,8 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
 #else
                 GGML_UNUSED(integrated);
 #endif // NDEBUG
-                // printf("computing %s, %s  (%zu, %zu, %zu, %zu)\n", node->name, ggml_op_name(node->op),
-                //                 node->ne[0], node->ne[1], node->ne[2], node->ne[3]);
+                printf("computing %s, %s, %s  (%zu, %zu, %zu, %zu)\n", node->name, ggml_type_name(node->type), ggml_op_name(node->op),
+                                node->ne[0], node->ne[1], node->ne[2], node->ne[3]);
                 // if(node->src[0] != nullptr){
                 //      printf("NODE A nan %s, %s, (%zu, %zu, %zu, %zu)\n", node->src[0]->name,
                 //                 ggml_op_name(node->src[0]->op), node->src[0]->ne[0], node->src[0]->ne[1],
@@ -3290,6 +3306,7 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                 //     }
                 // }
                 CUDA_CHECK(cudaDeviceSynchronize());
+                // CUDA_CHECK(cudaStreamSynchronize(cuda_ctx->stream()));
                 // // if(strcmp(node->name, t_name) == 0) {
                 // if(node->type == GGML_TYPE_BF16){
                 if(node->type == GGML_TYPE_F32){
@@ -3304,15 +3321,16 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                     //             ggml_type_name(src->type), ggml_op_name(src->op), src->ne[0], src->ne[1],
                     //         src->ne[2], src->ne[3]);
                     // src = node;
-                    
                     int pos = -1;
                     if(src->type == GGML_TYPE_F32){
                     // if(src->type == GGML_TYPE_F16){
                     // if(src->type == GGML_TYPE_BF16){
                         // std::vector<half> data(ggml_nelements(src));
                         // std::vector<nv_bfloat16> data(ggml_nelements(src));
-                        std::vector<float> data(ggml_nelements(src));
+                        std::vector<float> data(ggml_nelements(src), 0.f);
                         ggml_backend_tensor_get(src, data.data(), 0, ggml_nbytes(src));
+                        // CUDA_CHECK(cudaStreamSynchronize(cuda_ctx->stream()));
+                        CUDA_CHECK(cudaDeviceSynchronize());
                         printf("[");
                         float vmin=1.e16f, vmax=-1.e16f;
                         int nt = data.size();
@@ -3341,9 +3359,9 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                  //}
                     if(ab || abi){
                         if (ab)
-                            printf(" is nan \n");
+                            printf(" is nan at %d \n", pos);
                         else
-                            printf(" is inf \n");
+                            printf(" is inf at %d \n", pos);
                         // std::vector<nv_bfloat16> data(ggml_nelements(src));
                         std::vector<float> data(ggml_nelements(src));
                         ggml_backend_tensor_get(src, data.data(), 0, ggml_nbytes(src));
@@ -3356,6 +3374,7 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                             if(k > pos-100 && k < pos+100)
                                 printf("%f,", val);
                         }
+                        printf("]\n");
                     // if(src->type == GGML_TYPE_F32){
                     //     std::vector<float> data(ggml_nelements(src));
                     //     ggml_backend_tensor_get(src, data.data(), 0, ggml_nbytes(src));
@@ -3365,7 +3384,6 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                     //         float val = data[k];
                     //         printf("%f,", val);
                     //     }
-                        printf("]\n");
                     // }
                     if(node->src[0]){
                         ggml_tensor * src = node->src[0];
@@ -3411,6 +3429,7 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                         if(src->type == GGML_TYPE_F32){
                             std::vector<float> data(ggml_nelements(src));
                             ggml_backend_tensor_get(src, data.data(), 0, ggml_nbytes(src));
+                            CUDA_CHECK(cudaDeviceSynchronize());
                             float vmin=1.e16f, vmax=-1.e16f;
                             // int nt = data.size() <= 128 ? data.size() : 128;
                             int nt = data.size();
