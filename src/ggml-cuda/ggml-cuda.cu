@@ -3289,8 +3289,9 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                 // const char *t_name = "node_3113"; // not same
                 // const char *t_name = "node_3024"; // not same
                 // const char *t_name = "node_3102"; // not same
+                // const char *t_name = "node_94"; // not same
                 // int disp_n = 128;
-                // bool ab = false, abi=false;
+                // bool ab = false, abi=false, all_zeros = false;
                 // if(node->type == GGML_TYPE_F16){
                 // if(node->op == GGML_OP_CONCAT){
                 //     ggml_tensor * src = node;
@@ -3311,9 +3312,9 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                 //     }
                 // }
                 // CUDA_CHECK(cudaDeviceSynchronize());
-                // CUDA_CHECK(cudaStreamSynchronize(cuda_ctx->stream()));
-                // // if(strcmp(node->name, t_name) == 0) {
-                // if(node->type == GGML_TYPE_BF16){
+                // // CUDA_CHECK(cudaStreamSynchronize(cuda_ctx->stream()));
+                // if(strcmp(node->name, t_name) == 0) {
+                // // if(node->type == GGML_TYPE_BF16){
                 // // if(node->type == GGML_TYPE_F32){
                 // // if(false){
                 // // if(node->type == GGML_TYPE_F16){
@@ -3359,14 +3360,19 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                 //             }
                 //         }
                 //         printf("] vmin,vmax %f, %f\n", vmin,vmax);
+                //         if(fabs(vmin)< 1.e-10f && fabs(vmax) < 1.e-10f)
+                //             all_zeros = true;
                 //         // if(ab) abort();
                 //     }
                 //  //}
-                //     if(ab || abi){
+                //     if(ab || abi || all_zeros){
                 //         if (ab)
                 //             printf(" is nan at %d \n", pos);
-                //         else
+                //         else if (abi)
                 //             printf(" is inf at %d \n", pos);
+                //         else
+                //             printf(" all data is zero \n");
+                //     if(pos != -1) {
                 //         std::vector<nv_bfloat16> data(ggml_nelements(src));
                 //         // std::vector<float> data(ggml_nelements(src));
                 //         ggml_backend_tensor_get(src, data.data(), 0, ggml_nbytes(src));
@@ -3380,6 +3386,7 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                 //                 printf("%f,", val);
                 //         }
                 //         printf("]\n");
+                //     }
                 //     // if(src->type == GGML_TYPE_F32){
                 //     //     std::vector<float> data(ggml_nelements(src));
                 //     //     ggml_backend_tensor_get(src, data.data(), 0, ggml_nbytes(src));

@@ -6961,9 +6961,9 @@ void ggml_graph_print(const struct ggml_cgraph * cgraph) {
     for (int i = 0; i < cgraph->n_nodes; i++) {
         struct ggml_tensor * node = cgraph->nodes[i];
 
-        GGML_LOG_INFO(" - %3d: [ %5" PRId64 ", %5" PRId64 ", %5" PRId64 "] %16s %4s %s %s\n",
+        GGML_LOG_INFO(" - %3d: [ %5" PRId64 ", %5" PRId64 ", %5" PRId64 ", %5" PRId64 "] %16s %4s %s %s\n",
                 i,
-                node->ne[0], node->ne[1], node->ne[2],
+                node->ne[0], node->ne[1], node->ne[2], node->ne[3],
                 ggml_op_name(node->op), ggml_type_name(node->type), ggml_get_name(node),
                 (node->flags & GGML_TENSOR_FLAG_PARAM) ? "x" :
                       ggml_graph_get_grad(cgraph, node) ? "g" : " ");
