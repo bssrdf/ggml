@@ -769,10 +769,16 @@ static void rms_norm_bf16_cuda(
     }
 }
 
-static void rms_norm_mul_f32_cuda(const float *  x,
-                                  const float *  mul,
-                                  const float *  add,
-                                  float *        dst,
+
+// static void rms_norm_mul_f32_cuda(const float *  x,
+//                                   const float *  mul,
+//                                   const float *  add,
+//                                   float *        dst,
+template<typename T>
+static void rms_norm_mul_f32_cuda(const T *  x,
+                                  const T *  mul,
+                                  const T *  add,
+                                  T *  dst,
                                   const int      ncols,
                                   const int      nrows,
                                   const int      nchannels,
@@ -798,7 +804,13 @@ static void rms_norm_mul_f32_cuda(const float *  x,
                                   cudaStream_t   stream) {
     const dim3 blocks_num(nrows, nchannels, nsamples);
     if (mul == nullptr) {
-        rms_norm_f32_cuda(x, dst, ncols, nrows, nchannels, nsamples, stride_row, stride_channel, stride_sample, eps, stream);
+        if constexpr (std::is_same_v<T, float>) {
+            rms_norm_f32_cuda(x, dst, ncols, nrows, nchannels, nsamples, stride_row, stride_channel, stride_sample, eps, stream);
+        } else if constexpr (std::is_same_v<T, half>) {
+            rms_norm_f16_cuda(x, dst, ncols, nrows, nchannels, nsamples, stride_row, stride_channel, stride_sample, eps, stream);
+        } else if constexpr (std::is_same_v<T, nv_bfloat16>) {
+            rms_norm_bf16_cuda(x, dst, ncols, nrows, nchannels, nsamples, stride_row, stride_channel, stride_sample, eps, stream);
+        }
         return;
     }
     if (add == nullptr) {
@@ -808,14 +820,35 @@ static void rms_norm_mul_f32_cuda(const float *  x,
         const uint3 mul_nsamples_packed  = init_fastdiv_values(mul_nsamples);
         if (ncols < 1024) {
             const dim3 block_dims(256, 1, 1);
-            rms_norm_f32<256, true><<<blocks_num, block_dims, 0, stream>>>(
-                x, dst, ncols, stride_row, stride_channel, stride_sample, eps, mul, mul_stride_row, mul_stride_channel,
-                mul_stride_sample, mul_ncols_packed, mul_nrows_packed, mul_nchannels_packed, mul_nsamples_packed);
+            if constexpr (std::is_same_v<T, float>) {
+                rms_norm_f32<256, true><<<blocks_num, block_dims, 0, stream>>>(
+                    x, dst, ncols, stride_row, stride_channel, stride_sample, eps, mul, mul_stride_row, mul_stride_channel,
+                    mul_stride_sample, mul_ncols_packed, mul_nrows_packed, mul_nchannels_packed, mul_nsamples_packed);
+            } else if constexpr (std::is_same_v<T, half>) {
+                rms_norm_f16<256, true><<<blocks_num, block_dims, 0, stream>>>(
+                    x, dst, ncols, stride_row, stride_channel, stride_sample, eps, mul, mul_stride_row, mul_stride_channel,
+                    mul_stride_sample, mul_ncols_packed, mul_nrows_packed, mul_nchannels_packed, mul_nsamples_packed);
+            } else if constexpr (std::is_same_v<T, nv_bfloat16>) {
+                rms_norm_bf16<256, true><<<blocks_num, block_dims, 0, stream>>>(
+                    x, dst, ncols, stride_row, stride_channel, stride_sample, eps, mul, mul_stride_row, mul_stride_channel,
+                    mul_stride_sample, mul_ncols_packed, mul_nrows_packed, mul_nchannels_packed, mul_nsamples_packed);
+            }
+
         } else {
             const dim3 block_dims(1024, 1, 1);
-            rms_norm_f32<1024, true><<<blocks_num, block_dims, 0, stream>>>(
-                x, dst, ncols, stride_row, stride_channel, stride_sample, eps, mul, mul_stride_row, mul_stride_channel,
-                mul_stride_sample, mul_ncols_packed, mul_nrows_packed, mul_nchannels_packed, mul_nsamples_packed);
+            if constexpr (std::is_same_v<T, float>) {
+                rms_norm_f32<1024, true><<<blocks_num, block_dims, 0, stream>>>(
+                    x, dst, ncols, stride_row, stride_channel, stride_sample, eps, mul, mul_stride_row, mul_stride_channel,
+                    mul_stride_sample, mul_ncols_packed, mul_nrows_packed, mul_nchannels_packed, mul_nsamples_packed);
+            } else if constexpr (std::is_same_v<T, half>) {
+                rms_norm_f16<1024, true><<<blocks_num, block_dims, 0, stream>>>(
+                    x, dst, ncols, stride_row, stride_channel, stride_sample, eps, mul, mul_stride_row, mul_stride_channel,
+                    mul_stride_sample, mul_ncols_packed, mul_nrows_packed, mul_nchannels_packed, mul_nsamples_packed);
+            } else if constexpr (std::is_same_v<T, nv_bfloat16>) {
+                rms_norm_bf16<1024, true><<<blocks_num, block_dims, 0, stream>>>(
+                    x, dst, ncols, stride_row, stride_channel, stride_sample, eps, mul, mul_stride_row, mul_stride_channel,
+                    mul_stride_sample, mul_ncols_packed, mul_nrows_packed, mul_nchannels_packed, mul_nsamples_packed);
+            }
         }
     } else {
         const uint3 mul_ncols_packed     = init_fastdiv_values(mul_ncols);
@@ -829,18 +862,46 @@ static void rms_norm_mul_f32_cuda(const float *  x,
         const uint3 add_nsamples_packed  = init_fastdiv_values(add_nsamples);
         if (ncols < 1024) {
             const dim3 block_dims(256, 1, 1);
-            rms_norm_f32<256, true, true><<<blocks_num, block_dims, 0, stream>>>(
-                x, dst, ncols, stride_row, stride_channel, stride_sample, eps, mul, mul_stride_row, mul_stride_channel,
-                mul_stride_sample, mul_ncols_packed, mul_nrows_packed, mul_nchannels_packed, mul_nsamples_packed, add,
-                add_stride_row, add_stride_channel, add_stride_sample, add_ncols_packed, add_nrows_packed,
-                add_nchannels_packed, add_nsamples_packed);
+            if constexpr (std::is_same_v<T, float>) {
+                rms_norm_f32<256, true, true><<<blocks_num, block_dims, 0, stream>>>(
+                    x, dst, ncols, stride_row, stride_channel, stride_sample, eps, mul, mul_stride_row, mul_stride_channel,
+                    mul_stride_sample, mul_ncols_packed, mul_nrows_packed, mul_nchannels_packed, mul_nsamples_packed, add,
+                    add_stride_row, add_stride_channel, add_stride_sample, add_ncols_packed, add_nrows_packed,
+                    add_nchannels_packed, add_nsamples_packed);
+            } else if constexpr (std::is_same_v<T, half>) {
+                rms_norm_f16<256, true, true><<<blocks_num, block_dims, 0, stream>>>(
+                    x, dst, ncols, stride_row, stride_channel, stride_sample, eps, mul, mul_stride_row, mul_stride_channel,
+                    mul_stride_sample, mul_ncols_packed, mul_nrows_packed, mul_nchannels_packed, mul_nsamples_packed, add,
+                    add_stride_row, add_stride_channel, add_stride_sample, add_ncols_packed, add_nrows_packed,
+                    add_nchannels_packed, add_nsamples_packed);
+            } else if constexpr (std::is_same_v<T, nv_bfloat16>) {
+                rms_norm_bf16<256, true, true><<<blocks_num, block_dims, 0, stream>>>(
+                    x, dst, ncols, stride_row, stride_channel, stride_sample, eps, mul, mul_stride_row, mul_stride_channel,
+                    mul_stride_sample, mul_ncols_packed, mul_nrows_packed, mul_nchannels_packed, mul_nsamples_packed, add,
+                    add_stride_row, add_stride_channel, add_stride_sample, add_ncols_packed, add_nrows_packed,
+                    add_nchannels_packed, add_nsamples_packed);
+            }
         } else {
             const dim3 block_dims(1024, 1, 1);
-            rms_norm_f32<1024, true, true><<<blocks_num, block_dims, 0, stream>>>(
-                x, dst, ncols, stride_row, stride_channel, stride_sample, eps, mul, mul_stride_row, mul_stride_channel,
-                mul_stride_sample, mul_ncols_packed, mul_nrows_packed, mul_nchannels_packed, mul_nsamples_packed, add,
-                add_stride_row, add_stride_channel, add_stride_sample, add_ncols_packed, add_nrows_packed,
-                add_nchannels_packed, add_nsamples_packed);
+            if constexpr (std::is_same_v<T, float>) {
+                rms_norm_f32<1024, true, true><<<blocks_num, block_dims, 0, stream>>>(
+                    x, dst, ncols, stride_row, stride_channel, stride_sample, eps, mul, mul_stride_row, mul_stride_channel,
+                    mul_stride_sample, mul_ncols_packed, mul_nrows_packed, mul_nchannels_packed, mul_nsamples_packed, add,
+                    add_stride_row, add_stride_channel, add_stride_sample, add_ncols_packed, add_nrows_packed,
+                    add_nchannels_packed, add_nsamples_packed);
+            } else if constexpr (std::is_same_v<T, half>) {
+                rms_norm_f16<1024, true, true><<<blocks_num, block_dims, 0, stream>>>(
+                    x, dst, ncols, stride_row, stride_channel, stride_sample, eps, mul, mul_stride_row, mul_stride_channel,
+                    mul_stride_sample, mul_ncols_packed, mul_nrows_packed, mul_nchannels_packed, mul_nsamples_packed, add,
+                    add_stride_row, add_stride_channel, add_stride_sample, add_ncols_packed, add_nrows_packed,
+                    add_nchannels_packed, add_nsamples_packed);
+            } else if constexpr (std::is_same_v<T, nv_bfloat16>) {
+                rms_norm_bf16<1024, true, true><<<blocks_num, block_dims, 0, stream>>>(
+                    x, dst, ncols, stride_row, stride_channel, stride_sample, eps, mul, mul_stride_row, mul_stride_channel,
+                    mul_stride_sample, mul_ncols_packed, mul_nrows_packed, mul_nchannels_packed, mul_nsamples_packed, add,
+                    add_stride_row, add_stride_channel, add_stride_sample, add_ncols_packed, add_nrows_packed,
+                    add_nchannels_packed, add_nsamples_packed);
+            }
         }
     }
 }
@@ -969,9 +1030,9 @@ void ggml_cuda_op_rms_norm_fused(ggml_backend_cuda_context & ctx, ggml_tensor * 
     float * dst_d = (float *) mul_tensor->data;
     cudaStream_t stream = ctx.stream();
 
-    GGML_ASSERT(rms_norm_src->type == GGML_TYPE_F32);
-    GGML_ASSERT(dst->type == GGML_TYPE_F32);
-    GGML_ASSERT(mul_tensor->type == GGML_TYPE_F32);
+    // GGML_ASSERT(rms_norm_src->type == GGML_TYPE_F32);
+    // GGML_ASSERT(dst->type == GGML_TYPE_F32);
+    // GGML_ASSERT(mul_tensor->type == GGML_TYPE_F32);
     GGML_ASSERT(eps >= 0.0f);
 
     const int64_t ne00 = rms_norm_src->ne[0];
@@ -996,14 +1057,33 @@ void ggml_cuda_op_rms_norm_fused(ggml_backend_cuda_context & ctx, ggml_tensor * 
     const int mul_nchannels = mul_src->ne[2];
     const int mul_nsamples  = mul_src->ne[3];
 
-    rms_norm_mul_f32_cuda(src0_d, mul_d, nullptr, dst_d,
-                          ne00, ne01, ne02, ne03,
-                          /*s00*/ s01, s02, s03,
-                          /*mul_s00*/ mul_s01, mul_s02, mul_s03,
-                          mul_ncols, mul_nrows, mul_nchannels, mul_nsamples,
-                          /*add_s00*/ 0, 0, 0,
-                          0, 0, 0, 0,
-                          eps, stream);
+    if(dst->type == GGML_TYPE_F32)
+        rms_norm_mul_f32_cuda<float>(src0_d, mul_d, nullptr, dst_d,
+                            ne00, ne01, ne02, ne03,
+                            /*s00*/ s01, s02, s03,
+                            /*mul_s00*/ mul_s01, mul_s02, mul_s03,
+                            mul_ncols, mul_nrows, mul_nchannels, mul_nsamples,
+                            /*add_s00*/ 0, 0, 0,
+                            0, 0, 0, 0,
+                            eps, stream);
+    else if (dst->type == GGML_TYPE_F16)
+        rms_norm_mul_f32_cuda<half>((const half *)src0_d, (const half *)mul_d, nullptr, (half *)dst_d,
+                            ne00, ne01, ne02, ne03,
+                            /*s00*/ s01, s02, s03,
+                            /*mul_s00*/ mul_s01, mul_s02, mul_s03,
+                            mul_ncols, mul_nrows, mul_nchannels, mul_nsamples,
+                            /*add_s00*/ 0, 0, 0,
+                            0, 0, 0, 0,
+                            eps, stream);
+    else if (dst->type == GGML_TYPE_BF16)
+        rms_norm_mul_f32_cuda<nv_bfloat16>((const nv_bfloat16 *)src0_d, (const nv_bfloat16 *)mul_d, nullptr, (nv_bfloat16 *)dst_d,
+                            ne00, ne01, ne02, ne03,
+                            /*s00*/ s01, s02, s03,
+                            /*mul_s00*/ mul_s01, mul_s02, mul_s03,
+                            mul_ncols, mul_nrows, mul_nchannels, mul_nsamples,
+                            /*add_s00*/ 0, 0, 0,
+                            0, 0, 0, 0,
+                            eps, stream);
 }
 
 void ggml_cuda_op_rms_norm_fused_add(ggml_backend_cuda_context & ctx,
