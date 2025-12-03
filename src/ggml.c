@@ -3653,6 +3653,9 @@ struct ggml_tensor * ggml_permute(
     GGML_ASSERT(axis1 != axis3);
     GGML_ASSERT(axis2 != axis3);
 
+    // printf(" permute[%d, %d, %d, %d], (%zu, %zu, %zu, %zu) \n", axis0, axis1, axis2, axis3,
+    //      a->ne[0], a->ne[1], a->ne[2],a->ne[3]);
+
     struct ggml_tensor * result = ggml_view_tensor(ctx, a);
     ggml_format_name(result, "%s (permuted)", a->name);
 

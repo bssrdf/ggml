@@ -175,21 +175,31 @@ static void ggml_cpy_flt_cuda(
     const int ne00, const int ne01, const int ne02, const int nb00, const int nb01, const int nb02,
     const int nb03, const int ne10, const int ne11, const int ne12, const int nb10, const int nb11, const int nb12, const int nb13, cudaStream_t stream) {
 
+
+    // printf("ne0 %d, %d, %d, %d, %s\n", ne00, ne01, ne02, ne/(ne00*ne01*ne02), transposed?"transposed":"not transposes");
+    // printf("ne1 %d, %d, %d, %d, %s\n", ne10, ne11, ne12, ne/(ne10*ne11*ne12), transposed?"transposed":"not transposes");
+    // printf("nb0 %d, %d, %d, %d, %s\n", nb00, nb01, nb02, nb03, transposed?"transposed":"not transposes");
+    // printf("nb1 %d, %d, %d, %d, %s\n", nb10, nb11, nb12, nb13, transposed?"transposed":"not transposes");
     if (transposed) {
         GGML_ASSERT(ne == ne00*ne01*ne02);  // ne[3] is 1 assumed
         int ne00n, ne01n, ne02n;
-        if (nb00 <= nb02) {
-            ne00n = ne00;
-            ne01n = ne01;
-            ne02n = ne02;
-        } else if (nb00 > nb02) {
-            ne00n = ne00;
-            ne01n = ne01*ne02;
-            ne02n = 1;
+        if(nb01 == (int64_t)sizeof(src_t) ){ //&&
+        //    nb02 == ne00 * ne01 * sizeof(src_t)){
+            if (nb00 <= nb02) {
+                ne00n = ne00;
+                ne01n = ne01;
+                ne02n = ne02;
+            } else if (nb00 > nb02) {
+                ne00n = ne00;
+                ne01n = ne01*ne02;
+                ne02n = 1;
+            }
+        } else {
+            GGML_ASSERT(nb00 <= nb01);  // ne[3] is 1 assumed
+                ne00n = ne00*ne01;
+                ne01n = ne02;
+                ne02n = 1; // not used
         }
-        // } else {
-        //     GGML_ASSERT(false);
-        // }
 
         dim3 dimGrid( (ne01n + CUDA_CPY_TILE_DIM_2D - 1) / CUDA_CPY_TILE_DIM_2D,
                       (ne00n + CUDA_CPY_TILE_DIM_2D - 1) / CUDA_CPY_TILE_DIM_2D,
@@ -363,8 +373,17 @@ void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, gg
 
     cudaStream_t main_stream = ctx.stream();
 
-    const bool can_be_transposed = nb01 == (int64_t)ggml_element_size(src0)
-    && src0->ne[3] == 1 && nb02 == ne00 * ne01 * (int64_t)ggml_element_size(src0);
+    // const bool can_be_transposed = nb01 == (int64_t)ggml_element_size(src0)
+    // && src0->ne[3] == 1 && nb02 == ne00 * ne01 * (int64_t)ggml_element_size(src0);
+
+
+    const bool can_be_transposed = src0->ne[3] == 1 &&
+                                  ( (nb01 == (int64_t)ggml_element_size(src0)) ||  //  &&
+                                    //  nb02 == ne00 * ne01 * (int64_t)ggml_element_size(src0)) ||
+                                     (nb02 == (int64_t)ggml_element_size(src0) &&
+                                     nb01 == ne02 * ne00 * (int64_t)ggml_element_size(src0))
+                                     );
+
 
 
     char * src0_ddc = (char *) src0->data;
