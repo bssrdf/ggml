@@ -2840,6 +2840,9 @@ static bool check_node_graph_compatibility(ggml_cgraph * cgraph,
     const std::string ffn_moe_down_bias_prefix = "ffn_moe_down_biased";
     const std::string nemotron_h_block_out_prefix = "nemotron_h_block_out";
     const std::string mamba2_y_add_d_prefix = "mamba2_y_add_d";
+    const std::string sdxl_input_block_1_resblock_prefix = "input_block_1_resblock";
+    const std::string sdxl_input_block_2_resblock_prefix = "input_block_2_resblock";
+    const std::string sdxl_input_block_4_resblock_prefix = "input_block_4_resblock";
 
     for (int i = 0; i < cgraph->n_nodes; i++) {
         ggml_tensor * node = cgraph->nodes[i];
@@ -2862,25 +2865,38 @@ static bool check_node_graph_compatibility(ggml_cgraph * cgraph,
 #endif
         }
 
-        if (node->op == GGML_OP_ADD &&
-            node->src[1] && node->src[1]->ne[1] > 1 &&
-            (node->src[0] ? node->src[0]->name != gemma3n_per_layer_proj_src0_name : true) &&
-            (node->src[1] ? node->src[1]->name != gemma3n_per_layer_proj_src1_name : true) &&
-            strncmp(node->name, ffn_moe_gate_bias_prefix.c_str(), ffn_moe_gate_bias_prefix.size()) != 0 &&
-            strncmp(node->name, ffn_moe_up_bias_prefix.c_str(), ffn_moe_up_bias_prefix.size()) != 0 &&
-            strncmp(node->name, ffn_moe_down_bias_prefix.c_str(), ffn_moe_down_bias_prefix.size()) != 0 &&
-            strncmp(node->name, nemotron_h_block_out_prefix.c_str(), nemotron_h_block_out_prefix.size()) != 0 &&
-            strncmp(node->name, mamba2_y_add_d_prefix.c_str(), mamba2_y_add_d_prefix.size()) != 0) {
+        // if (node->op == GGML_OP_ADD &&
+        //     node->src[1] && node->src[1]->ne[1] > 1 &&
+        //     (node->src[0] ? node->src[0]->name != gemma3n_per_layer_proj_src0_name : true) &&
+        //     (node->src[1] ? node->src[1]->name != gemma3n_per_layer_proj_src1_name : true) &&
+        //     strncmp(node->name, ffn_moe_gate_bias_prefix.c_str(), ffn_moe_gate_bias_prefix.size()) != 0 &&
+        //     strncmp(node->name, ffn_moe_up_bias_prefix.c_str(), ffn_moe_up_bias_prefix.size()) != 0 &&
+        //     strncmp(node->name, ffn_moe_down_bias_prefix.c_str(), ffn_moe_down_bias_prefix.size()) != 0 &&
+        //     strncmp(node->name, nemotron_h_block_out_prefix.c_str(), nemotron_h_block_out_prefix.size()) != 0 &&
+        //     strncmp(node->name, sdxl_input_block_1_resblock_prefix.c_str(), sdxl_input_block_1_resblock_prefix.size()) != 0 &&
+        //     strncmp(node->name, sdxl_input_block_2_resblock_prefix.c_str(), sdxl_input_block_2_resblock_prefix.size()) != 0 &&
+        //     strncmp(node->name, sdxl_input_block_4_resblock_prefix.c_str(), sdxl_input_block_4_resblock_prefix.size()) != 0 &&
+        //     strncmp(node->name, mamba2_y_add_d_prefix.c_str(), mamba2_y_add_d_prefix.size()) != 0) {
             // disable CUDA graphs for batch size > 1 for now while excluding the matrix-matrix addition as part of Gemma3n's `project_per_layer_input` operation
             // by means of matching node names. See
             // https://github.com/ggml-org/llama.cpp/blob/f9a31eea06a859e34cecb88b4d020c7f03d86cc4/src/llama-model.cpp#L10199-L10241 and
             // https://github.com/huggingface/transformers/blob/bda75b4011239d065de84aa3e744b67ebfa7b245/src/transformers/models/gemma3n/modeling_gemma3n.py#L1773,
             // Generally, changes in batch size or context size can cause changes to the grid size of some kernels.
-            use_cuda_graph = false;
-#ifndef NDEBUG
-            GGML_LOG_DEBUG("%s: disabling CUDA graphs due to batch size > 1 [%s] [%ld %ld %ld %ld]\n", __func__, node->name, node->ne[0], node->ne[1], node->ne[2], node->ne[3]);
-#endif
-        }
+            // use_cuda_graph = false;
+// #ifndef NDEBUG
+            // GGML_LOG_DEBUG("%s: disabling CUDA graphs due to batch size > 1 [%s] [%ld %ld %ld %ld]\n", __func__, node->name, node->ne[0], node->ne[1], node->ne[2], node->ne[3]);
+            // printf("%s: node disabling CUDA graphs due to batch size > 1 [%s] [%ld %ld %ld %ld]\n", __func__,
+            //             node->name, node->ne[0], node->ne[1], node->ne[2], node->ne[3]);
+            // if(node->src[0]){
+            //     printf("%s: src0 disabling CUDA graphs due to batch size > 1 [%s] [%ld %ld %ld %ld]\n", __func__,
+            //             node->src[0]->name, node->src[0]->ne[0], node->src[0]->ne[1], node->src[0]->ne[2], node->src[0]->ne[3]);
+            // }
+            // if(node->src[1]){
+            //     printf("%s: src1 disabling CUDA graphs due to batch size > 1 [%s] [%ld %ld %ld %ld]\n", __func__,
+            //             node->src[1]->name, node->src[1]->ne[0], node->src[1]->ne[1], node->src[1]->ne[2], node->src[1]->ne[3]);
+            // }
+// #endif
+        // }
 
         if (!use_cuda_graph) {
             break;
@@ -2966,6 +2982,8 @@ static bool is_cuda_graph_update_required(ggml_backend_cuda_context * cuda_ctx, 
         set_ggml_graph_node_properties(cgraph->nodes[i], &cuda_ctx->cuda_graph->ggml_graph_properties[i]);
     }
 
+
+    // printf(" check cuda graph update \n");
     return cuda_graph_update_required;
 }
 
@@ -3105,6 +3123,8 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
         // Only perform the graph execution if CUDA graphs are not enabled, or we are capturing the graph.
         // With the use of CUDA graphs, the execution will be performed by the graph launch.
         if (!use_cuda_graph || cuda_graph_update_required) {
+
+            // printf(" executing graphs due to [%d, %d]\n ", use_cuda_graph?1:0, cuda_graph_update_required?1:0);
 
             for (int i = 0; i < cgraph->n_nodes; i++) {
                 ggml_tensor * node = cgraph->nodes[i];
@@ -3908,6 +3928,7 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
             update_cuda_graph_executable(cuda_ctx);
         }
         // Launch graph
+        // printf(" launch cuda graph \n");
         CUDA_CHECK(cudaGraphLaunch(cuda_ctx->cuda_graph->instance, cuda_ctx->stream()));
 #else
         graph_evaluated_or_captured = true;
@@ -3922,6 +3943,7 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
 
 #ifdef USE_CUDA_GRAPH
     static const bool disable_cuda_graphs_due_to_env = (getenv("GGML_CUDA_DISABLE_GRAPHS") != nullptr);
+    // printf("%s: cuda graph on \n", __func__);
 
     // Objects required for CUDA Graph
     if (cuda_ctx->cuda_graph == nullptr) {
@@ -3948,27 +3970,39 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
         || cuda_ctx->cuda_graph->disable_due_to_too_many_updates
         || cuda_ctx->cuda_graph->disable_due_to_failed_graph_capture) {
         use_cuda_graph = false;
+        printf("%s: disabling CUDA graphs due to [%d, %d, %d, %d] \n", __func__,
+            disable_cuda_graphs_due_to_env?1:0,
+            cuda_ctx->cuda_graph->disable_due_to_gpu_arch?1:0,
+            cuda_ctx->cuda_graph->disable_due_to_too_many_updates?1:0,
+            cuda_ctx->cuda_graph->disable_due_to_failed_graph_capture?1:0);
     }
+
+    // printf("%s: A cuda graph on [%d, %d] \n", __func__, use_cuda_graph?1:0, cuda_graph_update_required?1:0);
 
     if (use_cuda_graph) {
         cuda_graph_update_required = is_cuda_graph_update_required(cuda_ctx, cgraph);
 
         use_cuda_graph = check_node_graph_compatibility(cgraph, use_cuda_graph);
+        // printf("%s: B cuda graph on [%d, %d] \n", __func__, use_cuda_graph?1:0, cuda_graph_update_required?1:0);
 
         // Disable CUDA graphs (from the next token) if the use-case is demanding too many consecutive graph updates.
         if (use_cuda_graph && cuda_graph_update_required) {
             cuda_ctx->cuda_graph->number_consecutive_updates++;
+            // printf("%s: cuda graph updates %d \n", __func__, cuda_ctx->cuda_graph->number_consecutive_updates);
         } else {
             cuda_ctx->cuda_graph->number_consecutive_updates = 0;
         }
 
-        if (cuda_ctx->cuda_graph->number_consecutive_updates >= 4) {
+        if (cuda_ctx->cuda_graph->number_consecutive_updates >= 12) {
             cuda_ctx->cuda_graph->disable_due_to_too_many_updates = true;
-#ifndef NDEBUG
-            GGML_LOG_DEBUG("%s: disabling CUDA graphs due to too many consecutive updates\n", __func__);
-#endif
+//#ifndef NDEBUG
+            // GGML_LOG_DEBUG("%s: disabling CUDA graphs due to too many consecutive updates\n", __func__);
+            // printf("%s: disabling CUDA graphs due to too many consecutive updates\n", __func__);
+//#endif
         }
     }
+
+    // printf("%s: C cuda graph on [%d, %d] \n", __func__, use_cuda_graph?1:0, cuda_graph_update_required?1:0);
 
     if (use_cuda_graph && cuda_graph_update_required) {
         // Start CUDA graph capture
