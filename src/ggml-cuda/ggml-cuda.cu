@@ -2958,6 +2958,13 @@ static bool ggml_graph_node_has_matching_properties(ggml_tensor * node, ggml_gra
 static bool is_cuda_graph_update_required(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph) {
 
     bool cuda_graph_update_required = false;
+    if (cuda_ctx->cuda_graph->same_future_graph) {
+    //    printf(" graph frozen \n");
+       return cuda_graph_update_required;
+    }
+    // else {
+    //    printf(" graph not frozen, check update \n");
+    // }
 
     if (cuda_ctx->cuda_graph->instance == nullptr) {
         cuda_graph_update_required = true;
@@ -3936,6 +3943,25 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
     }
 }
 
+
+void ggml_backend_cuda_fix_graph(ggml_backend_t backend){
+#ifdef USE_CUDA_GRAPH
+    ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *)backend->context;
+    if(cuda_ctx->cuda_graph){
+       cuda_ctx->cuda_graph->same_future_graph = true;
+    }
+#endif
+}
+
+void ggml_backend_cuda_unfix_graph(ggml_backend_t backend){
+#ifdef USE_CUDA_GRAPH
+    ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *)backend->context;
+    if(cuda_ctx->cuda_graph){
+       cuda_ctx->cuda_graph->same_future_graph = false;
+    }
+#endif
+}
+
 static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *)backend->context;
 
@@ -3943,7 +3969,6 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
 
 #ifdef USE_CUDA_GRAPH
     static const bool disable_cuda_graphs_due_to_env = (getenv("GGML_CUDA_DISABLE_GRAPHS") != nullptr);
-    // printf("%s: cuda graph on \n", __func__);
 
     // Objects required for CUDA Graph
     if (cuda_ctx->cuda_graph == nullptr) {
@@ -3970,11 +3995,11 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
         || cuda_ctx->cuda_graph->disable_due_to_too_many_updates
         || cuda_ctx->cuda_graph->disable_due_to_failed_graph_capture) {
         use_cuda_graph = false;
-        printf("%s: disabling CUDA graphs due to [%d, %d, %d, %d] \n", __func__,
-            disable_cuda_graphs_due_to_env?1:0,
-            cuda_ctx->cuda_graph->disable_due_to_gpu_arch?1:0,
-            cuda_ctx->cuda_graph->disable_due_to_too_many_updates?1:0,
-            cuda_ctx->cuda_graph->disable_due_to_failed_graph_capture?1:0);
+        // printf("%s: disabling CUDA graphs due to [%d, %d, %d, %d] \n", __func__,
+        //     disable_cuda_graphs_due_to_env?1:0,
+        //     cuda_ctx->cuda_graph->disable_due_to_gpu_arch?1:0,
+        //     cuda_ctx->cuda_graph->disable_due_to_too_many_updates?1:0,
+        //     cuda_ctx->cuda_graph->disable_due_to_failed_graph_capture?1:0);
     }
 
     // printf("%s: A cuda graph on [%d, %d] \n", __func__, use_cuda_graph?1:0, cuda_graph_update_required?1:0);
@@ -3982,7 +4007,9 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
     if (use_cuda_graph) {
         cuda_graph_update_required = is_cuda_graph_update_required(cuda_ctx, cgraph);
 
-        use_cuda_graph = check_node_graph_compatibility(cgraph, use_cuda_graph);
+        if (!cuda_ctx->cuda_graph->same_future_graph) {
+            use_cuda_graph = check_node_graph_compatibility(cgraph, use_cuda_graph);
+        }
         // printf("%s: B cuda graph on [%d, %d] \n", __func__, use_cuda_graph?1:0, cuda_graph_update_required?1:0);
 
         // Disable CUDA graphs (from the next token) if the use-case is demanding too many consecutive graph updates.
@@ -3995,10 +4022,10 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
 
         if (cuda_ctx->cuda_graph->number_consecutive_updates >= 12) {
             cuda_ctx->cuda_graph->disable_due_to_too_many_updates = true;
-//#ifndef NDEBUG
-            // GGML_LOG_DEBUG("%s: disabling CUDA graphs due to too many consecutive updates\n", __func__);
+#ifndef NDEBUG
+            GGML_LOG_DEBUG("%s: disabling CUDA graphs due to too many consecutive updates\n", __func__);
             // printf("%s: disabling CUDA graphs due to too many consecutive updates\n", __func__);
-//#endif
+#endif
         }
     }
 

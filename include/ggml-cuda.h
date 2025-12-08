@@ -40,6 +40,11 @@ GGML_BACKEND_API void ggml_backend_cuda_get_device_memory(int device, size_t * f
 GGML_BACKEND_API bool ggml_backend_cuda_register_host_buffer(void * buffer, size_t size);
 GGML_BACKEND_API void ggml_backend_cuda_unregister_host_buffer(void * buffer);
 
+// #ifdef USE_CUDA_GRAPH
+GGML_BACKEND_API void ggml_backend_cuda_fix_graph(ggml_backend_t backend);
+GGML_BACKEND_API void ggml_backend_cuda_unfix_graph(ggml_backend_t backend);
+// #endif
+
 GGML_BACKEND_API ggml_backend_reg_t ggml_backend_cuda_reg(void);
 
 #ifdef  __cplusplus

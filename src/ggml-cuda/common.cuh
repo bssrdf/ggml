@@ -943,6 +943,7 @@ struct ggml_cuda_graph {
     bool disable_due_to_too_many_updates = false;
     bool disable_due_to_failed_graph_capture = false;
     int number_consecutive_updates = 0;
+    bool same_future_graph = false;
     std::vector<ggml_graph_node_properties> ggml_graph_properties;
 #endif
 };
