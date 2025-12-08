@@ -2142,6 +2142,232 @@ static void ggml_cuda_mul_mat_batched_cublas(ggml_backend_cuda_context & ctx, co
     }
 }
 
+static bool ggml_cuda_mul_mat_can_be_fused(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    const bool split = ggml_backend_buft_is_cuda_split(src0->buffer->buft);
+    if (split)
+       return false;
+
+    if(src0->ne[2] != 1 || src0->ne[3] != 1 || src1->ne[2] != 1 || src1->ne[3] != 1)
+       return false;
+
+    // If src0 is a temporary compute buffer it may have some padding that needs to be cleared for mul_mat_vec_q or mul_mat_q.
+    // But if src0 is also a view of another tensor then this cannot be done safely because it may overwrite valid tensor data.
+    // Therefore, in such cases use cuBLAS.
+    const bool bad_padding_clear = ggml_backend_buffer_get_usage(src0->buffer) == GGML_BACKEND_BUFFER_USAGE_COMPUTE
+        && ggml_nbytes(src0) != ggml_backend_buffer_get_alloc_size(src0->buffer, src0) && src0->view_src;
+
+    bool use_mul_mat_vec_f = (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_BF16)
+        && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32;
+    bool use_mul_mat_f     = !ggml_is_quantized(src0->type)
+        && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32;
+    bool use_mul_mat_vec_q = ggml_is_quantized(src0->type) && !bad_padding_clear
+        // && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32
+        && src1->ne[1] <= MMVQ_MAX_BATCH_SIZE;
+    bool use_mul_mat_q     = ggml_is_quantized(src0->type) && !bad_padding_clear;
+        // && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32;
+
+    bool any_gpus_with_slow_fp16 = false;
+
+    const int cc            = ggml_cuda_info().devices[ctx.device].cc;
+    const int warp_size     = ggml_cuda_info().devices[ctx.device].warp_size;
+    use_mul_mat_q           = use_mul_mat_q             && ggml_cuda_should_use_mmq(src0->type, cc, src1->ne[1]);
+    use_mul_mat_f           = use_mul_mat_f             && ggml_cuda_should_use_mmf(src0->type, cc, warp_size, src0->ne, src1->ne[1], /*mul_mat_id=*/false);
+    use_mul_mat_vec_f       = use_mul_mat_vec_f         && ggml_cuda_should_use_mmvf(src0->type, cc, src0->ne, src1->ne[1]);
+    any_gpus_with_slow_fp16 = any_gpus_with_slow_fp16   || !fast_fp16_hardware_available(cc);
+
+    // debug helpers
+    //printf("src0: %8d %8d %8d %8d\n", src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3]);
+    //printf("      %8d %8d %8d %8d\n", src0->nb[0], src0->nb[1], src0->nb[2], src0->nb[3]);
+    //printf("src1: %8d %8d %8d %8d\n", src1->ne[0], src1->ne[1], src1->ne[2], src1->ne[3]);
+    //printf("      %8d %8d %8d %8d\n", src1->nb[0], src1->nb[1], src1->nb[2], src1->nb[3]);
+    //printf("src0 is contiguous %d, transposed %d, type = %s, name = %s\n", ggml_is_contiguous(src0), ggml_is_transposed(src0), ggml_type_name(src0->type), src0->name);
+    //printf("src1 is contiguous %d, transposed %d, type = %s, name = %s\n", ggml_is_contiguous(src1), ggml_is_transposed(src1), ggml_type_name(src1->type), src1->name);
+
+    //TODO update for generic tensor parallelism
+    bool use_batched_cublas_f16  = src0->type == GGML_TYPE_F16 && (src1->type == GGML_TYPE_F16 || !any_gpus_with_slow_fp16);
+    bool use_batched_cublas_bf16 = src0->type == GGML_TYPE_BF16 && bf16_mma_hardware_available(cc);
+    bool use_batched_cublas_f32  = src0->type == GGML_TYPE_F32;
+
+    if (!split && use_mul_mat_vec_f) {
+        // the custom F16 vector kernel can be used over batched cuBLAS GEMM
+        // but this is only faster for GPUs without tensor cores or with a thin src0 matrix (particularly KQV in attention)
+        // printf("ggml_cuda_mul_mat_vec_f: %s, %s, (%zu, %zu, %zu), (%zu, %zu, %zu)\n",
+        //    ggml_type_name(src0->type), ggml_type_name(src1->type),
+        // src0->ne[0], src0->ne[1], src0->ne[2],
+        // src1->ne[0], src1->ne[1], src1->ne[2]);
+        // ggml_cuda_mul_mat_vec_f(ctx, src0, src1, nullptr, dst);
+        return false;
+    } else if (!split && use_mul_mat_f) {
+        // printf("ggml_cuda_mul_mat_f: %s, %s, (%zu, %zu, %zu), (%zu, %zu, %zu)\n",
+        //    ggml_type_name(src0->type), ggml_type_name(src1->type),
+        // src0->ne[0], src0->ne[1], src0->ne[2],
+        // src1->ne[0], src1->ne[1], src1->ne[2]);
+        // ggml_cuda_mul_mat_f(ctx, src0, src1, nullptr, dst);
+        return false;
+    } else if (!split && use_mul_mat_vec_q) {
+        // printf("ggml_cuda_mul_mat_vec_q: %s, %s, (%zu, %zu, %zu), (%zu, %zu, %zu)\n",
+        //    ggml_type_name(src0->type), ggml_type_name(src1->type),
+        // src0->ne[0], src0->ne[1], src0->ne[2],
+        // src1->ne[0], src1->ne[1], src1->ne[2]);
+        // ggml_cuda_mul_mat_vec_q(ctx, src0, src1, nullptr, dst);
+        return false;
+    } else if (!split && use_mul_mat_q) {
+        // printf("ggml_cuda_mul_mat_q: %s, %s, (%zu, %zu, %zu), (%zu, %zu, %zu)\n",
+        //    ggml_type_name(src0->type), ggml_type_name(src1->type),
+        // src0->ne[0], src0->ne[1], src0->ne[2],
+        // src1->ne[0], src1->ne[1], src1->ne[2]);
+        ggml_cuda_mul_mat_q(ctx, src0, src1, nullptr, dst);
+    } else if (!split && (use_batched_cublas_f16 || use_batched_cublas_bf16 || use_batched_cublas_f32)
+        && !ggml_is_transposed(src0) && !ggml_is_transposed(src1) && src1->ne[2]*src1->ne[3] > 1) {
+        // general KQ + KQV multi-batch without FlashAttention
+        // GGML_ASSERT(dst->type != GGML_TYPE_F16);
+        // printf("ggml_cuda_mul_mat_batched_cublas: %s, %s, (%zu, %zu, %zu), (%zu, %zu, %zu)\n",
+        //    ggml_type_name(src0->type), ggml_type_name(src1->type),
+        // src0->ne[0], src0->ne[1], src0->ne[2],
+        // src1->ne[0], src1->ne[1], src1->ne[2]);
+        // ggml_cuda_mul_mat_batched_cublas(ctx, src0, src1, dst);
+        return true;
+    } else if (use_mul_mat_vec_f) {
+        return false;
+        // if(src1->type == GGML_TYPE_F32)
+        //     ggml_cuda_op_mul_mat<float>(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_vec_f<float>, nullptr);
+        // else
+        //     ggml_cuda_op_mul_mat<half>(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_vec_f<half>, nullptr);
+    } else if (use_mul_mat_vec_q) {
+        return false;
+        // printf("ggml_cuda_op_mul_mat_vec_q: %s, %s, (%zu, %zu, %zu), (%zu, %zu, %zu)\n",
+        //    ggml_type_name(src0->type), ggml_type_name(src1->type),
+        // src0->ne[0], src0->ne[1], src0->ne[2],
+        // src1->ne[0], src1->ne[1], src1->ne[2]);
+        // if(src1->type == GGML_TYPE_F32)
+        //     ggml_cuda_op_mul_mat<float>(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_vec_q<float>, quantize_row_q8_1_cuda<float>);
+        // else if(src1->type == GGML_TYPE_BF16)
+        //     ggml_cuda_op_mul_mat<nv_bfloat16>(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_vec_q<nv_bfloat16>, quantize_row_q8_1_cuda<nv_bfloat16>);
+        // else
+        //     ggml_cuda_op_mul_mat<half>(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_vec_q<half>, quantize_row_q8_1_cuda<half>);
+    } else if (use_mul_mat_q) {
+        return false;
+        // printf("ggml_cuda_op_mul_mat_q: %s, %s, (%zu, %zu, %zu), (%zu, %zu, %zu)\n",
+        //    ggml_type_name(src0->type), ggml_type_name(src1->type),
+        // src0->ne[0], src0->ne[1], src0->ne[2],
+        // src1->ne[0], src1->ne[1], src1->ne[2]);
+        // if(src1->type == GGML_TYPE_F32)
+        //     ggml_cuda_op_mul_mat<float>(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_q<float>, quantize_mmq_q8_1_cuda<float>);
+        // else if(src1->type == GGML_TYPE_BF16)
+        //     ggml_cuda_op_mul_mat<nv_bfloat16>(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_q<nv_bfloat16>, quantize_mmq_q8_1_cuda<nv_bfloat16>);
+        // else
+        //     ggml_cuda_op_mul_mat<half>(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_q<half>, quantize_mmq_q8_1_cuda<half>);
+    } else {
+        return true;
+        // printf("ggml_cuda_mul_mat_cublas: %s, %s, (%zu, %zu, %zu), (%zu, %zu, %zu)\n",
+        //    ggml_type_name(src0->type), ggml_type_name(src1->type),
+        // src0->ne[0], src0->ne[1], src0->ne[2],
+        // src1->ne[0], src1->ne[1], src1->ne[2]);
+        // if(src1->type == GGML_TYPE_F32)
+        //     ggml_cuda_op_mul_mat<float>(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_cublas<float>, nullptr);
+        // else if(src1->type == GGML_TYPE_BF16)
+        //     ggml_cuda_op_mul_mat<nv_bfloat16>(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_cublas<nv_bfloat16>, nullptr);
+        // else
+        //     ggml_cuda_op_mul_mat<half>(ctx, src0, src1, dst, ggml_cuda_op_mul_mat_cublas<half>, nullptr);
+    }
+}
+
+
+static void ggml_cuda_mul_mat_fused_add(ggml_backend_cuda_context & ctx, const ggml_tensor * add_tensor, ggml_tensor * dst) {
+    ggml_tensor * src0 = dst->src[0];
+    ggml_tensor * src1 = dst->src[1];
+
+    // If src0 is a temporary compute buffer it may have some padding that needs to be cleared for mul_mat_vec_q or mul_mat_q.
+    // But if src0 is also a view of another tensor then this cannot be done safely because it may overwrite valid tensor data.
+    // Therefore, in such cases use cuBLAS.
+
+    int id = ggml_cuda_get_device();
+    // ggml_cuda_set_device(ctx.device);
+    cudaStream_t stream = ctx.stream();
+    cublasLtHandle_t ltHandle = ctx.cublasLt_handle(id);
+    CUBLAS_CHECK(cublasLtCreate(&ltHandle));
+    // CUBLAS_CHECK(cublasLtMatmulAlgoGetHeuristic(ltHandle, CUBLASLT_MATMUL_DESC_TYPE_GEMM, nullptr, nullptr, nullptr, nullptr, CUBLASLT_ALGO_CONFIG_MAX_ID, nullptr, nullptr));
+
+    // const int64_t ne00 = src0->ne[0];
+    // const int64_t ne01 = src0->ne[1];
+    // const int64_t ne10 = src1->ne[0];
+    // const int64_t ne11 = src1->ne[1];
+    // const int64_t ne12 = src1->ne[2];
+    // const int64_t ne13 = src1->ne[3];
+    // const int64_t ne0  = dst->ne[0];
+    // const int64_t ne1  = dst->ne[1];
+
+    GGML_TENSOR_BINARY_OP_LOCALS;
+
+
+    GGML_ASSERT(ne02 == 1);
+    GGML_ASSERT(ne03 == 1);
+    GGML_ASSERT(ne12 == 1);
+    GGML_ASSERT(ne13 == 1);
+
+    const float alpha = 1.0f;
+    const float beta = 0.0f;  // Beta = 1.0 for accumulation (add operation)
+
+    // Prepare type-specific parameters
+    cublasComputeType_t compute_type = CUBLAS_COMPUTE_32F;
+    cudaDataType_t data_type = CUDA_R_32F;
+
+    if (src0->type == GGML_TYPE_F16) {
+        compute_type = CUBLAS_COMPUTE_16F;
+        data_type = CUDA_R_16F;
+    } else if (src0->type == GGML_TYPE_BF16) {
+        compute_type = CUBLAS_COMPUTE_32F;
+        data_type = CUDA_R_16BF;
+    }
+
+    const int64_t ne23 = ne12 * ne13;
+
+    // For cublasLt, we need to handle batches differently
+    // Process each batch separately or use the strided batching feature
+
+    const float * src0_ptr = (const float *)src0->data;
+    const float * src1_ptr = (const float *)src1->data ;
+    const float * add_ptr = (const float *)add_tensor->data;
+    float * dst_ptr = (float *)dst->data;
+
+    // Create matrix descriptor for src0 (transposed)
+    cublasLtMatrixLayout_t matA;
+    CUBLAS_CHECK(cublasLtMatrixLayoutCreate(&matA, data_type, ne01, ne10, nb01/ggml_element_size(src0)));
+
+    // Create matrix descriptor for src1
+    cublasLtMatrixLayout_t matB;
+    CUBLAS_CHECK(cublasLtMatrixLayoutCreate(&matB, data_type, ne10, ne11, nb11/ggml_element_size(src1)));
+
+    // Create matrix descriptor for dst (bias tensor)
+    cublasLtMatrixLayout_t matC;
+    CUBLAS_CHECK(cublasLtMatrixLayoutCreate(&matC, CUDA_R_32F, ne0, ne1, ne0));
+
+    // Create matmul descriptor
+    cublasLtMatmulDesc_t matmulDesc;
+    CUBLAS_CHECK(cublasLtMatmulDescCreate(&matmulDesc, compute_type, CUDA_R_32F));
+
+    // Set transpose operation for src0
+    cublasOperation_t opA = CUBLAS_OP_T;
+    cublasOperation_t opB = CUBLAS_OP_N;
+    CUBLAS_CHECK(cublasLtMatmulDescSetAttribute(matmulDesc, CUBLASLT_MATMUL_DESC_TRANSA, &opA, sizeof(opA)));
+    CUBLAS_CHECK(cublasLtMatmulDescSetAttribute(matmulDesc, CUBLASLT_MATMUL_DESC_TRANSB, &opB, sizeof(opB)));
+
+    // Perform matmul with bias: C = alpha*A^T*B + beta*C (where C is the bias)
+    CUBLAS_CHECK(cublasLtMatmul(ltHandle, matmulDesc,
+                                &alpha, src0_ptr, matA,
+                                        src1_ptr, matB,
+                                &beta,  add_ptr, matC,
+                                        dst_ptr, matC,
+                                nullptr, nullptr, 0, stream));
+
+    // Clean up descriptors
+    CUBLAS_CHECK(cublasLtMatrixLayoutDestroy(matA));
+    CUBLAS_CHECK(cublasLtMatrixLayoutDestroy(matB));
+    CUBLAS_CHECK(cublasLtMatrixLayoutDestroy(matC));
+    CUBLAS_CHECK(cublasLtMatmulDescDestroy(matmulDesc));
+
+}
+
 static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     const bool split = ggml_backend_buft_is_cuda_split(src0->buffer->buft);
 

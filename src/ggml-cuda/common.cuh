@@ -955,6 +955,7 @@ struct ggml_backend_cuda_context {
 
     cudaStream_t streams[GGML_CUDA_MAX_DEVICES][GGML_CUDA_MAX_STREAMS] = { { nullptr } };
     cublasHandle_t cublas_handles[GGML_CUDA_MAX_DEVICES] = {nullptr};
+     cublasLtHandle_t cublasLt_handles[GGML_CUDA_MAX_DEVICES] = {nullptr};
 
     std::unique_ptr<ggml_cuda_graph> cuda_graph;
 
@@ -986,8 +987,21 @@ struct ggml_backend_cuda_context {
         return cublas_handles[device];
     }
 
+    cublasLtHandle_t cublasLt_handle(int device) {
+        if (cublasLt_handles[device] == nullptr) {
+            ggml_cuda_set_device(device);
+            CUBLAS_CHECK(cublasLtCreate(&cublasLt_handles[device]));
+            // CUBLAS_CHECK(cublasSetMathMode(cublasLt_handles[device], CUBLAS_TF32_TENSOR_OP_MATH));
+        }
+        return cublasLt_handles[device];
+    }
+
     cublasHandle_t cublas_handle() {
         return cublas_handle(device);
+    }
+
+    cublasLtHandle_t cublasLt_handle() {
+        return cublasLt_handle(device);
     }
 
     // pool
