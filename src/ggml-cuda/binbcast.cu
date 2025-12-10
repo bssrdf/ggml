@@ -257,12 +257,12 @@ static void launch_bin_bcast_pack(const ggml_tensor * src0, const ggml_tensor * 
         GGML_ASSERT(nb02 % sizeof(src0_t) == 0);
         GGML_ASSERT(nb03 % sizeof(src0_t) == 0);
 
-        if (nb10 % sizeof(src1_t) != 0){
-            printf("nb10 %llu, src1_t %d src0_t %d \n ", nb10, sizeof(src1_t), sizeof(src0_t));
-            printf("src0 %s src1 %s dst %s \n ", src0->name, src1->name, dst->name);
-            printf("src0:  %llu, %llu, %llu, %llu \n ", ne00, ne01, ne02, ne03);
-            printf("src1:  %llu, %llu, %llu, %llu \n ", ne10, ne11, ne12, ne13);
-        }
+        // if (nb10 % sizeof(src1_t) != 0){
+        //     printf("nb10 %llu, src1_t %d src0_t %d \n ", nb10, sizeof(src1_t), sizeof(src0_t));
+        //     printf("src0 %s src1 %s dst %s \n ", src0->name, src1->name, dst->name);
+        //     printf("src0:  %llu, %llu, %llu, %llu \n ", ne00, ne01, ne02, ne03);
+        //     printf("src1:  %llu, %llu, %llu, %llu \n ", ne10, ne11, ne12, ne13);
+        // }
 
         GGML_ASSERT(nb10 % sizeof(src1_t) == 0);
         GGML_ASSERT(nb11 % sizeof(src1_t) == 0);
@@ -391,7 +391,9 @@ static void ggml_cuda_op_bin_bcast(
 
     GGML_ASSERT(src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_F16 || src1->type == GGML_TYPE_BF16);
 
-    if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
+    if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F16 && dst->type == GGML_TYPE_F32) {
+        op()(src0, src1, dst, (const float *) src0_dd, (const half *)src1_dd, (float *) dst_dd, stream);
+    } else if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
         op()(src0, src1, dst, (const float *)src0_dd, (const float *)src1_dd, (float *)dst_dd, stream);
     } else if (src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_F16 && dst->type == GGML_TYPE_F16) {
         op()(src0, src1, dst, (const half *) src0_dd, (const half *)src1_dd, (half *) dst_dd, stream);
