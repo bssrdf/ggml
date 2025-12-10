@@ -2167,7 +2167,7 @@ static bool ggml_cuda_mul_mat_can_be_fused(const ggml_tensor * add_tensor, const
     // //    return false; //bias needs to have the same type as mul_mat output as required by cublasLt API
     // }
 
-    if(src0->type != GGML_TYPE_F16 || src1->type != GGML_TYPE_F16)
+    if(src0->type != GGML_TYPE_F16 || src1->type != GGML_TYPE_F16 || src0->type != GGML_TYPE_BF16 || src1->type != GGML_TYPE_BF16)
         return false;
 
     return true;
@@ -2212,10 +2212,12 @@ static void ggml_cuda_op_mul_mat_fused_add(ggml_backend_cuda_context & ctx, ggml
     GGML_ASSERT(ne12 == 1);
     GGML_ASSERT(ne13 == 1);
 
-    // const float alpha = 1.0f;
-    // const float beta = 0.0f;  // Beta = 1.0 for accumulation (add operation)
+    const float alphaf32 = 1.0f;
+    const float betaf32 = 0.0f;  // Beta = 1.0 for accumulation (add operation)
     const half alpha{(half)1.0f};
     const half beta{(half)0.0f};  // Beta = 1.0 for accumulation (add operation)
+    void *alpha_ptr;
+    void *beta_ptr;
     // Prepare type-specific parameters
     cublasComputeType_t compute_type = CUBLAS_COMPUTE_32F;
     cudaDataType_t data_type_a = CUDA_R_32F;
@@ -2267,8 +2269,10 @@ static void ggml_cuda_op_mul_mat_fused_add(ggml_backend_cuda_context & ctx, ggml
 
     // Create matmul descriptor
     cublasLtMatmulDesc_t matmulDesc;
-    // CUBLAS_CHECK(cublasLtMatmulDescCreate(&matmulDesc, compute_type, CUDA_R_32F));
-    CUBLAS_CHECK(cublasLtMatmulDescCreate(&matmulDesc, compute_type, data_type_a));
+    if (data_type_a == CUDA_R_16BF)
+        CUBLAS_CHECK(cublasLtMatmulDescCreate(&matmulDesc, compute_type, CUDA_R_32F));
+    else
+        CUBLAS_CHECK(cublasLtMatmulDescCreate(&matmulDesc, compute_type, data_type_a));
 
 
     // Set transpose operation for src0
@@ -2295,36 +2299,48 @@ static void ggml_cuda_op_mul_mat_fused_add(ggml_backend_cuda_context & ctx, ggml
     // GGML_ASSERT(src1_ptr != nullptr);
     // GGML_ASSERT(add_ptr != nullptr);
 
-    ggml_cuda_pool_alloc<half> bias_as_f16(ctx.pool(id));
-    if (add_src->type != GGML_TYPE_F16) {
-        const to_fp16_cuda_t to_fp16_cuda = ggml_get_to_fp16_cuda(add_src->type);
-        GGML_ASSERT(to_fp16_cuda != nullptr);
-        size_t ne = ggml_nelements(add_src);
-        bias_as_f16.alloc(ne);
-        to_fp16_cuda(add_src->data, bias_as_f16.get(), ne, stream);
+    if (dst->type == GGML_TYPE_F16) {
+        ggml_cuda_pool_alloc<half> bias_as_f16(ctx.pool(id));
+        if (add_src->type != GGML_TYPE_F16) {
+            const to_fp16_cuda_t to_fp16_cuda = ggml_get_to_fp16_cuda(add_src->type);
+            GGML_ASSERT(to_fp16_cuda != nullptr);
+            size_t ne = ggml_nelements(add_src);
+            bias_as_f16.alloc(ne);
+            to_fp16_cuda(add_src->data, bias_as_f16.get(), ne, stream);
+        }
+        const half * bias_ptr = add_src->type == GGML_TYPE_F16 ? (const half *) add_src->data : bias_as_f16.get();
+
+        // Bias pointer = C (fp32)
+        CUBLAS_CHECK(cublasLtMatmulDescSetAttribute(
+            matmulDesc, CUBLASLT_MATMUL_DESC_BIAS_POINTER,
+            &bias_ptr, sizeof(bias_ptr)));
+        alpha_ptr = (void *)(&alpha);
+        beta_ptr  = (void *)(&beta);
+    } else if (dst->type == GGML_TYPE_BF16) {
+        ggml_cuda_pool_alloc<nv_bfloat16> bias_as_f16(ctx.pool(id));
+        if (add_src->type != GGML_TYPE_BF16) {
+            const to_bf16_cuda_t to_fp16_cuda = ggml_get_to_bf16_cuda(add_src->type);
+            GGML_ASSERT(to_fp16_cuda != nullptr);
+            size_t ne = ggml_nelements(add_src);
+            bias_as_f16.alloc(ne);
+            to_fp16_cuda(add_src->data, bias_as_f16.get(), ne, stream);
+        }
+        const nv_bfloat16 * bias_ptr = add_src->type == GGML_TYPE_BF16 ? (const nv_bfloat16 *) add_src->data : bias_as_f16.get();
+
+        // Bias pointer = C (fp32)
+        CUBLAS_CHECK(cublasLtMatmulDescSetAttribute(
+            matmulDesc, CUBLASLT_MATMUL_DESC_BIAS_POINTER,
+            &bias_ptr, sizeof(bias_ptr)));
+        alpha_ptr = (void *)(&alphaf32);
+        beta_ptr  = (void *)(&betaf32);
     }
-    const half * bias_ptr = add_src->type == GGML_TYPE_F16 ? (const half *) add_src->data : bias_as_f16.get();
-
-    // const void *bias_ptr = add_src->data;
-
-    // CUBLAS_CHECK(cublasLtMatmulDescSetAttribute(
-    //     matmulDesc, CUBLASLT_MATMUL_DESC_BIAS_DATA_TYPE,
-    //     &data_type_bias, sizeof(data_type_bias)));
-
-    // Bias pointer = C (fp32)
-    CUBLAS_CHECK(cublasLtMatmulDescSetAttribute(
-        matmulDesc, CUBLASLT_MATMUL_DESC_BIAS_POINTER,
-        &bias_ptr, sizeof(bias_ptr)));
-
-
 
     // Perform matmul with bias: C = alpha*A^T*B + beta*C (where C is the bias)
     CUBLAS_CHECK(cublasLtMatmul(ltHandle, matmulDesc,
-                                &alpha, src0_ptr, matA,
-                                        src1_ptr, matB,
-                                &beta,  add_ptr, matC,
-                                // &beta,  bias_ptr, matC,
-                                        add_ptr, matC,
+                                alpha_ptr, src0_ptr, matA,
+                                           src1_ptr, matB,
+                                beta_ptr,  add_ptr, matC,
+                                           add_ptr, matC,
                                 nullptr, nullptr, 0, stream));
 
     // Clean up descriptors

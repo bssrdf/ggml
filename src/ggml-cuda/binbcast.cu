@@ -388,7 +388,14 @@ template<class op>
 static void ggml_cuda_op_bin_bcast(
     const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
     const void * src0_dd, const void * src1_dd, void * dst_dd, cudaStream_t stream) {
-
+    if(!(src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_F16 || src1->type == GGML_TYPE_BF16)){
+        printf("src1 %s, %s: (%zu, %zu, %zu, %zu)\n ", ggml_get_name(src1), ggml_type_name(src1->type),
+        src1->ne[0], src1->ne[1], src1->ne[2], src1->ne[3]);
+        printf("src0 %s, %s: (%zu, %zu, %zu, %zu)\n ", ggml_get_name(src0), ggml_type_name(src0->type),
+        src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3]);
+        printf("dst %s, %s: (%zu, %zu, %zu, %zu)\n ", ggml_get_name(dst), ggml_type_name(dst->type),
+        dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3]);
+    }
     GGML_ASSERT(src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_F16 || src1->type == GGML_TYPE_BF16);
 
     if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F16 && dst->type == GGML_TYPE_F32) {
