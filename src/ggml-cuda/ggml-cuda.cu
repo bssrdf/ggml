@@ -2162,8 +2162,10 @@ static bool ggml_cuda_mul_mat_can_be_fused(const ggml_tensor * add_tensor, const
     } else {
         GGML_ASSERT(false);
     }
-    if (add_src->type != dst->type)
-       return false; //bias needs to have the same type as mul_mat output as required by cublasLt API
+    // if (add_src->type != dst->type){
+    //     printf(" different tyeps mul_mat  %s, bias %s \n", ggml_type_name(dst->type),  ggml_type_name(add_src->type));
+    // //    return false; //bias needs to have the same type as mul_mat output as required by cublasLt API
+    // }
 
     if(src0->type != GGML_TYPE_F16 || src1->type != GGML_TYPE_F16)
         return false;
@@ -2202,15 +2204,6 @@ static void ggml_cuda_op_mul_mat_fused_add(ggml_backend_cuda_context & ctx, ggml
     // CUBLAS_CHECK(cublasLtCreate(&ltHandle));
     // CUBLAS_CHECK(cublasLtMatmulAlgoGetHeuristic(ltHandle, CUBLASLT_MATMUL_DESC_TYPE_GEMM, nullptr, nullptr, nullptr, nullptr, CUBLASLT_ALGO_CONFIG_MAX_ID, nullptr, nullptr));
 
-    // const int64_t ne00 = src0->ne[0];
-    // const int64_t ne01 = src0->ne[1];
-    // const int64_t ne10 = src1->ne[0];
-    // const int64_t ne11 = src1->ne[1];
-    // const int64_t ne12 = src1->ne[2];
-    // const int64_t ne13 = src1->ne[3];
-    // const int64_t ne0  = dst->ne[0];
-    // const int64_t ne1  = dst->ne[1];
-
     GGML_TENSOR_BINARY_OP_LOCALS;
 
 
@@ -2226,6 +2219,7 @@ static void ggml_cuda_op_mul_mat_fused_add(ggml_backend_cuda_context & ctx, ggml
     // Prepare type-specific parameters
     cublasComputeType_t compute_type = CUBLAS_COMPUTE_32F;
     cudaDataType_t data_type_a = CUDA_R_32F;
+    cudaDataType_t data_type_bias = CUDA_R_32F;
 
 
 
@@ -2255,18 +2249,21 @@ static void ggml_cuda_op_mul_mat_fused_add(ggml_backend_cuda_context & ctx, ggml
     // float * dst_ptr = (float *)dst->data;
     // Create matrix descriptor for src0 (transposed)
     cublasLtMatrixLayout_t matA;
-    CUBLAS_CHECK(cublasLtMatrixLayoutCreate(&matA, data_type_a, ne01, ne00, ne00));
+    CUBLAS_CHECK(cublasLtMatrixLayoutCreate(&matA, data_type_a, ne00, ne01, ne00));
 
     // Create matrix descriptor for src1
     cublasLtMatrixLayout_t matB;
-    CUBLAS_CHECK(cublasLtMatrixLayoutCreate(&matB, data_type_b, ne11, ne10, ne10));
+    CUBLAS_CHECK(cublasLtMatrixLayoutCreate(&matB, data_type_b, ne10, ne11, ne10));
 
     // Create matrix descriptor for dst (bias tensor)
     cublasLtMatrixLayout_t matC;
-    CUBLAS_CHECK(cublasLtMatrixLayoutCreate(&matC, data_type_c, ne1, ne0, ne0));
+    CUBLAS_CHECK(cublasLtMatrixLayoutCreate(&matC, data_type_c, ne0, ne1, ne0));
 
-    printf("(%zu, %zu), (%zu, %zu), (%zu, %zu)\n", ne00, ne01, ne10, ne11, ne0, ne1);
-    printf("%s, (%zu, %zu, %zu, %zu)\n", ggml_type_name(add_tensor->type), add_tensor->ne[0], add_tensor->ne[1], add_tensor->ne[2], add_tensor->ne[3]);
+    // cublasLtMatrixLayout_t matD;
+    // CUBLAS_CHECK(cublasLtMatrixLayoutCreate(&matC, data_type_c, ne0, ne1, ne0));
+
+    // printf("(%zu, %zu), (%zu, %zu), (%zu, %zu)\n", ne00, ne01, ne10, ne11, ne0, ne1);
+    // printf("%s, (%zu, %zu, %zu, %zu)\n", ggml_type_name(add_tensor->type), add_tensor->ne[0], add_tensor->ne[1], add_tensor->ne[2], add_tensor->ne[3]);
 
     // Create matmul descriptor
     cublasLtMatmulDesc_t matmulDesc;
@@ -2298,18 +2295,35 @@ static void ggml_cuda_op_mul_mat_fused_add(ggml_backend_cuda_context & ctx, ggml
     // GGML_ASSERT(src1_ptr != nullptr);
     // GGML_ASSERT(add_ptr != nullptr);
 
-    const void *bias_ptr = add_src->data;
+    ggml_cuda_pool_alloc<half> bias_as_f16(ctx.pool(id));
+    if (add_src->type != GGML_TYPE_F16) {
+        const to_fp16_cuda_t to_fp16_cuda = ggml_get_to_fp16_cuda(add_src->type);
+        GGML_ASSERT(to_fp16_cuda != nullptr);
+        size_t ne = ggml_nelements(add_src);
+        bias_as_f16.alloc(ne);
+        to_fp16_cuda(add_src->data, bias_as_f16.get(), ne, stream);
+    }
+    const half * bias_ptr = add_src->type == GGML_TYPE_F16 ? (const half *) add_src->data : bias_as_f16.get();
+
+    // const void *bias_ptr = add_src->data;
+
+    // CUBLAS_CHECK(cublasLtMatmulDescSetAttribute(
+    //     matmulDesc, CUBLASLT_MATMUL_DESC_BIAS_DATA_TYPE,
+    //     &data_type_bias, sizeof(data_type_bias)));
 
     // Bias pointer = C (fp32)
     CUBLAS_CHECK(cublasLtMatmulDescSetAttribute(
         matmulDesc, CUBLASLT_MATMUL_DESC_BIAS_POINTER,
         &bias_ptr, sizeof(bias_ptr)));
 
+
+
     // Perform matmul with bias: C = alpha*A^T*B + beta*C (where C is the bias)
     CUBLAS_CHECK(cublasLtMatmul(ltHandle, matmulDesc,
                                 &alpha, src0_ptr, matA,
                                         src1_ptr, matB,
                                 &beta,  add_ptr, matC,
+                                // &beta,  bias_ptr, matC,
                                         add_ptr, matC,
                                 nullptr, nullptr, 0, stream));
 
@@ -3237,6 +3251,9 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph * cgraph, int node_idx, 
     if ( ops.size() == 2  && ops.begin()[0] == GGML_OP_MUL_MAT && ops.begin()[1] == GGML_OP_ADD) {
         const ggml_tensor *mul_mat = cgraph->nodes[node_idx];
         const ggml_tensor *add     = cgraph->nodes[node_idx+1];
+        // const ggml_tensor *node = mul_mat;
+        // printf("fused mul mat: %s, %s (%zu, %zu, %zu, %zu)  \n", node->name, ggml_type_name(node->type),
+        //                     node->ne[0], node->ne[1],node->ne[2], node->ne[3]);
 
         return ggml_cuda_mul_mat_can_be_fused(add, mul_mat);
     }
@@ -3391,8 +3408,8 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                     }
 
                     if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_MUL_MAT, GGML_OP_ADD}, {})) {
-                        printf("fused mul mat: %s, %s (%zu, %zu, %zu, %zu)  \n", node->name, ggml_type_name(node->type),
-                            node->ne[0], node->ne[1],node->ne[2], node->ne[3]);
+                        // printf("fused mul mat: %s, %s (%zu, %zu, %zu, %zu)  \n", node->name, ggml_type_name(node->type),
+                        //     node->ne[0], node->ne[1],node->ne[2], node->ne[3]);
                         ggml_cuda_op_mul_mat_fused_add(*cuda_ctx, cgraph->nodes[i+1], node);
                         i++;
                         continue;

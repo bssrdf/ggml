@@ -35,9 +35,11 @@ struct test_model {
     struct ggml_tensor * b2;
     struct ggml_tensor * b3;
     struct ggml_tensor * bias;
+    struct ggml_tensor * bias_f32;
     ggml_backend_t backend = NULL;
     ggml_backend_buffer_t buffer;
     struct ggml_context * ctx;
+    std::vector<float> bias_val;
 };
 
 void load_model(test_model & model, bool use_gpu = false) {
@@ -89,14 +91,18 @@ void load_model(test_model & model, bool use_gpu = false) {
     ggml_fp32_to_bf16_row(bdata.data(), bfbdata.data(), N*L*K);
 
 
-    std::vector<float> bias_data(N);
-    for (int i = 0; i < N; i++) {
+    std::vector<float> bias_data(M);
+    for (int i = 0; i < M; i++) {
         // bdata[i] = 1.5f;
         float r = -1.f + static_cast <float> (rand()) /( static_cast <float> (RAND_MAX/(1.f-(-1.f))));
         bias_data[i] = r;
+        // bias_data[i] = 0.f;
     }
-    std::vector<ggml_fp16_t> hbias_data(N);
-    ggml_fp32_to_fp16_row(bias_data.data(), hbias_data.data(), N);
+
+    model.bias_val = bias_data;
+
+    std::vector<ggml_fp16_t> hbias_data(M);
+    ggml_fp32_to_fp16_row(bias_data.data(), hbias_data.data(), M);
 
 
     size_t buffer_size = 0;
@@ -105,7 +111,8 @@ void load_model(test_model & model, bool use_gpu = false) {
         buffer_size += M * K * ggml_type_size(GGML_TYPE_F16); // tensor a
         buffer_size += M * K * ggml_type_size(GGML_TYPE_Q8_0); // tensor a
         buffer_size += N * K * L * ggml_type_size(GGML_TYPE_F16); // tensor b
-        buffer_size += N * ggml_type_size(GGML_TYPE_F16); // tensor bias
+        buffer_size += M * ggml_type_size(GGML_TYPE_F16); // tensor bias
+        buffer_size += M * ggml_type_size(GGML_TYPE_F32); // tensor bias
         buffer_size += N * K * L * ggml_type_size(GGML_TYPE_BF16); // tensor b
         buffer_size += N * K * L * ggml_type_size(GGML_TYPE_F32); // tensor b2
         buffer_size += 1024; // overhead
@@ -114,7 +121,7 @@ void load_model(test_model & model, bool use_gpu = false) {
     printf("%s: ggml tensor size    = %d bytes\n", __func__, (int) sizeof(ggml_tensor));
     printf("%s: backend buffer size = %0.2f MB\n", __func__, (buffer_size/ 1024.f/ 1024.f));
 
-    int num_tensors = 7;
+    int num_tensors = 8;
     struct ggml_init_params params {
             /*.mem_size   =*/ ggml_tensor_overhead() * num_tensors,
             /*.mem_buffer =*/ NULL,
@@ -159,7 +166,8 @@ void load_model(test_model & model, bool use_gpu = false) {
     model.a2 = ggml_new_tensor_4d(model.ctx, GGML_TYPE_F32, K, M, 1, 1);
     model.a = ggml_new_tensor_4d(model.ctx, GGML_TYPE_Q8_0, K, M, 1, 1);
     model.b = ggml_new_tensor_4d(model.ctx, GGML_TYPE_F16, K, N, L, 1);
-    model.bias = ggml_new_tensor_4d(model.ctx, GGML_TYPE_F16, N, 1, 1, 1);
+    model.bias = ggml_new_tensor_4d(model.ctx, GGML_TYPE_F16, M, 1, 1, 1);
+    model.bias_f32 = ggml_new_tensor_4d(model.ctx, GGML_TYPE_F32, M, 1, 1, 1);
     model.b2 = ggml_new_tensor_4d(model.ctx, GGML_TYPE_F32, K, N, L, 1);
     model.b3 = ggml_new_tensor_4d(model.ctx, GGML_TYPE_BF16, K, N, L, 1);
 
@@ -246,6 +254,18 @@ void load_model(test_model & model, bool use_gpu = false) {
         ggml_backend_tensor_set(model.bias, hbias_data.data(), 0, ggml_nbytes(model.bias));
     }
 
+    ggml_tallocr_alloc(&alloc, model.bias_f32);
+
+    if(ggml_backend_is_cpu(model.backend)
+#ifdef GGML_USE_METAL
+                || ggml_backend_is_metal(model.backend)
+#endif
+    ) {
+        memcpy(model.bias_f32->data, bias_data.data(), ggml_nbytes(model.bias_f32));
+    } else {
+        ggml_backend_tensor_set(model.bias_f32, bias_data.data(), 0, ggml_nbytes(model.bias_f32));
+    }
+
     free(qbuf);
 }
 
@@ -274,7 +294,8 @@ struct ggml_cgraph * build_graph(const test_model& model) {
     ggml_set_name(res2, "gemm_res2");
     ggml_build_forward_expand(gf, res2);
 
-    struct ggml_tensor* res3 = ggml_mul_mat(ctx0, model.a1, model.b2);
+    // struct ggml_tensor* res3 = ggml_mul_mat(ctx0, model.a1, model.b2);
+    struct ggml_tensor* res3 = ggml_add(ctx0, ggml_mul_mat(ctx0, model.a1, model.b2), model.bias_f32);
     ggml_set_name(res3, "gemm_ref");
     ggml_build_forward_expand(gf, res3);
 
@@ -371,31 +392,24 @@ int main(void)
     std::vector<ggml_fp16_t> gemm_fused16data(ggml_nelements(gemm_f16_fused));
 
     ggml_backend_tensor_get(gemm_res, gemm_data.data(), 0, ggml_nbytes(gemm_res));
-    fprintf(stderr, "%s: finished comp A1 \n", __func__);
     ggml_backend_tensor_get(gemm_res2, gemm_data2.data(), 0, ggml_nbytes(gemm_res2));
-    fprintf(stderr, "%s: finished comp A2 \n", __func__);
     ggml_backend_tensor_get(gemm_ref, gemm_refdata.data(), 0, ggml_nbytes(gemm_ref));
-    fprintf(stderr, "%s: finished comp A3 \n", __func__);
     ggml_backend_tensor_get(gemm_ref32, gemm_ref32data.data(), 0, ggml_nbytes(gemm_ref32));
-    fprintf(stderr, "%s: finished comp A4 \n", __func__);
     ggml_backend_tensor_get(gemm_ref_bf16, gemm_bf16_data.data(), 0, ggml_nbytes(gemm_ref_bf16));
-    fprintf(stderr, "%s: finished comp AA \n", __func__);
-    // if(gemm_f16_fused)
-    //     ggml_backend_tensor_get(gemm_f16_fused, gemm_fused16data.data(), 0, ggml_nbytes(gemm_f16_fused));
+    ggml_backend_tensor_get(gemm_f16_fused, gemm_fused16data.data(), 0, ggml_nbytes(gemm_f16_fused));
 
-    fprintf(stderr, "%s: finished comp B \n", __func__);
 
-    for(int i = 0; i < gemm_data.size(); i++) {
-        printf("%d: %f, %f, %f, %f, %f\n", i, gemm_data2[i], ggml_fp16_to_fp32(gemm_data[i]),
-        gemm_refdata[i], ggml_fp16_to_fp32(gemm_ref32data[i]), ggml_bf16_to_fp32(gemm_bf16_data[i]));
+    // for(int i = 0; i < gemm_data.size(); i++) {
+    //     printf("%d: %f, %f, %f, %f, %f\n", i, gemm_data2[i], ggml_fp16_to_fp32(gemm_data[i]),
+    //     gemm_refdata[i], ggml_fp16_to_fp32(gemm_ref32data[i]), ggml_bf16_to_fp32(gemm_bf16_data[i]));
+    // }
+
+
+    // for(int i = 0; i < gemm_fused16data.size(); i++) {
+    for(int i = 0; i < gemm_f16_fused->ne[0]; i++) {
+        printf("%d: %f, %f, %f\n", i, ggml_fp16_to_fp32(gemm_fused16data[i]), gemm_refdata[i], model.bias_val[i]);
     }
 
-    fprintf(stderr, "%s: finished comp C \n", __func__);
-    // if(gemm_f16_fused){
-    //     for(int i = 0; i < gemm_fused16data.size(); i++) {
-    //         printf("%d: %f, %f\n", i, ggml_fp16_to_fp32(gemm_fused16data[i]), gemm_refdata[i]);
-    //     }
-    // }
 
     ggml_free(model.ctx);
 
