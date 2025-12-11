@@ -2151,8 +2151,10 @@ static bool ggml_cuda_mul_mat_can_be_fused(const ggml_tensor * add_tensor, const
     if (split)
        return false;
 
-    if(src0->ne[2] != 1 || src0->ne[3] != 1 || src1->ne[2] != 1 || src1->ne[3] != 1)
+    if(src0->ne[2] != 1 || src0->ne[3] != 1 || src1->ne[2] != 1 || src1->ne[3] != 1){
+        // printf("fail reason 3 \n");
        return false;
+    }
 
     ggml_tensor *add_src; // mat_c
     if (add_tensor->src[0] == dst) {
@@ -2167,8 +2169,10 @@ static bool ggml_cuda_mul_mat_can_be_fused(const ggml_tensor * add_tensor, const
     // //    return false; //bias needs to have the same type as mul_mat output as required by cublasLt API
     // }
 
-    if(src0->type != GGML_TYPE_F16 || src1->type != GGML_TYPE_F16 || src0->type != GGML_TYPE_BF16 || src1->type != GGML_TYPE_BF16)
-        return false;
+    if(! (src1->type == GGML_TYPE_F16 || src1->type == GGML_TYPE_BF16)) {
+    //    printf("fail reason 4 \n");
+       return false;
+    }
 
     return true;
 
@@ -3275,10 +3279,17 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph * cgraph, int node_idx, 
     //                         node->ne[0], node->ne[1],node->ne[2], node->ne[3]);
 
     if ( ops.size() == 2  && ops.begin()[0] == GGML_OP_MUL_MAT && ops.begin()[1] == GGML_OP_ADD) {
-        const ggml_tensor *mul_mat = cgraph->nodes[node_idx];
-        const ggml_tensor *add     = cgraph->nodes[node_idx+1];
-        // const ggml_tensor *node = mul_mat;
-        // printf("fused mul mat: %s, %s (%zu, %zu, %zu, %zu)  \n", node->name, ggml_type_name(node->type),
+        ggml_tensor *mul_mat = cgraph->nodes[node_idx];
+        ggml_tensor *add     = cgraph->nodes[node_idx+1];
+        ggml_tensor *node = mul_mat;
+        // printf("trying to fuse  mul mat: %s, %s (%zu, %zu, %zu, %zu) %s, %s \n", node->name, ggml_type_name(node->type),
+        //                     node->ne[0], node->ne[1],node->ne[2], node->ne[3],
+        //                     ggml_type_name(node->src[0]->type), ggml_type_name(node->src[1]->type));
+        // node = mul_mat->src[0];
+        // printf("trying mul mat src0: %s, %s (%zu, %zu, %zu, %zu) \n", node->name, ggml_type_name(node->type),
+        //                     node->ne[0], node->ne[1],node->ne[2], node->ne[3]);
+        // node = mul_mat->src[1];
+        // printf("trying mul mat src1: %s, %s (%zu, %zu, %zu, %zu) \n", node->name, ggml_type_name(node->type),
         //                     node->ne[0], node->ne[1],node->ne[2], node->ne[3]);
 
         return ggml_cuda_mul_mat_can_be_fused(add, mul_mat);
@@ -3525,6 +3536,16 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                 bool ok = ggml_cuda_compute_forward(*cuda_ctx, node);
                 // std::vector<float> dataf(ggml_nelements(node));
                 // std::vector<half> data(ggml_nelements(node));
+                if(node->op == GGML_OP_ADD){
+                    printf("NODE %s, %s, %s  (%zu, %zu, %zu, %zu)\n", node->name, ggml_type_name(node->type), ggml_op_name(node->op),
+                                node->ne[0], node->ne[1], node->ne[2], node->ne[3]);
+                    printf("NODE src0 %s, %s, %s, (%zu, %zu, %zu, %zu)\n", node->src[0]->name,
+                                ggml_type_name(node->src[0]->type), ggml_op_name(node->src[0]->op), node->src[0]->ne[0], node->src[0]->ne[1],
+                            node->src[0]->ne[2], node->src[0]->ne[3]);
+                    printf("NODE src1 %s, %s, %s (%zu, %zu, %zu, %zu)\n", node->src[1]->name,
+                                ggml_type_name(node->src[1]->type), ggml_op_name(node->src[1]->op), node->src[1]->ne[0], node->src[1]->ne[1],
+                                node->src[1]->ne[2], node->src[1]->ne[3]);
+                }
                 // if(node->type == GGML_TYPE_F16){
                 //     std::vector<half> data(ggml_nelements(node));
                 //     ggml_backend_tensor_get(node, data.data(), 0, ggml_nbytes(node));
