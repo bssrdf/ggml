@@ -61,7 +61,7 @@ static __global__ void norm_f32(
         const uint3   mul_nrows_packed     = make_uint3(0, 0, 0),
         const uint3   mul_nchannels_packed = make_uint3(0, 0, 0),
         const uint3   mul_nsamples_packed  = make_uint3(0, 0, 0),
-        const float * add                  = nullptr,
+        const mul_T * add                  = nullptr,
         const int64_t add_stride_row       = 0,
         const int64_t add_stride_channel   = 0,
         const int64_t add_stride_sample    = 0,
@@ -128,7 +128,7 @@ static __global__ void norm_f32(
         if constexpr (do_multiply && do_add) {
             const int mul_col = fastmodulo(col, mul_ncols_packed);
             const int add_col = fastmodulo(col, add_ncols_packed);
-            dst[col]          = (x[col] - mean) * inv_std * ggml_cuda_cast<float>(mul[mul_col]) + add[add_col];
+            dst[col]          = (x[col] - mean) * inv_std * ggml_cuda_cast<float>(mul[mul_col]) + ggml_cuda_cast<float>(add[add_col]);
         } else if constexpr (do_multiply) {
             const int mul_col = fastmodulo(col, mul_ncols_packed);
             dst[col]          = (x[col] - mean) * inv_std * ggml_cuda_cast<float>(mul[mul_col]);
@@ -197,7 +197,7 @@ static __global__ void norm_f16(
         const uint3   mul_nrows_packed     = make_uint3(0, 0, 0),
         const uint3   mul_nchannels_packed = make_uint3(0, 0, 0),
         const uint3   mul_nsamples_packed  = make_uint3(0, 0, 0),
-        const half * add                  = nullptr,
+        const mul_T * add                  = nullptr,
         const int64_t add_stride_row       = 0,
         const int64_t add_stride_channel   = 0,
         const int64_t add_stride_sample    = 0,
@@ -333,7 +333,7 @@ static __global__ void norm_bf16(
         const uint3   mul_nrows_packed     = make_uint3(0, 0, 0),
         const uint3   mul_nchannels_packed = make_uint3(0, 0, 0),
         const uint3   mul_nsamples_packed  = make_uint3(0, 0, 0),
-        const nv_bfloat16 * add                  = nullptr,
+        const mul_T * add                  = nullptr,
         const int64_t add_stride_row       = 0,
         const int64_t add_stride_channel   = 0,
         const int64_t add_stride_sample    = 0,
@@ -1185,7 +1185,7 @@ static void rms_norm_mul_f32_cuda(const T *  x,
 template<typename T, typename mul_T>
 static void norm_mul_f32_cuda(const T *  x,
                                 const mul_T *  mul,
-                                const T *  add,
+                                const mul_T *  add,
                                 T *  dst,
                                 const int      ncols,
                                 const int      nrows,
@@ -1740,7 +1740,7 @@ void ggml_cuda_op_norm_fused_add(ggml_backend_cuda_context & ctx,
                                         add_ncols, add_nrows, add_nchannels, add_nsamples,
                                         eps, stream);
         } else if (mul_src->type == GGML_TYPE_F16) {
-            norm_mul_f32_cuda<float, half>(src0_d, (const half *)mul_d, add_d, dst_d,
+            norm_mul_f32_cuda<float, half>(src0_d, (const half *)mul_d, (const half *)add_d, dst_d,
                                         ne00,ne01, ne02, ne03,
                                         /*s00*/ s01, s02, s03,
                                         /*mul_s00*/ mul_s01, mul_s02, mul_s03,
@@ -1751,7 +1751,7 @@ void ggml_cuda_op_norm_fused_add(ggml_backend_cuda_context & ctx,
         }
     } else if (norm_src->type == GGML_TYPE_F16) {
         if (mul_src->type == GGML_TYPE_F32) {
-            norm_mul_f32_cuda<half, float>((const half *)src0_d, mul_d, (const half *)add_d, (half *)dst_d,
+            norm_mul_f32_cuda<half, float>((const half *)src0_d, mul_d, add_d, (half *)dst_d,
                                         ne00,ne01, ne02, ne03,
                                         /*s00*/ s01, s02, s03,
                                         /*mul_s00*/ mul_s01, mul_s02, mul_s03,

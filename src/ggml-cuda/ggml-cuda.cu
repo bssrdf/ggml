@@ -3270,9 +3270,9 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph * cgraph, int node_idx, 
         return false;
     }
 
-    const ggml_tensor *node = cgraph->nodes[node_idx];
-        printf("able to fuse: %s, %s, %s (%zu, %zu, %zu, %zu)  \n", node->name, ggml_type_name(node->type), ggml_op_name(node->op),
-                            node->ne[0], node->ne[1],node->ne[2], node->ne[3]);
+    // const ggml_tensor *node = cgraph->nodes[node_idx];
+    //     printf("able to fuse: %s, %s, %s (%zu, %zu, %zu, %zu)  \n", node->name, ggml_type_name(node->type), ggml_op_name(node->op),
+    //                         node->ne[0], node->ne[1],node->ne[2], node->ne[3]);
 
     if ( ops.size() == 2  && ops.begin()[0] == GGML_OP_MUL_MAT && ops.begin()[1] == GGML_OP_ADD) {
         const ggml_tensor *mul_mat = cgraph->nodes[node_idx];
@@ -3332,9 +3332,9 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph * cgraph, int node_idx, 
         const ggml_tensor *mul      = cgraph->nodes[node_idx+1];
         const ggml_tensor *add      = cgraph->nodes[node_idx+2];
 
-        const ggml_tensor *node = rms_norm;
-        printf("checking fused norm mul add: %s, %s (%zu, %zu, %zu, %zu)  \n", node->name, ggml_type_name(node->type),
-                            node->ne[0], node->ne[1],node->ne[2], node->ne[3]);
+        // const ggml_tensor *node = rms_norm;
+        // printf("checking fused norm mul add: %s, %s (%zu, %zu, %zu, %zu)  \n", node->name, ggml_type_name(node->type),
+        //                     node->ne[0], node->ne[1],node->ne[2], node->ne[3]);
 
         // GGML_ASSERT(rms_norm->src[0]->type == GGML_TYPE_F32);
         // GGML_ASSERT(rms_norm->type == GGML_TYPE_F32);
@@ -3403,7 +3403,7 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
         // With the use of CUDA graphs, the execution will be performed by the graph launch.
         if (!use_cuda_graph || cuda_graph_update_required) {
 
-            printf(" executing graphs due to [%d, %d]\n ", use_cuda_graph?1:0, cuda_graph_update_required?1:0);
+            // printf(" executing graphs due to [%d, %d]\n ", use_cuda_graph?1:0, cuda_graph_update_required?1:0);
 
             for (int i = 0; i < cgraph->n_nodes; i++) {
                 ggml_tensor * node = cgraph->nodes[i];
@@ -3414,7 +3414,6 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
 
                 static bool disable_fusion = (getenv("GGML_CUDA_DISABLE_FUSION") != nullptr);
                 // static bool disable_fusion = true;
-                // printf(" disable_fusion %d\n ", disable_fusion?1:0);
                 if (!disable_fusion) {
 
                     if (ggml_cuda_can_fuse(cgraph, i, ggml_cuda_topk_moe_ops(/*with norm*/ true), {})) {
@@ -3472,8 +3471,8 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                     }
 
                     if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_NORM, GGML_OP_MUL, GGML_OP_ADD}, {})) {
-                        printf("fused norm mul add: %s, %s (%zu, %zu, %zu, %zu)  \n", node->name, ggml_type_name(node->type),
-                            node->ne[0], node->ne[1],node->ne[2], node->ne[3]);
+                        // printf("fused norm mul add: %s, %s (%zu, %zu, %zu, %zu)  \n", node->name, ggml_type_name(node->type),
+                        //     node->ne[0], node->ne[1],node->ne[2], node->ne[3]);
                         ggml_cuda_op_norm_fused_add(*cuda_ctx, node, cgraph->nodes[i+1], cgraph->nodes[i+2]);
                         i += 2;
                         continue;
@@ -3486,8 +3485,8 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                     }
 
                     if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_MUL_MAT, GGML_OP_ADD}, {})) {
-                        printf("fused mul mat: %s, %s (%zu, %zu, %zu, %zu)  \n", node->name, ggml_type_name(node->type),
-                            node->ne[0], node->ne[1],node->ne[2], node->ne[3]);
+                        // printf("fused mul mat: %s, %s (%zu, %zu, %zu, %zu)  \n", node->name, ggml_type_name(node->type),
+                        //     node->ne[0], node->ne[1],node->ne[2], node->ne[3]);
                         ggml_cuda_op_mul_mat_fused_add(*cuda_ctx, cgraph->nodes[i+1], node);
                         i++;
                         continue;
