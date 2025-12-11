@@ -2142,7 +2142,7 @@ static void ggml_cuda_mul_mat_batched_cublas(ggml_backend_cuda_context & ctx, co
     }
 }
 
-static bool ggml_cuda_mul_mat_can_be_fused(const ggml_tensor * add_tensor, const ggml_tensor * dst) {
+static bool ggml_cuda_mul_mat_can_be_fused(const ggml_tensor * bias_tensor, const ggml_tensor * dst, const ggml_tensor * add_tensor=nullptr) {
 
     const ggml_tensor * src0 = dst->src[0];
     const ggml_tensor * src1 = dst->src[1];
@@ -2151,23 +2151,27 @@ static bool ggml_cuda_mul_mat_can_be_fused(const ggml_tensor * add_tensor, const
     if (split)
        return false;
 
-    if(src0->ne[2] != 1 || src0->ne[3] != 1 || src1->ne[2] != 1 || src1->ne[3] != 1){
+    if(src0->ne[2] != 1 || src0->ne[3] != 1 || src1->ne[2] != 1 || src1->ne[3] != 1 || (src1->ne[1] == 1 && src1->ne[2] == 1 && src1->ne[3] == 1)) {
         // printf("fail reason 3 \n");
        return false;
     }
 
-    ggml_tensor *add_src; // mat_c
-    if (add_tensor->src[0] == dst) {
-        add_src = add_tensor->src[1];
-    } else if (add_tensor->src[1] == dst) {
-        add_src = add_tensor->src[0];
-    } else {
-        GGML_ASSERT(false);
-    }
     // if (add_src->type != dst->type){
     //     printf(" different tyeps mul_mat  %s, bias %s \n", ggml_type_name(dst->type),  ggml_type_name(add_src->type));
     // //    return false; //bias needs to have the same type as mul_mat output as required by cublasLt API
     // }
+    ggml_tensor *add_src = nullptr; // mat_c
+    if (add_tensor) {
+        if (add_tensor->src[0] == bias_tensor) {
+            add_src = add_tensor->src[1];
+        } else if (add_tensor->src[1] == bias_tensor) {
+            add_src = add_tensor->src[0];
+        } else {
+            GGML_ASSERT(false);
+        }
+        if(!ggml_are_same_shape(bias_tensor, add_src) || !ggml_are_same_stride(bias_tensor, add_src))
+           return false;
+    }
 
     if(! (src1->type == GGML_TYPE_F16 || src1->type == GGML_TYPE_BF16)) {
     //    printf("fail reason 4 \n");
@@ -2179,21 +2183,35 @@ static bool ggml_cuda_mul_mat_can_be_fused(const ggml_tensor * add_tensor, const
 }
 
 
-static void ggml_cuda_op_mul_mat_fused_add(ggml_backend_cuda_context & ctx, ggml_tensor * add_tensor, ggml_tensor * dst) {
+static void ggml_cuda_op_mul_mat_fused_add(ggml_backend_cuda_context & ctx, ggml_tensor * bias_tensor, ggml_tensor * dst, ggml_tensor * add_tensor=nullptr) {
     ggml_tensor * src0 = dst->src[0];
     ggml_tensor * src1 = dst->src[1];
 
+    ggml_tensor *bias_src; // mat_c
     // float *add_d;
-    ggml_tensor *add_src; // mat_c
-    if (add_tensor->src[0] == dst) {
+    if (bias_tensor->src[0] == dst) {
         // add_d   = (float *) add_tensor->src[1]->data;
-        add_src = add_tensor->src[1];
-    } else if (add_tensor->src[1] == dst) {
+        // bias_src = add_tensor->src[1];
+        bias_src = bias_tensor->src[1];
+    } else if (bias_tensor->src[1] == dst) {
         // add_d  = (float *) add_tensor->src[0]->data;
-        add_src = add_tensor->src[0];
+        // add_src = add_tensor->src[0];
+        bias_src = bias_tensor->src[0];
     } else {
         GGML_ASSERT(false);
     }
+
+    ggml_tensor *add_src = nullptr; // mat_c
+    if(add_tensor != nullptr){
+        if (add_tensor->src[0] == bias_tensor) {
+            add_src = add_tensor->src[1];
+        } else if (add_tensor->src[1] == bias_tensor) {
+            add_src = add_tensor->src[0];
+        } else {
+            GGML_ASSERT(false);
+        }
+    }
+
 
 
     // If src0 is a temporary compute buffer it may have some padding that needs to be cleared for mul_mat_vec_q or mul_mat_q.
@@ -2217,9 +2235,9 @@ static void ggml_cuda_op_mul_mat_fused_add(ggml_backend_cuda_context & ctx, ggml
     GGML_ASSERT(ne13 == 1);
 
     const float alphaf32 = 1.0f;
-    const float betaf32 = 0.0f;  // Beta = 1.0 for accumulation (add operation)
+    const float betaf32 =  add_tensor ? 1.0f : 0.0f;  // Beta = 1.0 for accumulation (add operation)
     const half alpha{(half)1.0f};
-    const half beta{(half)0.0f};  // Beta = 1.0 for accumulation (add operation)
+    const half beta{add_tensor ? (half)1.0f : (half)0.0f};  // Beta = 1.0 for accumulation (add operation)
     void *alpha_ptr;
     void *beta_ptr;
     // Prepare type-specific parameters
@@ -2243,6 +2261,7 @@ static void ggml_cuda_op_mul_mat_fused_add(ggml_backend_cuda_context & ctx, ggml
 
     cudaDataType_t data_type_b = data_type_a;
     cudaDataType_t data_type_c = data_type_a;
+    cudaDataType_t data_type_d = data_type_a;
 
     const int64_t ne23 = ne12 * ne13;
 
@@ -2251,7 +2270,8 @@ static void ggml_cuda_op_mul_mat_fused_add(ggml_backend_cuda_context & ctx, ggml
 
     const void * src0_ptr = (const void *)src0->data;
     const void * src1_ptr = (const void *)src1->data ;
-    void * add_ptr = (void *)add_tensor->data;
+    void * add_ptr = add_tensor ? (void *)add_src->data : NULL;
+    void * dst_ptr = add_tensor ? (void *)add_tensor->data : (void *)bias_tensor->data;
     // float * dst_ptr = (float *)dst->data;
     // Create matrix descriptor for src0 (transposed)
     cublasLtMatrixLayout_t matA;
@@ -2265,8 +2285,8 @@ static void ggml_cuda_op_mul_mat_fused_add(ggml_backend_cuda_context & ctx, ggml
     cublasLtMatrixLayout_t matC;
     CUBLAS_CHECK(cublasLtMatrixLayoutCreate(&matC, data_type_c, ne0, ne1, ne0));
 
-    // cublasLtMatrixLayout_t matD;
-    // CUBLAS_CHECK(cublasLtMatrixLayoutCreate(&matC, data_type_c, ne0, ne1, ne0));
+    cublasLtMatrixLayout_t matD;
+    CUBLAS_CHECK(cublasLtMatrixLayoutCreate(&matD, data_type_d, ne0, ne1, ne0));
 
     // printf("(%zu, %zu), (%zu, %zu), (%zu, %zu)\n", ne00, ne01, ne10, ne11, ne0, ne1);
     // printf("%s, (%zu, %zu, %zu, %zu)\n", ggml_type_name(add_tensor->type), add_tensor->ne[0], add_tensor->ne[1], add_tensor->ne[2], add_tensor->ne[3]);
@@ -2305,14 +2325,14 @@ static void ggml_cuda_op_mul_mat_fused_add(ggml_backend_cuda_context & ctx, ggml
 
     if (dst->type == GGML_TYPE_F16) {
         ggml_cuda_pool_alloc<half> bias_as_f16(ctx.pool(id));
-        if (add_src->type != GGML_TYPE_F16) {
-            const to_fp16_cuda_t to_fp16_cuda = ggml_get_to_fp16_cuda(add_src->type);
+        if (bias_src->type != GGML_TYPE_F16) {
+            const to_fp16_cuda_t to_fp16_cuda = ggml_get_to_fp16_cuda(bias_src->type);
             GGML_ASSERT(to_fp16_cuda != nullptr);
-            size_t ne = ggml_nelements(add_src);
+            size_t ne = ggml_nelements(bias_src);
             bias_as_f16.alloc(ne);
-            to_fp16_cuda(add_src->data, bias_as_f16.get(), ne, stream);
+            to_fp16_cuda(bias_src->data, bias_as_f16.get(), ne, stream);
         }
-        const half * bias_ptr = add_src->type == GGML_TYPE_F16 ? (const half *) add_src->data : bias_as_f16.get();
+        const half * bias_ptr = bias_src->type == GGML_TYPE_F16 ? (const half *) bias_src->data : bias_as_f16.get();
 
         // Bias pointer = C (fp32)
         CUBLAS_CHECK(cublasLtMatmulDescSetAttribute(
@@ -2322,14 +2342,14 @@ static void ggml_cuda_op_mul_mat_fused_add(ggml_backend_cuda_context & ctx, ggml
         beta_ptr  = (void *)(&beta);
     } else if (dst->type == GGML_TYPE_BF16) {
         ggml_cuda_pool_alloc<nv_bfloat16> bias_as_f16(ctx.pool(id));
-        if (add_src->type != GGML_TYPE_BF16) {
-            const to_bf16_cuda_t to_fp16_cuda = ggml_get_to_bf16_cuda(add_src->type);
+        if (bias_src->type != GGML_TYPE_BF16) {
+            const to_bf16_cuda_t to_fp16_cuda = ggml_get_to_bf16_cuda(bias_src->type);
             GGML_ASSERT(to_fp16_cuda != nullptr);
-            size_t ne = ggml_nelements(add_src);
+            size_t ne = ggml_nelements(bias_src);
             bias_as_f16.alloc(ne);
-            to_fp16_cuda(add_src->data, bias_as_f16.get(), ne, stream);
+            to_fp16_cuda(bias_src->data, bias_as_f16.get(), ne, stream);
         }
-        const nv_bfloat16 * bias_ptr = add_src->type == GGML_TYPE_BF16 ? (const nv_bfloat16 *) add_src->data : bias_as_f16.get();
+        const nv_bfloat16 * bias_ptr = bias_src->type == GGML_TYPE_BF16 ? (const nv_bfloat16 *) bias_src->data : bias_as_f16.get();
 
         // Bias pointer = C (fp32)
         CUBLAS_CHECK(cublasLtMatmulDescSetAttribute(
@@ -2343,8 +2363,8 @@ static void ggml_cuda_op_mul_mat_fused_add(ggml_backend_cuda_context & ctx, ggml
     CUBLAS_CHECK(cublasLtMatmul(ltHandle, matmulDesc,
                                 alpha_ptr, src0_ptr, matA,
                                            src1_ptr, matB,
-                                beta_ptr,  add_ptr, matC,
-                                           add_ptr, matC,
+                                beta_ptr,  add_tensor? add_ptr : dst_ptr, add_tensor? matC : matD,
+                                           dst_ptr, matD,
                                 nullptr, nullptr, 0, stream));
 
     // Clean up descriptors
@@ -3284,8 +3304,14 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph * cgraph, int node_idx, 
         ggml_tensor *add = nullptr;
         if (ops.size() == 3 && ops.begin()[1] == GGML_OP_VIEW && ops.begin()[2] == GGML_OP_ADD) {
             add = cgraph->nodes[node_idx+2];
-        } else {
+            return ggml_cuda_mul_mat_can_be_fused(add, mul_mat);
+        } else if(ops.size() == 3 && ops.begin()[1] == GGML_OP_ADD && ops.begin()[2] == GGML_OP_ADD){
+            ggml_tensor *bias = cgraph->nodes[node_idx+1];
+            add = cgraph->nodes[node_idx+2];
+            return ggml_cuda_mul_mat_can_be_fused(bias, mul_mat, add);
+        }  else {
             add = cgraph->nodes[node_idx+1];
+            return ggml_cuda_mul_mat_can_be_fused(add, mul_mat);
         }
         // ggml_tensor *node = mul_mat;
         // printf("trying to fuse  mul mat: %s, %s (%zu, %zu, %zu, %zu) %s, %s \n", node->name, ggml_type_name(node->type),
@@ -3302,7 +3328,7 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph * cgraph, int node_idx, 
         //                     node->ne[0], node->ne[1],node->ne[2], node->ne[3],
         //                     ggml_type_name(node->src[0]->type), ggml_type_name(node->src[1]->type));
 
-        return ggml_cuda_mul_mat_can_be_fused(add, mul_mat);
+        // return ggml_cuda_mul_mat_can_be_fused(add, mul_mat);
     }
 
 
@@ -3502,6 +3528,14 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                     if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL}, {})) {
                         ggml_cuda_op_rms_norm_fused(*cuda_ctx, node, cgraph->nodes[i+1]);
                         i++;
+                        continue;
+                    }
+
+                    if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_MUL_MAT, GGML_OP_ADD, GGML_OP_ADD}, {})) {
+                        // printf("fused mul mat: %s, %s (%zu, %zu, %zu, %zu)  \n", node->name, ggml_type_name(node->type),
+                        //     node->ne[0], node->ne[1],node->ne[2], node->ne[3]);
+                        ggml_cuda_op_mul_mat_fused_add(*cuda_ctx, cgraph->nodes[i+1], node, cgraph->nodes[i+2]);
+                        i += 2;
                         continue;
                     }
 
