@@ -3264,11 +3264,12 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph * cgraph, int node_idx, 
         }
     }
 
+    int reason = 0;
 
-    if (!ggml_can_fuse(cgraph, node_idx, ops)) {
+    if (!ggml_can_fuse(cgraph, node_idx, ops, &reason)) {
 
         // const ggml_tensor *node = cgraph->nodes[node_idx];
-        // printf("not abel to fuse: %s, %s, %s (%zu, %zu, %zu, %zu)  \n", node->name, ggml_type_name(node->type), ggml_op_name(node->op),
+        // printf("not abel to fuse: %d - %s, %s, %s (%zu, %zu, %zu, %zu)  \n", reason, node->name, ggml_type_name(node->type), ggml_op_name(node->op),
         //                     node->ne[0], node->ne[1],node->ne[2], node->ne[3]);
 
         return false;
@@ -3278,10 +3279,15 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph * cgraph, int node_idx, 
     //     printf("able to fuse: %s, %s, %s (%zu, %zu, %zu, %zu)  \n", node->name, ggml_type_name(node->type), ggml_op_name(node->op),
     //                         node->ne[0], node->ne[1],node->ne[2], node->ne[3]);
 
-    if ( ops.size() == 2  && ops.begin()[0] == GGML_OP_MUL_MAT && ops.begin()[1] == GGML_OP_ADD) {
+    if ((ops.size() == 2 || ops.size() == 3) && ops.begin()[0] == GGML_OP_MUL_MAT) {
         ggml_tensor *mul_mat = cgraph->nodes[node_idx];
-        ggml_tensor *add     = cgraph->nodes[node_idx+1];
-        ggml_tensor *node = mul_mat;
+        ggml_tensor *add = nullptr;
+        if (ops.size() == 3 && ops.begin()[1] == GGML_OP_VIEW && ops.begin()[2] == GGML_OP_ADD) {
+            add = cgraph->nodes[node_idx+2];
+        } else {
+            add = cgraph->nodes[node_idx+1];
+        }
+        // ggml_tensor *node = mul_mat;
         // printf("trying to fuse  mul mat: %s, %s (%zu, %zu, %zu, %zu) %s, %s \n", node->name, ggml_type_name(node->type),
         //                     node->ne[0], node->ne[1],node->ne[2], node->ne[3],
         //                     ggml_type_name(node->src[0]->type), ggml_type_name(node->src[1]->type));
@@ -3291,6 +3297,10 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph * cgraph, int node_idx, 
         // node = mul_mat->src[1];
         // printf("trying mul mat src1: %s, %s (%zu, %zu, %zu, %zu) \n", node->name, ggml_type_name(node->type),
         //                     node->ne[0], node->ne[1],node->ne[2], node->ne[3]);
+        // node = add;
+        // printf("trying to fuse add: %s, %s (%zu, %zu, %zu, %zu) %s, %s \n", node->name, ggml_type_name(node->type),
+        //                     node->ne[0], node->ne[1],node->ne[2], node->ne[3],
+        //                     ggml_type_name(node->src[0]->type), ggml_type_name(node->src[1]->type));
 
         return ggml_cuda_mul_mat_can_be_fused(add, mul_mat);
     }
@@ -3442,14 +3452,14 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                         i += 4;
                         continue;
                     }
-
+                    int reason = 0;
                     if (node->op == GGML_OP_ADD) {
                         int n_fuse = 0;
                         ggml_op ops[8];
                         std::fill(ops, ops + 8, GGML_OP_ADD);
 
                         for (; n_fuse <= 6; ++n_fuse){
-                            if (!ggml_can_fuse(cgraph, i + n_fuse, ops + n_fuse, 2)) {
+                            if (!ggml_can_fuse(cgraph, i + n_fuse, ops + n_fuse, 2, &reason)) {
                                 break;
                             }
                             if (cgraph->nodes[i + n_fuse] != cgraph->nodes[i + n_fuse + 1]->src[0]) {
@@ -3503,6 +3513,14 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                         continue;
                     }
 
+                    if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_MUL_MAT, GGML_OP_VIEW, GGML_OP_ADD}, {})) {
+                        // printf("fused mul mat: %s, %s (%zu, %zu, %zu, %zu)  \n", node->name, ggml_type_name(node->type),
+                        //     node->ne[0], node->ne[1],node->ne[2], node->ne[3]);
+                        ggml_cuda_op_mul_mat_fused_add(*cuda_ctx, cgraph->nodes[i+2], node);
+                        i += 2;
+                        continue;
+                    }
+
                     if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_SCALE, GGML_OP_UNARY, GGML_OP_SCALE }, { GGML_UNARY_OP_TANH })) {
                         i += 2;
                         ggml_cuda_op_softcap(*cuda_ctx, cgraph->nodes[i], node);
@@ -3536,16 +3554,16 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                 bool ok = ggml_cuda_compute_forward(*cuda_ctx, node);
                 // std::vector<float> dataf(ggml_nelements(node));
                 // std::vector<half> data(ggml_nelements(node));
-                if(node->op == GGML_OP_ADD){
-                    printf("NODE %s, %s, %s  (%zu, %zu, %zu, %zu)\n", node->name, ggml_type_name(node->type), ggml_op_name(node->op),
-                                node->ne[0], node->ne[1], node->ne[2], node->ne[3]);
-                    printf("NODE src0 %s, %s, %s, (%zu, %zu, %zu, %zu)\n", node->src[0]->name,
-                                ggml_type_name(node->src[0]->type), ggml_op_name(node->src[0]->op), node->src[0]->ne[0], node->src[0]->ne[1],
-                            node->src[0]->ne[2], node->src[0]->ne[3]);
-                    printf("NODE src1 %s, %s, %s (%zu, %zu, %zu, %zu)\n", node->src[1]->name,
-                                ggml_type_name(node->src[1]->type), ggml_op_name(node->src[1]->op), node->src[1]->ne[0], node->src[1]->ne[1],
-                                node->src[1]->ne[2], node->src[1]->ne[3]);
-                }
+                // if(node->op == GGML_OP_ADD){
+                //     printf("NODE %s, %s, %s  (%zu, %zu, %zu, %zu)\n", node->name, ggml_type_name(node->type), ggml_op_name(node->op),
+                //                 node->ne[0], node->ne[1], node->ne[2], node->ne[3]);
+                //     printf("NODE src0 %s, %s, %s, (%zu, %zu, %zu, %zu)\n", node->src[0]->name,
+                //                 ggml_type_name(node->src[0]->type), ggml_op_name(node->src[0]->op), node->src[0]->ne[0], node->src[0]->ne[1],
+                //             node->src[0]->ne[2], node->src[0]->ne[3]);
+                //     printf("NODE src1 %s, %s, %s (%zu, %zu, %zu, %zu)\n", node->src[1]->name,
+                //                 ggml_type_name(node->src[1]->type), ggml_op_name(node->src[1]->op), node->src[1]->ne[0], node->src[1]->ne[1],
+                //                 node->src[1]->ne[2], node->src[1]->ne[3]);
+                // }
                 // if(node->type == GGML_TYPE_F16){
                 //     std::vector<half> data(ggml_nelements(node));
                 //     ggml_backend_tensor_get(node, data.data(), 0, ggml_nbytes(node));

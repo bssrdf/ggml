@@ -605,25 +605,33 @@ static inline bool ggml_node_has_n_uses(const struct ggml_cgraph * cgraph, int n
 // - all nodes except the last are a src of the following node.
 // - all nodes are the same shape.
 // TODO: Consider allowing GGML_OP_NONE nodes in between
-static inline bool ggml_can_fuse_ext(const struct ggml_cgraph * cgraph, const int * node_idxs, const enum ggml_op * ops, int num_ops) {
+static inline bool ggml_can_fuse_ext(const struct ggml_cgraph * cgraph, const int * node_idxs, const enum ggml_op * ops, int num_ops, int *reason) {
     for (int i = 0; i < num_ops; ++i) {
         if (node_idxs[i] >= cgraph->n_nodes) {
+            *reason = 1;
             return false;
         }
 
         struct ggml_tensor * node = cgraph->nodes[node_idxs[i]];
         if (node->op != ops[i]) {
+            *reason = 2;
             return false;
         }
+        if (i > 0 && i < num_ops - 1 && node->op == GGML_OP_VIEW){
+            continue;
+        }
         if (i < num_ops - 1 && !ggml_node_has_n_uses(cgraph, node_idxs[i], 1)) {
+            *reason = 3;
             return false;
         }
         if (i > 0) {
             struct ggml_tensor * prev = cgraph->nodes[node_idxs[i - 1]];
             if (node->src[0] != prev && node->src[1] != prev) {
+                *reason = 4;
                 return false;
             }
-            if (!ggml_are_same_shape(node, prev)) {
+            if (prev-> op != GGML_OP_VIEW && !ggml_are_same_shape(node, prev)) {
+                *reason = 5;
                 return false;
             }
         }
@@ -632,7 +640,7 @@ static inline bool ggml_can_fuse_ext(const struct ggml_cgraph * cgraph, const in
 }
 
 // same as above, for sequential indices starting at node_idx
-static inline bool ggml_can_fuse(const struct ggml_cgraph * cgraph, int node_idx, const enum ggml_op * ops, int num_ops) {
+static inline bool ggml_can_fuse(const struct ggml_cgraph * cgraph, int node_idx, const enum ggml_op * ops, int num_ops, int *reason) {
     assert(num_ops < 32);
 
     if (node_idx + num_ops > cgraph->n_nodes) {
@@ -644,7 +652,7 @@ static inline bool ggml_can_fuse(const struct ggml_cgraph * cgraph, int node_idx
         idxs[i] = node_idx + i;
     }
 
-    return ggml_can_fuse_ext(cgraph, idxs, ops, num_ops);
+    return ggml_can_fuse_ext(cgraph, idxs, ops, num_ops, reason);
 }
 
 GGML_API bool ggml_can_fuse_subgraph_ext(const struct ggml_cgraph * cgraph,
@@ -686,8 +694,8 @@ static inline bool ggml_can_fuse_subgraph(const struct ggml_cgraph * cgraph,
 #include <vector>
 
 // nicer C++ syntax for ggml_can_fuse
-inline bool ggml_can_fuse(const struct ggml_cgraph * cgraph, int node_idx, std::initializer_list<enum ggml_op> ops) {
-    return ggml_can_fuse(cgraph, node_idx, ops.begin(), (int)ops.size());
+inline bool ggml_can_fuse(const struct ggml_cgraph * cgraph, int node_idx, std::initializer_list<enum ggml_op> ops, int *reason) {
+    return ggml_can_fuse(cgraph, node_idx, ops.begin(), (int)ops.size(), reason);
 }
 
 inline bool ggml_can_fuse_subgraph(const struct ggml_cgraph *          cgraph,
