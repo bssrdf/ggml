@@ -410,8 +410,68 @@ static __global__ void norm_bf16(
     }
 }
 
-template <int block_size>
-static __global__ void group_norm_f32(const float * x, float * dst, const int group_size, const int ne_elements, const float eps) {
+// template <int block_size>
+// static __global__ void group_norm_f32(const float * x, float * dst, const int group_size, const int ne_elements, const float eps) {
+//     // blockIdx.x: num_groups idx
+//     // threadIdx.x: block_size idx
+//     const int start =     blockIdx.x*group_size + threadIdx.x;
+//     const int end   = min(blockIdx.x*group_size + group_size,  ne_elements);
+
+//     float tmp = 0.0f; // partial sum for thread in warp
+
+//     for (int j = start; j < end; j += block_size) {
+//         tmp += x[j];
+//     }
+
+//     tmp = warp_reduce_sum(tmp);
+//     if constexpr (block_size > WARP_SIZE) {
+//         static_assert(block_size == 1024, "unexpected block_size");
+//         __shared__ float s_sum[32];
+//         const int warp_id = threadIdx.x / WARP_SIZE;
+//         const int lane_id = threadIdx.x % WARP_SIZE;
+//         if (lane_id == 0) {
+//             s_sum[warp_id] = tmp;
+//         }
+//         __syncthreads();
+//         tmp = s_sum[lane_id];
+//         tmp = warp_reduce_sum(tmp);
+//     }
+
+//     const float mean = tmp / group_size;
+//     tmp = 0.0f;
+
+//     for (int j = start; j < end; j += block_size) {
+//         const float xi = x[j] - mean;
+//         dst[j] = xi;
+//         tmp += xi * xi;
+//     }
+
+//     tmp = warp_reduce_sum(tmp);
+//     if (block_size > WARP_SIZE) {
+//         __shared__ float s_sum[32];
+//         const int warp_id = threadIdx.x / WARP_SIZE;
+//         const int lane_id = threadIdx.x % WARP_SIZE;
+//         if (lane_id == 0) {
+//             s_sum[warp_id] = tmp;
+//         }
+//         __syncthreads();
+//         tmp = s_sum[lane_id];
+//         tmp = warp_reduce_sum(tmp);
+//     }
+
+//     const float variance = tmp / group_size;
+//     const float scale = rsqrtf(variance + eps);
+//     for (int j = start; j < end; j += block_size) {
+//         dst[j] *= scale;
+//     }
+// }
+
+template <typename mul_T, int block_size, bool do_multiply = false, bool do_add = false>
+static __global__ void group_norm_f32(const float * x, float * dst, const int group_size,
+        const int ne_elements, const float eps,
+        const mul_T * mul                  = nullptr,
+        const mul_T * add                  = nullptr,
+        const uint3   ncols_packed         = make_uint3(0, 0, 0)) {
     // blockIdx.x: num_groups idx
     // threadIdx.x: block_size idx
     const int start =     blockIdx.x*group_size + threadIdx.x;
@@ -462,13 +522,85 @@ static __global__ void group_norm_f32(const float * x, float * dst, const int gr
     const float variance = tmp / group_size;
     const float scale = rsqrtf(variance + eps);
     for (int j = start; j < end; j += block_size) {
-        dst[j] *= scale;
+        if constexpr (do_multiply && do_add) {
+            // const int mul_col = fastmodulo(col, mul_ncols_packed);
+            // const int add_col = fastmodulo(col, add_ncols_packed);
+            const int col = fastdiv(j, ncols_packed);
+            dst[j]          =  dst [j] * scale * ggml_cuda_cast<float>(mul[col]) + ggml_cuda_cast<float>(add[col]);
+        } else if constexpr (do_multiply) {
+            // const int mul_col = fastmodulo(col, mul_ncols_packed);
+            const int col = fastdiv(j, ncols_packed);
+            dst[j]          *=  scale * ggml_cuda_cast<float>(mul[col]);
+        } else {
+            dst[j]          *=  scale;
+        }
     }
 }
 
 
-template <int block_size>
-static __global__ void group_norm_f16(const half * x, half * dst, const int group_size, const int ne_elements, const float eps) {
+// template <int block_size>
+// static __global__ void group_norm_f16(const half * x, half * dst, const int group_size, const int ne_elements, const float eps) {
+//     // blockIdx.x: num_groups idx
+//     // threadIdx.x: block_size idx
+//     const int start =     blockIdx.x*group_size + threadIdx.x;
+//     const int end   = min(blockIdx.x*group_size + group_size,  ne_elements);
+
+//     float tmp = 0.0f; // partial sum for thread in warp
+
+//     for (int j = start; j < end; j += block_size) {
+//         tmp += ggml_cuda_cast<float>(x[j]);
+//     }
+
+//     tmp = warp_reduce_sum(tmp);
+//     if constexpr (block_size > WARP_SIZE) {
+//         static_assert(block_size == 1024, "unexpected block_size");
+//         __shared__ float s_sum[32];
+//         const int warp_id = threadIdx.x / WARP_SIZE;
+//         const int lane_id = threadIdx.x % WARP_SIZE;
+//         if (lane_id == 0) {
+//             s_sum[warp_id] = tmp;
+//         }
+//         __syncthreads();
+//         tmp = s_sum[lane_id];
+//         tmp = warp_reduce_sum(tmp);
+//     }
+
+//     const float mean = tmp / group_size;
+//     tmp = 0.0f;
+
+//     for (int j = start; j < end; j += block_size) {
+//         const float xi = ggml_cuda_cast<float>(x[j]) - mean;
+//         dst[j] = ggml_cuda_cast<half>(xi);
+//         tmp += xi * xi;
+//     }
+
+//     tmp = warp_reduce_sum(tmp);
+//     if (block_size > WARP_SIZE) {
+//         __shared__ float s_sum[32];
+//         const int warp_id = threadIdx.x / WARP_SIZE;
+//         const int lane_id = threadIdx.x % WARP_SIZE;
+//         if (lane_id == 0) {
+//             s_sum[warp_id] = tmp;
+//         }
+//         __syncthreads();
+//         tmp = s_sum[lane_id];
+//         tmp = warp_reduce_sum(tmp);
+//     }
+
+//     const float variance = tmp / group_size;
+//     // const float scale = rsqrtf(variance + eps);
+//     const half scale = ggml_cuda_cast<half>(rsqrtf(variance + eps));
+//     for (int j = start; j < end; j += block_size) {
+//         dst[j] *= scale;
+//     }
+// }
+
+template <typename mul_T, int block_size, bool do_multiply = false, bool do_add = false>
+static __global__ void group_norm_f16(const half * x, half * dst, const int group_size,
+        const int ne_elements, const float eps,
+        const mul_T * mul                  = nullptr,
+        const mul_T * add                  = nullptr,
+        const uint3   ncols_packed         = make_uint3(0, 0, 0)) {
     // blockIdx.x: num_groups idx
     // threadIdx.x: block_size idx
     const int start =     blockIdx.x*group_size + threadIdx.x;
@@ -517,12 +649,23 @@ static __global__ void group_norm_f16(const half * x, half * dst, const int grou
     }
 
     const float variance = tmp / group_size;
-    // const float scale = rsqrtf(variance + eps);
-    const half scale = ggml_cuda_cast<half>(rsqrtf(variance + eps));
+    const float scale = rsqrtf(variance + eps);
     for (int j = start; j < end; j += block_size) {
-        dst[j] *= scale;
+        if constexpr (do_multiply && do_add) {
+            // const int mul_col = fastmodulo(col, mul_ncols_packed);
+            // const int add_col = fastmodulo(col, add_ncols_packed);
+            const int col = fastdiv(j, ncols_packed);
+            dst[j]          =  dst[j] * ggml_cuda_cast<half>(scale * ggml_cuda_cast<float>(mul[col])) + ggml_cuda_cast<half>(add[col]);
+        } else if constexpr (do_multiply) {
+            // const int mul_col = fastmodulo(col, mul_ncols_packed);
+            const int col = fastdiv(j, ncols_packed);
+            dst[j]          *=  ggml_cuda_cast<half>(scale * ggml_cuda_cast<float>(mul[col]));
+        } else {
+            dst[j]          *=  ggml_cuda_cast<half>(scale);
+        }
     }
 }
+
 
 template <typename mul_T, int block_size, bool do_multiply = false, bool do_add = false>
 static __global__ void rms_norm_f32(const float * x,
@@ -985,10 +1128,10 @@ static void group_norm_f32_cuda(
         const float * x, float * dst, const int num_groups, const float eps, const int group_size, const int ne_elements, cudaStream_t stream) {
     if (group_size < 1024) {
         const dim3 block_dims(WARP_SIZE, 1, 1);
-        group_norm_f32<WARP_SIZE><<<num_groups, block_dims, 0, stream>>>(x, dst, group_size, ne_elements, eps);
+        group_norm_f32<float, WARP_SIZE, false><<<num_groups, block_dims, 0, stream>>>(x, dst, group_size, ne_elements, eps);
     } else {
         const dim3 block_dims(1024, 1, 1);
-        group_norm_f32<1024><<<num_groups, block_dims, 0, stream>>>(x, dst, group_size, ne_elements, eps);
+        group_norm_f32<float, 1024, false><<<num_groups, block_dims, 0, stream>>>(x, dst, group_size, ne_elements, eps);
     }
 }
 
@@ -996,10 +1139,10 @@ static void group_norm_f16_cuda(
         const half * x, half * dst, const int num_groups, const float eps, const int group_size, const int ne_elements, cudaStream_t stream) {
     if (group_size < 1024) {
         const dim3 block_dims(WARP_SIZE, 1, 1);
-        group_norm_f16<WARP_SIZE><<<num_groups, block_dims, 0, stream>>>(x, dst, group_size, ne_elements, eps);
+        group_norm_f16<half, WARP_SIZE, false><<<num_groups, block_dims, 0, stream>>>(x, dst, group_size, ne_elements, eps);
     } else {
         const dim3 block_dims(1024, 1, 1);
-        group_norm_f16<1024><<<num_groups, block_dims, 0, stream>>>(x, dst, group_size, ne_elements, eps);
+        group_norm_f16<half, 1024, false><<<num_groups, block_dims, 0, stream>>>(x, dst, group_size, ne_elements, eps);
     }
 }
 
@@ -1309,6 +1452,76 @@ static void norm_mul_f32_cuda(const T *  x,
                     mul_stride_sample, mul_ncols_packed, mul_nrows_packed, mul_nchannels_packed, mul_nsamples_packed, add,
                     add_stride_row, add_stride_channel, add_stride_sample, add_ncols_packed, add_nrows_packed,
                     add_nchannels_packed, add_nsamples_packed);
+            }
+        }
+    }
+}
+
+
+template<typename T, typename mul_T>
+static void group_norm_mul_f32_cuda(const T *  x,
+                                const mul_T *  mul,
+                                const mul_T *  add,
+                                T *  dst,
+                                const int      ncols,
+                                const int      nrows,
+                                const int      nchannels,
+                                const int      nsamples,
+                                const int      num_groups,
+                                const int      group_size,
+                                const int      ne,
+                                const float    eps,
+                                cudaStream_t   stream) {
+
+    if (mul == nullptr) {
+        if constexpr (std::is_same_v<T, float>) {
+            group_norm_f32_cuda(x, dst, num_groups, eps, group_size, ne, stream);
+        } else if constexpr (std::is_same_v<T, half>) {
+            group_norm_f16_cuda(x, dst, num_groups, eps, group_size, ne, stream);
+        }
+        return;
+    }
+    if (add == nullptr) {
+        const uint3 ncols_packed     = init_fastdiv_values(ncols*nrows);
+        if (group_size < 1024) {
+            const dim3 block_dims(WARP_SIZE, 1, 1);
+            if constexpr (std::is_same_v<T, float>) {
+                group_norm_f32<mul_T, WARP_SIZE, true><<<num_groups, block_dims, 0, stream>>>(x, dst, group_size, ne, eps,
+                                                                                              mul, nullptr, ncols_packed);
+            } else if constexpr (std::is_same_v<T, half>) {
+                group_norm_f16<mul_T, WARP_SIZE, true><<<num_groups, block_dims, 0, stream>>>(x, dst, group_size, ne, eps,
+                                                                                              mul, nullptr, ncols_packed);
+            }
+        } else {
+            const dim3 block_dims(1024, 1, 1);
+            if constexpr (std::is_same_v<T, float>) {
+                group_norm_f32<mul_T, 1024, true><<<num_groups, block_dims, 0, stream>>>(x, dst, group_size, ne, eps,
+                                                                                              mul, nullptr, ncols_packed);
+            } else if constexpr (std::is_same_v<T, half>) {
+                group_norm_f16<mul_T, 1024, true><<<num_groups, block_dims, 0, stream>>>(x, dst, group_size, ne, eps,
+                                                                                              mul, nullptr, ncols_packed);
+            }
+        }
+    } else {
+        const uint3 ncols_packed     = init_fastdiv_values(ncols*nrows);
+        if (group_size < 1024) {
+            const dim3 block_dims(WARP_SIZE, 1, 1);
+            if constexpr (std::is_same_v<T, float>) {
+                group_norm_f32<mul_T, WARP_SIZE, true, true><<<num_groups, block_dims, 0, stream>>>(x, dst, group_size, ne, eps,
+                                                                                              mul, add, ncols_packed);
+            } else if constexpr (std::is_same_v<T, half>) {
+                group_norm_f16<mul_T, WARP_SIZE, true, true><<<num_groups, block_dims, 0, stream>>>(x, dst, group_size, ne, eps,
+                                                                                              mul, add, ncols_packed);
+            }
+
+        } else {
+            const dim3 block_dims(1024, 1, 1);
+            if constexpr (std::is_same_v<T, float>) {
+                group_norm_f32<mul_T, 1024, true, true><<<num_groups, block_dims, 0, stream>>>(x, dst, group_size, ne, eps,
+                                                                                              mul, add, ncols_packed);
+            } else if constexpr (std::is_same_v<T, half>) {
+                group_norm_f16<mul_T, 1024, true, true><<<num_groups, block_dims, 0, stream>>>(x, dst, group_size, ne, eps,
+                                                                                              mul, add, ncols_packed);
             }
         }
     }
@@ -1673,6 +1886,15 @@ void ggml_cuda_op_norm_fused_add(ggml_backend_cuda_context & ctx,
         GGML_ASSERT(false);
     }
 
+    // const ggml_tensor *node = dst;
+    // printf("fused norm : %s, %s (%zu, %zu, %zu, %zu)  \n", node->name, ggml_type_name(node->type),
+    //                         node->ne[0], node->ne[1],node->ne[2], node->ne[3]);
+
+
+    // const ggml_tensor *mul = mul_src;
+    // printf("fused norm mul : %s, %s (%zu, %zu, %zu, %zu)  \n", mul->name, ggml_type_name(mul->type),
+    //                     mul->ne[0], mul->ne[1], mul->ne[2], mul->ne[3]);
+
     const float *       add_d   = nullptr;
     const ggml_tensor * add_src = nullptr;
 
@@ -1685,6 +1907,12 @@ void ggml_cuda_op_norm_fused_add(ggml_backend_cuda_context & ctx,
     } else {
         GGML_ASSERT(false);
     }
+
+    // const ggml_tensor * add = add_src;
+    // printf("fused norm add: %s, %s (%zu, %zu, %zu, %zu)  \n", add->name, ggml_type_name(add->type),
+    //     add->ne[0], add->ne[1], add->ne[2], add->ne[3]);
+
+
 
     float *      dst_d  = (float *) add_tensor->data;
     cudaStream_t stream = ctx.stream();
@@ -1768,6 +1996,96 @@ void ggml_cuda_op_norm_fused_add(ggml_backend_cuda_context & ctx,
                                         /*add_s00*/ add_s01, add_s02, add_s03,
                                         add_ncols, add_nrows, add_nchannels, add_nsamples,
                                         eps, stream);
+        }
+    }
+}
+
+
+void ggml_cuda_op_group_norm_fused_add(ggml_backend_cuda_context & ctx,
+                                        ggml_tensor *               dst,
+                                        ggml_tensor *               mul_tensor,
+                                        ggml_tensor *               add_tensor) {
+    const ggml_tensor * norm_src = (ggml_tensor *) dst->src[0];
+    float               eps          = 0.0f;
+
+    memcpy(&eps, dst->op_params, sizeof(float));
+
+    const float *       src0_d  = (const float *) norm_src->data;
+    const float *       mul_d   = nullptr;
+    const ggml_tensor * mul_src = nullptr;
+
+    if (mul_tensor->src[0] == dst) {
+        mul_d   = (float *) mul_tensor->src[1]->data;
+        mul_src = mul_tensor->src[1];
+    } else if (mul_tensor->src[1] == dst) {
+        mul_d   = (float *) mul_tensor->src[0]->data;
+        mul_src = mul_tensor->src[0];
+    } else {
+        GGML_ASSERT(false);
+    }
+
+    const float *       add_d   = nullptr;
+    const ggml_tensor * add_src = nullptr;
+
+    if (add_tensor->src[0] == mul_tensor) {
+        add_d   = (float *) add_tensor->src[1]->data;
+        add_src = add_tensor->src[1];
+    } else if (add_tensor->src[1] == mul_tensor) {
+        add_d   = (float *) add_tensor->src[0]->data;
+        add_src = add_tensor->src[0];
+    } else {
+        GGML_ASSERT(false);
+    }
+
+    float *      dst_d  = (float *) add_tensor->data;
+    cudaStream_t stream = ctx.stream();
+
+    int num_groups = dst->op_params[0];
+
+    memcpy(&eps, dst->op_params + 1, sizeof(float));
+    GGML_ASSERT(eps >= 0.0f);
+
+    int group_size = norm_src->ne[0] * norm_src->ne[1] * ((norm_src->ne[2] + num_groups - 1) / num_groups);
+
+    GGML_ASSERT(norm_src->type == GGML_TYPE_F32 || norm_src->type == GGML_TYPE_F16);
+    GGML_ASSERT(dst->type == GGML_TYPE_F32 || dst->type == GGML_TYPE_F16);
+    GGML_ASSERT(mul_tensor->type == GGML_TYPE_F32 || mul_tensor->type == GGML_TYPE_F16);
+    GGML_ASSERT(add_tensor->type == GGML_TYPE_F32 || add_tensor->type == GGML_TYPE_F16);
+    GGML_ASSERT(add_tensor->type == dst->type);
+    GGML_ASSERT(eps >= 0.0f);
+
+    const int64_t ne00 = norm_src->ne[0];
+    const int64_t ne01 = norm_src->ne[1];
+    const int64_t ne02 = norm_src->ne[2];
+    const int64_t ne03 = norm_src->ne[3];
+
+    if (norm_src->type == GGML_TYPE_F32) {
+        if (mul_src->type == GGML_TYPE_F32) {
+            group_norm_mul_f32_cuda<float, float>(src0_d, mul_d, add_d, dst_d,
+                                                  ne00, ne01, ne02, ne03,
+                                                  num_groups * norm_src->ne[3],
+                                                  group_size,
+                                                  ggml_nelements(norm_src),  eps, stream);
+        } else if (mul_src->type == GGML_TYPE_F16) {
+            group_norm_mul_f32_cuda<float, half>(src0_d, (const half *)mul_d, (const half *)add_d, dst_d,
+                                                 ne00, ne01, ne02, ne03,
+                                                 num_groups * norm_src->ne[3],
+                                                 group_size,
+                                                 ggml_nelements(norm_src), eps, stream);
+        }
+    } else if (norm_src->type == GGML_TYPE_F16) {
+        if (mul_src->type == GGML_TYPE_F32) {
+            group_norm_mul_f32_cuda<half, float>((const half *)src0_d, mul_d, add_d, (half *)dst_d,
+                                                ne00, ne01, ne02, ne03,
+                                                num_groups * norm_src->ne[3],
+                                                group_size,
+                                                ggml_nelements(norm_src), eps, stream);
+        } else if (mul_src->type == GGML_TYPE_F16) {
+            group_norm_mul_f32_cuda<half, half>((const half *)src0_d, (const half *)mul_d, (const half *)add_d, (half *)dst_d,
+                                                ne00, ne01, ne02, ne03,
+                                                num_groups * norm_src->ne[3],
+                                                group_size,
+                                                ggml_nelements(norm_src), eps, stream);
         }
     }
 }

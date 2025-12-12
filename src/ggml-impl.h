@@ -617,7 +617,7 @@ static inline bool ggml_can_fuse_ext(const struct ggml_cgraph * cgraph, const in
             *reason = 2;
             return false;
         }
-        if (i > 0 && i < num_ops - 1 && node->op == GGML_OP_VIEW){
+        if (i > 0 && i < num_ops - 1 && (node->op == GGML_OP_VIEW || node->op == GGML_OP_RESHAPE)) {
             continue;
         }
         if (i < num_ops - 1 && !ggml_node_has_n_uses(cgraph, node_idxs[i], 1)) {
@@ -630,7 +630,7 @@ static inline bool ggml_can_fuse_ext(const struct ggml_cgraph * cgraph, const in
                 *reason = 4;
                 return false;
             }
-            if (prev-> op != GGML_OP_VIEW && !ggml_are_same_shape(node, prev)) {
+            if (prev->op != GGML_OP_VIEW && prev->op != GGML_OP_RESHAPE && !ggml_are_same_shape(node, prev)) {
                 *reason = 5;
                 return false;
             }

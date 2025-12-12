@@ -3374,6 +3374,32 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph * cgraph, int node_idx, 
         return true;
     }
 
+    if ( ops.size() == 5 && ops.begin()[0] == GGML_OP_GROUP_NORM && ops.begin()[2] == GGML_OP_MUL && ops.begin()[4] == GGML_OP_ADD) {
+        const ggml_tensor *rms_norm = cgraph->nodes[node_idx];
+        const ggml_tensor *mul      = cgraph->nodes[node_idx+2];
+        const ggml_tensor *add      = cgraph->nodes[node_idx+4];
+
+        //  const ggml_tensor *node = rms_norm;
+        // printf("checking fused norm mul add: %s, %s (%zu, %zu, %zu, %zu)  \n", node->name, ggml_type_name(node->type),
+        //                     node->ne[0], node->ne[1],node->ne[2], node->ne[3]);
+
+        //if rms norm is the B operand, then we don't handle broadcast
+        if (rms_norm == mul->src[1] && !ggml_are_same_shape(mul->src[0], rms_norm)) {
+            return false;
+        }
+
+        //rms_norm kernel assumes contigous rows
+        if (!ggml_is_contiguous_rows(mul->src[0]) || !ggml_is_contiguous_rows(mul->src[1])) {
+            return false;
+        }
+
+        if (add && (!ggml_is_contiguous(add->src[0]) || !ggml_is_contiguous_rows(add->src[1]))) {
+            return false;
+        }
+
+        return true;
+    }
+
     if (ops.size() == 3 && ops.begin()[0] == GGML_OP_NORM && ops.begin()[1] == GGML_OP_MUL && ops.begin()[2] == GGML_OP_ADD) {
         const ggml_tensor *rms_norm = cgraph->nodes[node_idx];
         const ggml_tensor *mul      = cgraph->nodes[node_idx+1];
@@ -3517,9 +3543,31 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                         continue;
                     }
 
-                    if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_NORM, GGML_OP_MUL, GGML_OP_ADD}, {})) {
-                        // printf("fused norm mul add: %s, %s (%zu, %zu, %zu, %zu)  \n", node->name, ggml_type_name(node->type),
+                    if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_GROUP_NORM, GGML_OP_RESHAPE, GGML_OP_MUL, GGML_OP_RESHAPE, GGML_OP_ADD }, {})) {
+                        // printf("fused group norm : %s, %s (%zu, %zu, %zu, %zu)  \n", node->name, ggml_type_name(node->type),
                         //     node->ne[0], node->ne[1],node->ne[2], node->ne[3]);
+                        // const ggml_tensor * mul = cgraph->nodes[i+2];
+                        // printf("fused group norm mul : %s, %s (%zu, %zu, %zu, %zu)  \n", mul->name, ggml_type_name(mul->type),
+                        //     mul->ne[0], mul->ne[1], mul->ne[2], mul->ne[3]);
+                        // const ggml_tensor * add = cgraph->nodes[i+4];
+                        // printf("fused group norm add: %s, %s (%zu, %zu, %zu, %zu)  \n", add->name, ggml_type_name(add->type),
+                        //     add->ne[0], add->ne[1], add->ne[2], add->ne[3]);
+
+                        ggml_cuda_op_group_norm_fused_add(*cuda_ctx, node, cgraph->nodes[i+2], cgraph->nodes[i+4]);
+                        i += 4;
+                        continue;
+                    }
+
+                    if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_NORM, GGML_OP_MUL, GGML_OP_ADD}, {})) {
+                        // printf("fused norm : %s, %s (%zu, %zu, %zu, %zu)  \n", node->name, ggml_type_name(node->type),
+                        //     node->ne[0], node->ne[1],node->ne[2], node->ne[3]);
+                        // const ggml_tensor * mul = cgraph->nodes[i+1];
+                        // printf("fused norm mul : %s, %s (%zu, %zu, %zu, %zu)  \n", mul->name, ggml_type_name(mul->type),
+                        //     mul->ne[0], mul->ne[1], mul->ne[2], mul->ne[3]);
+                        // const ggml_tensor * add = cgraph->nodes[i+2];
+                        // printf("fused norm add: %s, %s (%zu, %zu, %zu, %zu)  \n", add->name, ggml_type_name(add->type),
+                        //     add->ne[0], add->ne[1], add->ne[2], add->ne[3]);
+
                         ggml_cuda_op_norm_fused_add(*cuda_ctx, node, cgraph->nodes[i+1], cgraph->nodes[i+2]);
                         i += 2;
                         continue;
