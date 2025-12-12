@@ -2178,6 +2178,11 @@ static bool ggml_cuda_mul_mat_can_be_fused(const ggml_tensor * bias_tensor, cons
        return false;
     }
 
+    if(! (src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_BF16)) {
+    //    printf("fail reason 4 \n");
+       return false;
+    }
+
     return true;
 
 }
