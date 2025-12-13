@@ -502,4 +502,4 @@ __device__ __forceinline__ void loadInput(const T * __restrict__ input,
 
 
 #define CUDA_CONV2D_IMPLICT_BLOCK_SIZE 256
-void ggml_cuda_op_conv2d_implicit(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
+void ggml_cuda_op_conv2d_implicit(ggml_backend_cuda_context & ctx, ggml_tensor * dst, const ggml_tensor *bias);

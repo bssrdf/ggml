@@ -2898,7 +2898,7 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             ggml_cuda_op_im2col_3d(ctx, dst);
             break;
         case GGML_OP_CONV_2D:
-            ggml_cuda_op_conv2d_implicit(ctx, dst);
+            ggml_cuda_op_conv2d_implicit(ctx, dst, nullptr);
             break;
         case GGML_OP_CONV_2D_DW:
             ggml_cuda_op_conv2d_dw(ctx, dst);
@@ -3447,6 +3447,23 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph * cgraph, int node_idx, 
         return true;
     }
 
+    if (ops.size() == 3 && ops.begin()[0] == GGML_OP_CONV_2D && ops.begin()[1] == GGML_OP_RESHAPE && ops.begin()[2] == GGML_OP_ADD) {
+        const ggml_tensor *conv = cgraph->nodes[node_idx];
+        const ggml_tensor *add  = cgraph->nodes[node_idx+2];
+        if (add->src[0] == conv){
+            const ggml_tensor *bias = add->src[1];
+            if(bias->ne[0] > 1 || bias->ne[1] > 1)
+               return false;
+        } else if (add->src[1] == conv){
+            const ggml_tensor *bias = add->src[0];
+            if(bias->ne[0] > 1 || bias->ne[1] > 1)
+               return false;
+        }
+
+        return true;
+    }
+
+
     if (ops.size() == 3 && ops.begin()[0] == GGML_OP_SCALE && ops.begin()[1] == GGML_OP_UNARY && ops.begin()[2] == GGML_OP_SCALE
      && unary_ops.size() == 1 && unary_ops.begin()[0] == GGML_UNARY_OP_TANH) {
         const ggml_tensor *scale  = cgraph->nodes[node_idx];
@@ -3588,6 +3605,14 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                         // printf("fused mul mat: %s, %s (%zu, %zu, %zu, %zu)  \n", node->name, ggml_type_name(node->type),
                         //     node->ne[0], node->ne[1],node->ne[2], node->ne[3]);
                         ggml_cuda_op_mul_mat_fused_add(*cuda_ctx, cgraph->nodes[i+1], node, cgraph->nodes[i+2]);
+                        i += 2;
+                        continue;
+                    }
+
+                    if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_CONV_2D, GGML_OP_RESHAPE, GGML_OP_ADD}, {})) {
+                        // printf("fused conv2d: %s, %s (%zu, %zu, %zu, %zu)  \n", node->name, ggml_type_name(node->type),
+                        //     node->ne[0], node->ne[1],node->ne[2], node->ne[3]);
+                        ggml_cuda_op_conv2d_implicit(*cuda_ctx, node, cgraph->nodes[i+2]);
                         i += 2;
                         continue;
                     }
