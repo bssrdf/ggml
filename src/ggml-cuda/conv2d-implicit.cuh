@@ -17,6 +17,8 @@ typedef struct{
     unsigned int      d_w;                            //dilation width
     unsigned int      Oh;                             //output height
     unsigned int      Ow;                             //output width
+    // layout 1: NCHW, 0:NHWC
+    unsigned int      layout;                         //layout
     uint3 SC_fastdiv;
     uint3 OW_fastdiv;
     uint3 C_fastdiv;

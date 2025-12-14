@@ -1676,6 +1676,7 @@ static struct ggml_tensor * ggml_new_tensor_impl(
         /*.op           =*/ GGML_OP_NONE,
         /*.op_params    =*/ { 0 },
         /*.flags        =*/ 0,
+        /*.layout       =*/ 0,
         /*.src          =*/ { NULL },
         /*.view_src     =*/ view_src,
         /*.view_offs    =*/ view_offs,
@@ -7250,6 +7251,10 @@ void ggml_set_loss(struct ggml_tensor * tensor) {
     GGML_ASSERT(ggml_is_scalar(tensor));
     GGML_ASSERT(tensor->type == GGML_TYPE_F32);
     tensor->flags |= GGML_TENSOR_FLAG_LOSS;
+}
+
+void ggml_set_NHWC_layout(struct ggml_tensor * tensor) {
+    tensor->layout |= GGML_TENSOR_LAYOUT_NHWC;
 }
 
 ////////////////////////////////////////////////////////////////////////////////

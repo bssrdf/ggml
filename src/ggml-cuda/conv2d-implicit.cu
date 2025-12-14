@@ -842,8 +842,13 @@ static void conv2d_implicit_cuda(const input_T * X_D, const kernel_T * K_D, outp
     dim3 thblock(NUM_THREADS, thready, threadz);
     dim3 grid(blockx, blocky, blockz);
 
-    conv2d_implicit_kernel<input_T, kernel_T, output_T, bias_T, BM, BN, BK, WM, WN,
-          WNITER, TM, TN, NUM_THREADS, 1, false, 0><<<grid, thblock, 0, st>>>(X_D, K_D, Y_D, P, bias);
+    if(P.layout == 0) {
+      conv2d_implicit_kernel<input_T, kernel_T, output_T, bias_T, BM, BN, BK, WM, WN,
+            WNITER, TM, TN, NUM_THREADS, 0, false, 0><<<grid, thblock, 0, st>>>(X_D, K_D, Y_D, P, bias);
+    } else {
+      conv2d_implicit_kernel<input_T, kernel_T, output_T, bias_T, BM, BN, BK, WM, WN,
+            WNITER, TM, TN, NUM_THREADS, 1, false, 0><<<grid, thblock, 0, st>>>(X_D, K_D, Y_D, P, bias);
+    }
 }
 
 template<typename T, typename bias_T,
@@ -901,7 +906,7 @@ static void conv2d_implicit_cuda_f16(ggml_backend_cuda_context & ctx, const inpu
         ne01 = P.r * P.s;
         // ggml_cuda_pool_alloc<half> kernel_f16(ctx.pool(id), ne);
         ggml_cuda_pool_alloc<half> kernel_f16(ctx.pool(id));
-        if (ne01 > 1){
+        if (ne01 > 1 && P.layout == 1) {
           kernel_f16.alloc(ne);
           dim3 dimGrid1((ne00 + CUDA_NCHW_2_NHWC_BLOCK_C - 1) / CUDA_NCHW_2_NHWC_BLOCK_C,
                           (ne/(ne00*ne01) + CUDA_NCHW_2_NHWC_BLOCK_NM - 1) / CUDA_NCHW_2_NHWC_BLOCK_NM,
@@ -945,7 +950,7 @@ static void conv2d_implicit_cuda_f16(ggml_backend_cuda_context & ctx, const inpu
         }
 
         const half *X_H = input_f16.get();
-        const half *K_H = ne01 == 1 ? K_D : kernel_f16.get();
+        const half *K_H = ne01 == 1 || P.layout == 0 ? K_D : kernel_f16.get();
 
         constexpr unsigned int BM_dim = 256;
         constexpr unsigned int BN_dim = 256;
@@ -1096,7 +1101,10 @@ void ggml_cuda_op_conv2d_implicit(ggml_backend_cuda_context & ctx, ggml_tensor *
     const uint       PD_Y = p[3];  // padding_y
     const uint       DL_X = p[4];  // dilation_x
     const uint       DL_Y = p[5];  // dilation_y
-    // const int       LT   = p[6];  // layout
+
+
+    const uint       LT   =  (kernel->layout & GGML_TENSOR_LAYOUT_NHWC) ? 0 : 1;
+
 
     // GGML_ASSERT(LT == 0 || LT == 1);
 
@@ -1116,7 +1124,7 @@ void ggml_cuda_op_conv2d_implicit(ggml_backend_cuda_context & ctx, ggml_tensor *
     const uint OC = kernel->ne[3];  // ouptut_chanles
     const uint B  = input->ne[3];   // n_batches
 
-    param_t params = { B, IC, IH, IW, OC, KH, KW, ST_Y, ST_X, PD_Y, PD_X, DL_Y, DL_X, OH, OW,
+    param_t params = { B, IC, IH, IW, OC, KH, KW, ST_Y, ST_X, PD_Y, PD_X, DL_Y, DL_X, OH, OW, LT,
                       init_fastdiv_values(KW*IC),
                       init_fastdiv_values(OW),
                       init_fastdiv_values(IC),
