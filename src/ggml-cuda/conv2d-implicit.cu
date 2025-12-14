@@ -163,7 +163,8 @@ static __global__ void conv2d_implicit_kernel(const input_T * __restrict__ input
 
     int z = blockIdx.z;
 
-    int inChannelOffset = layout == 0 ? param.c * param.w : param.h * param.w;
+    // int inChannelOffset = layout == 0 ? param.c * param.w : param.h * param.w;
+    int inChannelOffset = param.h * param.w;
     int weightKOffset = param.c * param.r * param.s;
 
     const uint ks =  (ksplit > 0) ? (weightKOffset + ksplit - 1) / ksplit : weightKOffset;
@@ -186,7 +187,8 @@ static __global__ void conv2d_implicit_kernel(const input_T * __restrict__ input
        (kernel, smemweight, by, innerRowA, innerColA, weightKOffset,
         start_k, end_k, param);
 
-    loadInput<input_T, BM, rowStrideA, layout, vec_load, ksplit, PAD>
+    // loadInput<input_T, BM, rowStrideA, layout, vec_load, ksplit, PAD>
+    loadInput<input_T, BM, rowStrideA, 1, vec_load, ksplit, PAD>
        (input,  smeminput, bx,  innerRowA, innerColA,
         start_k, end_k, PQ, CHW, inChannelOffset, param);
 
@@ -254,7 +256,8 @@ static __global__ void conv2d_implicit_kernel(const input_T * __restrict__ input
             (kernel, &smemweight[write_flag * (BN+PAD) * BK], by, innerRowA, innerColA, weightKOffset,
                 crs+BK, end_k, param);
 
-        loadInput<input_T, BM, rowStrideA, layout, vec_load, ksplit, PAD>
+        // loadInput<input_T, BM, rowStrideA, layout, vec_load, ksplit, PAD>
+        loadInput<input_T, BM, rowStrideA, 1, vec_load, ksplit, PAD>
             (input,  &smeminput[write_flag * (BM+PAD) * BK], bx,  innerRowA, innerColA,
                 crs + BK, end_k, PQ, CHW, inChannelOffset, param);
 
@@ -1117,8 +1120,8 @@ void ggml_cuda_op_conv2d_implicit(ggml_backend_cuda_context & ctx, ggml_tensor *
     const uint IH = input->ne[1];   // input_h
     const uint OW = dst->ne[0];     // output_w
     const uint OH = dst->ne[1];     // output_h
-    const uint KW = kernel->ne[0];  // kernel_w
-    const uint KH = kernel->ne[1];  // kernel_h
+    const uint KW = LT == 0 ? kernel->ne[1] : kernel->ne[0];  // kernel_w
+    const uint KH = LT == 0 ? kernel->ne[2] : kernel->ne[1];  // kernel_h
     const uint IC = input->ne[2];   // input_channels
 
     const uint OC = kernel->ne[3];  // ouptut_chanles

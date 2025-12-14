@@ -375,6 +375,7 @@ __device__ __forceinline__ void loadFilter(const T * __restrict__ kernel,
 
     const unsigned int weight_sts_addr = innerRowA + innerColA * (BN+PAD) * 4;
     const unsigned int kidx = start_k + innerColA * 4;
+    static_assert(vec_load == false);
 #pragma unroll
     for (int offset = 0; offset + rowStrideA <= BN; offset += rowStrideA) {
         const unsigned int nidx = by * BN + innerRowA + offset;
@@ -404,7 +405,18 @@ __device__ __forceinline__ void loadFilter(const T * __restrict__ kernel,
 #pragma unroll
             for (int i = 0; i < 4; ++i) {
                 if (nidx < param.k && kidx + i < end_k) {
-                    smemweight[weight_sts_addr + offset + i*(BN+PAD)] = kernel[nidx * weightKOffset + kidx + i];
+                    int crs_offset = kidx + i;
+                    if constexpr (layout == 0) {
+                        uint32_t c = fastdiv(crs_offset, param.RS_fastdiv);
+                        uint32_t c_rem = fastmodulo(crs_offset, param.RS_fastdiv);
+                        uint32_t r = fastdiv(c_rem, param.S_fastdiv);
+                        uint32_t s = fastmodulo(c_rem, param.S_fastdiv);
+                        // crs_offset = c * param.r * param.s + r * param.s + s;
+                        crs_offset = r * param.c * param.s + s * param.c + c;
+
+                    }
+                    // smemweight[weight_sts_addr + offset + i*(BN+PAD)] = kernel[nidx * weightKOffset + kidx + i];
+                    smemweight[weight_sts_addr + offset + i*(BN+PAD)] = kernel[nidx * weightKOffset + crs_offset];
                 } else {
                     smemweight[weight_sts_addr + offset + i*(BN+PAD)] = (T)0.f;
                 }
