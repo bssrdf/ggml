@@ -3533,7 +3533,7 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
         if (!use_cuda_graph || cuda_graph_update_required) {
             [[maybe_unused]] int prev_i = 0;
 
-            // printf(" executing graphs due to [%d, %d]\n ", use_cuda_graph?1:0, cuda_graph_update_required?1:0);
+            GGML_LOG_DEBUG(" executing graphs due to [%d, %d]\n ", use_cuda_graph?1:0, cuda_graph_update_required?1:0);
 
             if (stream_ctx.concurrent_events.size() > 0) {
                 should_launch_concurrent_events = true;
@@ -4630,9 +4630,9 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
     if (use_cuda_graph) {
         cuda_graph_update_required = is_cuda_graph_update_required(cuda_ctx, cgraph);
 
-        if (!cuda_ctx->cuda_graph->same_future_graph) {
+        // if (!cuda_ctx->cuda_graph->same_future_graph) {
             use_cuda_graph = check_node_graph_compatibility(cgraph, use_cuda_graph);
-        }
+        // }
         // printf("%s: B cuda graph on [%d, %d] \n", __func__, use_cuda_graph?1:0, cuda_graph_update_required?1:0);
 
         // Disable CUDA graphs (from the next token) if the use-case is demanding too many consecutive graph updates.
@@ -4713,8 +4713,10 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
     }();
 
     if (!enable_graph_optimization) {
+        // printf("ggml_backend_cuda_graph_optimize: optimizing graph for CUDA graphs Not Enabled \n");
         return;
     }
+    // printf("ggml_backend_cuda_graph_optimize: optimizing graph for CUDA graphs \n");
 
     ggml_cuda_stream_context & stream_context = cuda_ctx->stream_context();
     stream_context.reset();
@@ -4758,7 +4760,8 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
         for (int src_idx = 0; src_idx < GGML_MAX_SRC; ++src_idx) {
             const ggml_tensor * src = cgraph->nodes[node_idx]->src[src_idx];
             //TODO: check why nrows > 1 fails
-            if (node && !is_noop(node) && ggml_nrows(node) <= 1) {
+            // if (node && !is_noop(node) && ggml_nrows(node) <= 1) {
+            if (node && !is_noop(node)) {
                 fan_out[src] += 1;
             }
         }
@@ -4788,6 +4791,7 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
             if (!strstr(root_node->name, "attn_norm")) {
                 continue;
             }
+            // printf("Found potential concurrent event at node %s with fan-out %d\n", root_node->name, count);
 
             bool is_part_of_event = false;
             for (const auto & [start, end] : concurrent_node_ranges) {

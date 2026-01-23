@@ -463,7 +463,8 @@ void ggml_backend_event_wait(ggml_backend_t backend, ggml_backend_event_t event)
     backend->iface.event_wait(backend, event);
 }
 
-static void ggml_backend_graph_optimize(ggml_backend_t backend, struct ggml_cgraph * cgraph) {
+// static void ggml_backend_graph_optimize(ggml_backend_t backend, struct ggml_cgraph * cgraph) {
+void ggml_backend_graph_optimize(ggml_backend_t backend, struct ggml_cgraph * cgraph) {
     GGML_ASSERT(backend);
     if (backend->iface.graph_optimize != NULL) {
         backend->iface.graph_optimize(backend, cgraph);

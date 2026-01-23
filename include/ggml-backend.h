@@ -100,6 +100,8 @@ extern "C" {
     GGML_API enum ggml_status ggml_backend_graph_compute      (ggml_backend_t backend, struct ggml_cgraph * cgraph);
     GGML_API enum ggml_status ggml_backend_graph_compute_async(ggml_backend_t backend, struct ggml_cgraph * cgraph);
 
+    GGML_API void ggml_backend_graph_optimize(ggml_backend_t backend, struct ggml_cgraph * cgraph);
+
     // NOTE: will be removed, use device version instead
     GGML_API bool ggml_backend_supports_op(ggml_backend_t backend, const struct ggml_tensor * op);
     GGML_API bool ggml_backend_supports_buft(ggml_backend_t backend, ggml_backend_buffer_type_t buft);
