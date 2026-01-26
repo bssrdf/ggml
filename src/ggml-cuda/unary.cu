@@ -113,6 +113,10 @@ void ggml_cuda_op_unary(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     void * dst_d = dst->data;
     cudaStream_t stream = ctx.stream();
 
+    if(!ggml_is_contiguous(src0)) {
+        const int32_t ot = ggml_get_op_params_i32(dst, 0);
+        fprintf(stderr, "%s: src0 is not contiguous %s\n", __func__, ggml_unary_op_name((ggml_unary_op)ot));
+    }
     GGML_ASSERT(ggml_is_contiguous(src0));
 
     GGML_ASSERT(src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_BF16);

@@ -3238,7 +3238,7 @@ static bool is_cuda_graph_update_required(ggml_backend_cuda_context * cuda_ctx, 
     }
 
 
-    // printf(" check cuda graph update \n");
+    // printf(" check cuda graph update: %d \n", cuda_graph_update_required?1:0);
     return cuda_graph_update_required;
 }
 
@@ -3527,13 +3527,20 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
         }
     };
 
+    // GGML_LOG_DEBUG(" size of concurrent evenets %u, %d \n", stream_ctx.concurrent_events.size(), graph_evaluated_or_captured?1:0);
+
     while (!graph_evaluated_or_captured) {
         // Only perform the graph execution if CUDA graphs are not enabled, or we are capturing the graph.
         // With the use of CUDA graphs, the execution will be performed by the graph launch.
+
+        // GGML_LOG_DEBUG(" not graph_evaluated_or_captured  [%d, %d]\n ", use_cuda_graph?1:0, cuda_graph_update_required?1:0);
+
         if (!use_cuda_graph || cuda_graph_update_required) {
             [[maybe_unused]] int prev_i = 0;
 
-            GGML_LOG_DEBUG(" executing graphs due to [%d, %d]\n ", use_cuda_graph?1:0, cuda_graph_update_required?1:0);
+            // GGML_LOG_DEBUG(" executing graphs due to [%d, %d]\n ", use_cuda_graph?1:0, cuda_graph_update_required?1:0);
+
+            // GGML_LOG_DEBUG(" size of concurrent evenets %u \n", stream_ctx.concurrent_events.size());
 
             if (stream_ctx.concurrent_events.size() > 0) {
                 should_launch_concurrent_events = true;
@@ -3543,7 +3550,7 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
             }
             if (should_launch_concurrent_events) {
                 // Restore original node order within each concurrent region to enable fusion within streams
-
+                // GGML_LOG_DEBUG("Restore original node order within each concurrent region to enable fusion within streams\n");
                 std::unordered_map<const ggml_tensor *, int> node_to_idx;
                 node_to_idx.reserve(cgraph->n_nodes);
                 for (int i = 0; i < cgraph->n_nodes; ++i) {
@@ -3616,7 +3623,7 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                     } else {
                         GGML_ASSERT (concurrent_event->stream_mapping.find(node) != concurrent_event->stream_mapping.end());
                         cuda_ctx->curr_stream_no = concurrent_event->stream_mapping[node];
-                        GGML_LOG_DEBUG("Setting stream no to %d for node %s\n", cuda_ctx->curr_stream_no, node->name);
+                        GGML_LOG_DEBUG("A Setting stream no to %d for node %s\n", cuda_ctx->curr_stream_no, node->name);
                     }
                 } else if (i - prev_i > 1) {
                     //the previous node was fused
@@ -3625,7 +3632,7 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
 
                     if (is_concurrent_event_active) {
                         cuda_ctx->curr_stream_no = concurrent_event->stream_mapping[node];
-                        GGML_LOG_DEBUG("Setting stream no to %d for node %s\n", cuda_ctx->curr_stream_no, node->name);
+                        GGML_LOG_DEBUG("B Setting stream no to %d for node %s\n", cuda_ctx->curr_stream_no, node->name);
                     }
                 }
 
@@ -4630,9 +4637,9 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
     if (use_cuda_graph) {
         cuda_graph_update_required = is_cuda_graph_update_required(cuda_ctx, cgraph);
 
-        // if (!cuda_ctx->cuda_graph->same_future_graph) {
+        if (!cuda_ctx->cuda_graph->same_future_graph) {
             use_cuda_graph = check_node_graph_compatibility(cgraph, use_cuda_graph);
-        // }
+        }
         // printf("%s: B cuda graph on [%d, %d] \n", __func__, use_cuda_graph?1:0, cuda_graph_update_required?1:0);
 
         // Disable CUDA graphs (from the next token) if the use-case is demanding too many consecutive graph updates.
@@ -4864,6 +4871,7 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
                 //Create ggml_cuda_concurrent_event
                 ggml_cuda_concurrent_event concurrent_event(nodes_per_branch.size());
                 concurrent_event.join_node = join_node;
+                GGML_LOG_DEBUG("join at node %s %p\n", join_node->name, join_node);
 
                 for (size_t branch_idx = 0; branch_idx < nodes_per_branch.size(); branch_idx++) {
                     for (const ggml_tensor * n : nodes_per_branch[branch_idx]) {
@@ -4903,7 +4911,7 @@ static void ggml_backend_cuda_graph_optimize(ggml_backend_t backend, ggml_cgraph
                 std::unordered_map<const ggml_tensor *, ggml_cuda_concurrent_event> & concurrent_events = cuda_ctx->stream_context().concurrent_events;
                 GGML_ASSERT(concurrent_events.find(root_node) == concurrent_events.end());
                 concurrent_events.emplace(root_node, std::move(concurrent_event));
-                GGML_LOG_DEBUG("Adding stream at node %s %p\n", root_node->name, root_node);
+                GGML_LOG_DEBUG("Adding stream at node %s %p, with %u\n", root_node->name, root_node, concurrent_events.size());
                 concurrent_node_ranges.emplace_back(fork_node_idx, join_node_idx);
 
                 // interleave tensors to extend lifetimes so that ggml graph doesn't recycle them

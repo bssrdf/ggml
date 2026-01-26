@@ -1050,6 +1050,7 @@ struct ggml_cuda_concurrent_event {
                     // (i.e., the other range starts before this range ends).
                     if (other.first < data_range.second) {
                         GGML_LOG_DEBUG("Writes overlap for %s", tensor->name);
+                        GGML_LOG_DEBUG("Writes overlap for (%lld, %lld), (%lld, %lld)", other.first, other.second, data_range.first, data_range.second);
                         writes_overlap = true;
                         break;
                     }
