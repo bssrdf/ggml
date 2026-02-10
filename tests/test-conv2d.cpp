@@ -30,6 +30,7 @@ static void ggml_log_callback_default(ggml_log_level level, const char * text, v
 struct test_model {
     struct ggml_tensor * a;
     struct ggml_tensor * b;
+    struct ggml_tensor * c;
     ggml_backend_t backend = NULL;
     ggml_backend_buffer_t buffer;
     struct ggml_context * ctx;
@@ -56,17 +57,23 @@ void load_model(test_model & model, bool use_gpu = false) {
         bdata[i] = 1.5f;
     }
 
+    std::vector<float> cdata(4*(KW+IW));
+    for (int i = 0; i < 4*(KW+IW); i++) {
+        cdata[i] = i+1.f;
+    }
+
     size_t buffer_size = 0;
     {
         buffer_size += KW * KH * IC * OC * ggml_type_size(GGML_TYPE_F16); // tensor a
         buffer_size += IW * IH * IC * N  * ggml_type_size(GGML_TYPE_F32); // tensor b
+        buffer_size += 4*(KW+IW) * ggml_type_size(GGML_TYPE_F32); // tensor c
         buffer_size += 1024; // overhead
     }
 
     printf("%s: ggml tensor size    = %d bytes\n", __func__, (int) sizeof(ggml_tensor));
     printf("%s: backend buffer size = %0.2f MB\n", __func__, (buffer_size/ 1024.f/ 1024.f));
 
-    int num_tensors = 2;
+    int num_tensors = 3;
     struct ggml_init_params params {
             /*.mem_size   =*/ ggml_tensor_overhead() * num_tensors,
             /*.mem_buffer =*/ NULL,
@@ -109,6 +116,7 @@ void load_model(test_model & model, bool use_gpu = false) {
     // create tensors
     model.a = ggml_new_tensor_4d(model.ctx, GGML_TYPE_F16,  KW, KH, IC, OC);
     model.b = ggml_new_tensor_4d(model.ctx, GGML_TYPE_F32, IW, IH, IC, N);
+    model.c = ggml_new_tensor_1d(model.ctx, GGML_TYPE_F32, 4*(KW+IW));
 
     // create a allocator
     struct ggml_tallocr alloc = ggml_tallocr_new(model.buffer);
@@ -134,6 +142,19 @@ void load_model(test_model & model, bool use_gpu = false) {
         memcpy(model.b->data, bdata.data(), ggml_nbytes(model.b));
     } else {
         ggml_backend_tensor_set(model.b, bdata.data(), 0, ggml_nbytes(model.b));
+    }
+
+    // alloc memory
+    ggml_tallocr_alloc(&alloc, model.c);
+
+    if(ggml_backend_is_cpu(model.backend)
+#ifdef GGML_USE_METAL
+                || ggml_backend_is_metal(model.backend)
+#endif
+    ) {
+        memcpy(model.c->data, cdata.data(), ggml_nbytes(model.c));
+    } else {
+        ggml_backend_tensor_set(model.c, cdata.data(), 0, ggml_nbytes(model.c));
     }
 }
 
@@ -168,6 +189,12 @@ struct ggml_cgraph * build_graph(const test_model& model) {
     struct ggml_tensor* conv2d_res = ggml_conv_2d(ctx0, model.a, model.b, s0, s1, p0, p1, d0, d1);
     ggml_set_name(conv2d_res, "conv2d_res");
     ggml_build_forward_expand(gf, conv2d_res);
+
+    // struct ggml_tensor* view_res = ggml_cont(ctx0, ggml_view_2d(ctx0, model.c, 3, 4, model.c->nb[0]*(3+8), 0));
+    struct ggml_tensor* view_res = ggml_cont(ctx0, ggml_view_2d(ctx0, model.c, 8, 4, model.c->nb[0]*(3+8), 3*model.c->nb[0]));
+    printf("view_res: ne[0] = %lld, ne[1] = %lld\n", view_res->ne[0], view_res->ne[1]);
+    ggml_set_name(view_res, "view_res");
+    ggml_build_forward_expand(gf, view_res);
 
     ggml_free(ctx0);
     return gf;
@@ -216,20 +243,24 @@ int main(void)
 
     struct ggml_tensor * im2col_res = NULL;
     struct ggml_tensor * conv2d_res = NULL;
+    struct ggml_tensor * view_res = NULL;
 
     for(int i = 0; i < ggml_graph_n_nodes(gf_res); ++i) {
         if(strcmp(ggml_get_name(ggml_graph_node(gf_res, i)), "im2col_res") == 0) {
             im2col_res = ggml_graph_node(gf_res, i);
         } else if(strcmp(ggml_get_name(ggml_graph_node(gf_res, i)), "conv2d_res") == 0) {
             conv2d_res = ggml_graph_node(gf_res, i);
+        } else if(strcmp(ggml_get_name(ggml_graph_node(gf_res, i)), "view_res") == 0) {
+            view_res = ggml_graph_node(gf_res, i);
         }
     }
 
     std::vector<uint16_t> im2col_data(ggml_nelements(im2col_res));
     std::vector<float> conv2d_data(ggml_nelements(conv2d_res));
-
+    std::vector<float> view_data(ggml_nelements(view_res));
     ggml_backend_tensor_get(im2col_res, im2col_data.data(), 0, ggml_nbytes(im2col_res));
     ggml_backend_tensor_get(conv2d_res, conv2d_data.data(), 0, ggml_nbytes(conv2d_res));
+    ggml_backend_tensor_get(view_res, view_data.data(), 0, ggml_nbytes(view_res));
 
     const int n_conv2d_test = 480;
     const int n_im2col_test = 4320;
@@ -381,6 +412,11 @@ int main(void)
     }
 
     printf("ggml_conv2d (%d): %s\n", (int) ggml_nelements(conv2d_res), passed && (ggml_nelements(conv2d_res) == n_conv2d_test) ? "\033[32mPASSED\033[0m" : "\033[31mFAILED\033[0m");
+
+    for(int i = 0; i < ggml_nelements(view_res); i++) {
+        printf("%f, ", view_data[i]);
+    }
+    printf("\n");
 
     ggml_free(model.ctx);
 
