@@ -90,7 +90,7 @@ void load_model(test_model & model, float* a, float* b, int M, int N, int K, int
 #ifdef GGML_USE_METAL
     if (use_gpu) {
         fprintf(stderr, "%s: using Metal backend\n", __func__);
-        ggml_metal_log_set_callback(ggml_log_callback_default, nullptr);
+        // ggml_metal_log_set_callback(ggml_log_callback_default, nullptr);
         model.backend = ggml_backend_metal_init();
         if (!model.backend) {
             fprintf(stderr, "%s: ggml_backend_metal_init() failed\n", __func__);
@@ -181,14 +181,14 @@ void load_model(test_model & model, float* a, float* b, int M, int N, int K, int
         printf("%f, ", en_data[i]);
     printf("\n");
 
-    delete(en_data);
+    delete[] en_data;
 
 
 
     // free_random_normal_distribution(rnd0);
 
     // ggml_print_objects(ctx0);
-    delete(rn);
+    delete[] rn;
 
     rn = new float[L];
     for(int i = 0; i < L; i++){
@@ -201,7 +201,7 @@ void load_model(test_model & model, float* a, float* b, int M, int N, int K, int
         ggml_backend_tensor_set(model.encode1_bias, rn, 0, ggml_nbytes(model.encode1_bias)); // cuda requires copy the data directly to device
     }
 
-    delete(rn);
+    delete[] rn;
 
 
     // ggml_allocr_free(alloc);
@@ -274,11 +274,11 @@ struct ggml_cgraph * compute(const test_model & model, ggml_gallocr_t allocr) {
         ggml_backend_cpu_set_n_threads(model.backend, n_threads);
     }
 
-#ifdef GGML_USE_METAL
-    if (ggml_backend_is_metal(model.backend)) {
-        ggml_backend_metal_set_n_cb(model.backend, n_threads);
-    }
-#endif
+// #ifdef GGML_USE_METAL
+//     if (ggml_backend_is_metal(model.backend)) {
+//         ggml_backend_metal_set_n_cb(model.backend, n_threads);
+//     }
+// #endif
 
     ggml_backend_graph_compute(model.backend, gf);
 
