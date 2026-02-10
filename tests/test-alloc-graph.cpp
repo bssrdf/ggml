@@ -234,6 +234,8 @@ struct ggml_cgraph * build_graph(const test_model& model) {
     // z = (zT)T
     ggml_build_forward_expand(gf, result);
 
+    ggml_graph_dump_dot(gf, NULL, "alloc-graph.dot");
+
     // delete the temporally context used to build the graph
     ggml_free(ctx0);
     return gf;
@@ -294,7 +296,7 @@ typedef unsigned char uint8;
 
 int read_data(uint8 *data, const unsigned long count)
 {
-    FILE *fp_image = fopen("models/mnist/train-images-idx3-ubyte", "rb");
+    FILE *fp_image = fopen("../models/mnist/train-images-idx3-ubyte", "rb");
     if (!fp_image) return 1;
     if(fseek(fp_image, 16, SEEK_SET) != 0)
        return 1;
