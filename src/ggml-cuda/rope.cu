@@ -35,6 +35,11 @@ static __device__ void rope_yarn(
     }
     cos_theta = cosf(theta) * mscale;
     sin_theta = sinf(theta) * mscale;
+    // if(threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0){
+    //     if(cos_theta < -1.e-6f || sin_theta < -1.e-6f ){
+    //         printf(" theta %f, %f, %f, msscale %f, %f, %f, \n ", theta, cos_theta, sin_theta, mscale, freq_scale, theta_extrap);
+    //     }
+    // }
     if (!forward) {
         sin_theta *= -1.0f;
     }
@@ -199,17 +204,49 @@ static __global__ void rope_multi(
     const int sector = (i0 / 2) % sect_dims;
 
     float theta_base = 0.0;
+    float omega = 0.0f;
     if (is_imrope) {
-        if (sector % 3 == 1 && sector < 3 * sections.v[1]) { // h
-            theta_base = pos[channel_x + ne2 * 1]*powf(theta_scale, i0/2.0f);
-        } else if (sector % 3 == 2 && sector < 3 * sections.v[2]) { // w
-            theta_base = pos[channel_x + ne2 * 2]*powf(theta_scale, i0/2.0f);
-        } else if (sector % 3 == 0 && sector < 3 * sections.v[0]) { // t
-            theta_base = pos[channel_x]*powf(theta_scale, i0/2.0f);
-        } else {
-            theta_base = pos[channel_x + ne2 * 3]*powf(theta_scale, i0/2.0f);
+        // if (sector % 3 == 1 && sector < 3 * sections.v[1]) { // h
+        //     theta_base = pos[channel_x + ne2 * 1]*powf(theta_scale, i0/2.0f);
+        // } else if (sector % 3 == 2 && sector < 3 * sections.v[2]) { // w
+        //     theta_base = pos[channel_x + ne2 * 2]*powf(theta_scale, i0/2.0f);
+        // } else if (sector % 3 == 0 && sector < 3 * sections.v[0]) { // t
+        //     theta_base = pos[channel_x]*powf(theta_scale, i0/2.0f);
+        // } else {
+        //     theta_base = pos[channel_x + ne2 * 3]*powf(theta_scale, i0/2.0f);
+        // }
+        // if(threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0){
+        //     printf(" on is_imrope path\n");
+        // }
+        if (sector < sections.v[0]) {
+            theta_base = pos[channel_x]*powf(theta_scale, n_dims/2.0f*i0/2.0f/sections.v[0]);
+            omega = powf(theta_scale, n_dims/2.0f*i0/2.0f/sections.v[0]);
         }
+        else if (sector >= sections.v[0] && sector < sec_w) {
+            theta_base = pos[channel_x + ne2 * 1]*powf(theta_scale, n_dims/2.0f*(i0/2.0f-sections.v[0])/sections.v[1]);
+            omega = powf(theta_scale, n_dims/2.0f*(i0/2.0f-sections.v[0])/sections.v[1]);
+        }
+        else if (sector >= sec_w && sector < sec_w + sections.v[2]) {
+            theta_base = pos[channel_x + ne2 * 2]*powf(theta_scale, n_dims/2.0f*(i0/2.0f-sec_w)/sections.v[2]);
+            omega = powf(theta_scale, n_dims/2.0f*(i0/2.0f-sec_w)/sections.v[2]);
+        }
+        else if (sector >= sec_w + sections.v[2]) {
+            const int half_dim = sec_w + sections.v[2];
+            const int half_dim_1 = sections.v[3];
+            theta_base = pos[channel_x + ne2 * 3]*powf(theta_scale, n_dims/2.0f*(i0/2.0f-half_dim)/half_dim_1);
+            omega = powf(theta_scale, n_dims/2.0f*(i0/2.0f-half_dim)/half_dim_1);
+        }
+        // if(threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0){
+        // if(blockIdx.x == 0 && blockIdx.y == 0){
+            // if(theta_base > 128.f){
+            //     printf(" theta %f, pos: %d, %d, %d \n ", theta_base, pos[channel_x], pos[channel_x+ ne2 * 1],pos[channel_x+ ne2 * 2]);
+            // }
+            // printf(" omega %f, thx %d, \n ", omega, threadIdx.y);
+        // }
     } else {
+        // if(threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0){
+        //     printf(" on non is_imrope path\n");
+        // }
         if (sector < sections.v[0]) {
             theta_base = pos[channel_x]*powf(theta_scale, i0/2.0f);
         }
@@ -231,11 +268,24 @@ static __global__ void rope_multi(
 
     rope_yarn<forward>(theta_base/freq_factor, freq_scale, corr_dims, i0, ext_factor, attn_factor, cos_theta, sin_theta);
 
-    const float x0 = x[ix + 0];
-    const float x1 = x[ix + n_dims/2];
+    if (is_imrope) {
+        const float x0 = x[ix + 0];
+        const float x1 = x[ix + 1];
 
-    dst[idst + 0]        = x0*cos_theta - x1*sin_theta;
-    dst[idst + n_dims/2] = x0*sin_theta + x1*cos_theta;
+        dst[idst + 0]  = x0*cos_theta - x1*sin_theta;
+        dst[idst + 1]  = x0*sin_theta + x1*cos_theta;
+
+        // if(threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0){
+        //     printf("x0: %f, x1: %f, y0: %f , y1: %f, cos: %f, sin: %f theta_base: %f\n",
+        //          x0, x1, dst[idst + 0], dst[idst + 1], cos_theta, sin_theta, theta_base);
+        // }
+    } else {
+        const float x0 = x[ix + 0];
+        const float x1 = x[ix + n_dims/2];
+
+        dst[idst + 0]        = x0*cos_theta - x1*sin_theta;
+        dst[idst + n_dims/2] = x0*sin_theta + x1*cos_theta;
+    }
 }
 
 template<bool forward, bool has_ff, typename T>
@@ -415,6 +465,7 @@ void ggml_cuda_op_rope_impl(ggml_backend_cuda_context & ctx,
     const ggml_tensor * src1 = dst->src[1];
     const ggml_tensor * src2 = dst->src[2];
 
+
     const float * src0_d = (const float *)src0->data;
     const float * src1_d = (const float *)src1->data;
 
@@ -510,6 +561,7 @@ void ggml_cuda_op_rope_impl(ggml_backend_cuda_context & ctx,
             GGML_ABORT("fatal error");
         }
     } else if (is_mrope && !is_vision) {
+        // printf( "rope multi %lld, %lld, %lld, %lld \n", src0->ne[0],src0->ne[1],src0->ne[2],src0->ne[3]);
         if (src0->type == GGML_TYPE_F32) {
             rope_multi_cuda<forward>(
                 (const float *) src0_d, (float *) dst_d, ne00, ne01, ne02, s01, s02, n_dims, nr, pos, freq_scale,
