@@ -614,6 +614,11 @@ static inline bool ggml_can_fuse_ext(const struct ggml_cgraph * cgraph, const in
         if ((node->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) {
             return false;
         }
+
+        if (i > 0 && i < num_ops - 1 && (node->op == GGML_OP_VIEW || node->op == GGML_OP_PERMUTE || node->op == GGML_OP_RESHAPE)) {
+            continue;
+        }
+
         if (i < num_ops - 1 && !ggml_node_has_n_uses(cgraph, node_idxs[i], 1)) {
             return false;
         }
@@ -622,7 +627,8 @@ static inline bool ggml_can_fuse_ext(const struct ggml_cgraph * cgraph, const in
             if (node->src[0] != prev && node->src[1] != prev) {
                 return false;
             }
-            if (!ggml_are_same_shape(node, prev)) {
+            if (node->op != GGML_OP_PERMUTE && !ggml_are_same_shape(node, prev)) {
+            // if (!ggml_are_same_shape(node, prev)) {
                 return false;
             }
         }

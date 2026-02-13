@@ -3362,6 +3362,19 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
         return true;
     }
 
+    if (ops.size() == 3 && ops.begin()[0] == GGML_OP_ROPE && ops.begin()[1] == GGML_OP_PERMUTE && ops.begin()[2] == GGML_OP_CONT){
+        const ggml_tensor *rope  = cgraph->nodes[node_idx];
+        const ggml_tensor *perm  = cgraph->nodes[node_idx+1];
+        // const ggml_tensor *cont  = cgraph->nodes[node_idx+2];
+        int dims[4];
+        memcpy(dims,  (int32_t *) perm->op_params, sizeof(dims));
+        if (!(dims[0] == 0 && dims[1] == 2 && dims[2] == 1 && dims[3] == 3))
+           return false;
+        const int mode       = ((int32_t *) rope->op_params)[2];
+        const bool is_imrope = mode == GGML_ROPE_TYPE_IMROPE;
+        return is_imrope;
+    }
+
     if (ops.size() == 3 && ops.begin()[0] == GGML_OP_SCALE && ops.begin()[1] == GGML_OP_UNARY && ops.begin()[2] == GGML_OP_SCALE
      && unary_ops.size() == 1 && unary_ops.begin()[0] == GGML_UNARY_OP_TANH) {
         const ggml_tensor *scale  = cgraph->nodes[node_idx];
@@ -3838,6 +3851,13 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
 
                     if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL, GGML_OP_ADD}, {})) {
                         ggml_cuda_op_rms_norm_fused_add(*cuda_ctx, node, cgraph->nodes[i+1], cgraph->nodes[i+2]);
+                        i += 2;
+                        continue;
+                    }
+
+                    if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_ROPE, GGML_OP_PERMUTE, GGML_OP_CONT}, {})) {
+                        // printf("fused rope\n");
+                        ggml_cuda_op_rope_fused_permute(*cuda_ctx, node,  cgraph->nodes[i+2]);
                         i += 2;
                         continue;
                     }

@@ -175,9 +175,10 @@ static __global__ void rope_neox(const T *            x,
 
 template<bool forward, bool has_ff, typename T>
 static __global__ void rope_multi(
-        const T * x, T * dst, const int ne0, const int ne1, const int ne2, const int s1, const int s2,
+        const T * x, T * dst, const int ne0, const int ne1, const int ne2, const int s01, const int s02,
         const int n_dims, const int32_t * pos, const float freq_scale, const float ext_factor, const float attn_factor,
-        const rope_corr_dims corr_dims, const float theta_scale, const float * freq_factors, const mrope_sections sections, const bool is_imrope) {
+        const rope_corr_dims corr_dims, const float theta_scale, const float * freq_factors,
+        const mrope_sections sections, const bool is_imrope, const int s1, const int s2, const bool permute) {
     const int i0 = 2*(blockDim.y*blockIdx.y + threadIdx.y);
 
     if (i0 >= ne0) {
@@ -191,11 +192,15 @@ static __global__ void rope_multi(
 
     int idst, ix;
     if (is_imrope) {
-        idst = row_dst*ne0 + i0;
-        ix   = channel_x*s2 + row_x*s1 + i0;
+        if (permute) {
+           idst = row_x*s2 + channel_x*s1 + i0;
+        } else {
+           idst = row_dst*ne0 + i0;
+        }
+        ix   = channel_x*s02 + row_x*s01 + i0;
     } else {
         idst = row_dst*ne0 + i0/2;
-        ix   = channel_x*s2 + row_x*s1 + i0/2;
+        ix   = channel_x*s02 + row_x*s01 + i0/2;
     }
 
     if (i0 >= n_dims) {
@@ -397,9 +402,10 @@ static void rope_neox_cuda(const T *            x,
 
 template<bool forward, typename T>
 static void rope_multi_cuda(
-        const T * x, T * dst, const int ne0, const int ne1, const int ne2, const int s1, const int s2, const int n_dims, const int nr,
+        const T * x, T * dst, const int ne0, const int ne1, const int ne2, const int s01, const int s02, const int n_dims, const int nr,
         const int32_t * pos, const float freq_scale, const float freq_base, const float ext_factor, const float attn_factor,
-        const rope_corr_dims corr_dims, const float * freq_factors, const mrope_sections sections, const bool is_imrope, cudaStream_t stream) {
+        const rope_corr_dims corr_dims, const float * freq_factors, const mrope_sections sections, const bool is_imrope,
+        const int s1, const int s2, const bool permute, cudaStream_t stream) {
     GGML_ASSERT(ne0 % 2 == 0);
     const dim3 block_dims(1, CUDA_ROPE_BLOCK_SIZE, 1);
     const int n_blocks_x = (ne0 + 2*CUDA_ROPE_BLOCK_SIZE - 1) / (2*CUDA_ROPE_BLOCK_SIZE);
@@ -409,12 +415,12 @@ static void rope_multi_cuda(
 
     if (freq_factors == nullptr) {
         rope_multi<forward, false, T><<<block_nums, block_dims, 0, stream>>>(
-            x, dst, ne0, ne1, ne2, s1, s2, n_dims, pos, freq_scale, ext_factor,
-            attn_factor, corr_dims, theta_scale, freq_factors, sections, is_imrope);
+            x, dst, ne0, ne1, ne2, s01, s02, n_dims, pos, freq_scale, ext_factor,
+            attn_factor, corr_dims, theta_scale, freq_factors, sections, is_imrope, s1, s2, permute);
     } else {
         rope_multi<forward, true, T><<<block_nums, block_dims, 0, stream>>>(
             x, dst, ne0, ne1, ne2, s1, s2, n_dims, pos, freq_scale, ext_factor,
-            attn_factor, corr_dims, theta_scale, freq_factors, sections, is_imrope);
+            attn_factor, corr_dims, theta_scale, freq_factors, sections, is_imrope, s1, s2, permute);
     }
 }
 
@@ -446,7 +452,8 @@ static void rope_vision_cuda(
 template <bool forward>
 void ggml_cuda_op_rope_impl(ggml_backend_cuda_context & ctx,
                             ggml_tensor *               dst,
-                            const ggml_tensor *         set_rows = nullptr) {
+                            const ggml_tensor *         set_rows = nullptr,
+                            ggml_tensor *               cont = nullptr) {
     const ggml_tensor * src0 = dst->src[0];
     const ggml_tensor * src1 = dst->src[1];
     const ggml_tensor * src2 = dst->src[2];
@@ -460,6 +467,8 @@ void ggml_cuda_op_rope_impl(ggml_backend_cuda_context & ctx,
     ggml_type       dst_type        = dst->type;
     int             set_rows_stride = 0;
 
+    bool permute_layout = false;
+
     if (set_rows != nullptr) {
         GGML_ASSERT(forward);
         dst_d           = set_rows->data;
@@ -467,6 +476,23 @@ void ggml_cuda_op_rope_impl(ggml_backend_cuda_context & ctx,
         dst_type        = set_rows->type;
         set_rows_stride = set_rows->nb[1] / ggml_type_size(set_rows->type);
     }
+
+    size_t s1, s2;
+
+    if (cont != nullptr) {
+        GGML_ASSERT(forward);
+        int dims[4];
+        const ggml_tensor * perm = cont->src[0];
+        GGML_ASSERT(perm->op == GGML_OP_PERMUTE);
+        memcpy(dims,  (int32_t *) perm->op_params, sizeof(dims));
+        GGML_ASSERT(dims[0] == 0 && dims[1] == 2 && dims[2] == 1 && dims[3] == 3);
+        dst_d           = cont->data;
+        dst_type        = cont->type;
+        permute_layout  = true;
+        s1 = cont->nb[1] / ggml_type_size(cont->type);
+        s2 = cont->nb[2] / ggml_type_size(cont->type);
+    }
+
     cudaStream_t stream = ctx.stream();
 
     GGML_ASSERT(src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16);
@@ -515,6 +541,10 @@ void ggml_cuda_op_rope_impl(ggml_backend_cuda_context & ctx,
         GGML_ASSERT(sections.v[0] > 0 || sections.v[1] > 0 || sections.v[2] > 0);
     }
 
+    if (cont != nullptr) {
+         GGML_ASSERT(is_imrope);
+    }
+
     if (is_vision) {
         GGML_ASSERT(n_dims == ne00/2);
     }
@@ -551,11 +581,11 @@ void ggml_cuda_op_rope_impl(ggml_backend_cuda_context & ctx,
         if (src0->type == GGML_TYPE_F32) {
             rope_multi_cuda<forward>(
                 (const float *) src0_d, (float *) dst_d, ne00, ne01, ne02, s01, s02, n_dims, nr, pos, freq_scale,
-                freq_base, ext_factor, attn_factor, corr_dims, freq_factors, sections, is_imrope, stream);
+                freq_base, ext_factor, attn_factor, corr_dims, freq_factors, sections, is_imrope, s1, s2, permute_layout, stream);
         } else if (src0->type == GGML_TYPE_F16) {
             rope_multi_cuda<forward>(
                 (const half *) src0_d, (half *) dst_d, ne00, ne01, ne02, s01, s02, n_dims, nr, pos, freq_scale,
-                freq_base, ext_factor, attn_factor, corr_dims, freq_factors, sections, is_imrope, stream);
+                freq_base, ext_factor, attn_factor, corr_dims, freq_factors, sections, is_imrope, s1, s2, permute_layout, stream);
         } else {
             GGML_ABORT("fatal error");
         }
@@ -600,4 +630,8 @@ void ggml_cuda_op_rope_back(ggml_backend_cuda_context & ctx, ggml_tensor * dst) 
 
 void ggml_cuda_op_rope_fused(ggml_backend_cuda_context & ctx, ggml_tensor * rope, ggml_tensor * set_rows) {
     ggml_cuda_op_rope_impl<true>(ctx, rope, set_rows);
+}
+
+void ggml_cuda_op_rope_fused_permute(ggml_backend_cuda_context & ctx, ggml_tensor * rope, ggml_tensor * cont) {
+    ggml_cuda_op_rope_impl<true>(ctx, rope, nullptr, cont);
 }
