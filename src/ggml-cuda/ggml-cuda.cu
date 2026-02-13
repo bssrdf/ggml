@@ -3533,8 +3533,7 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                 }
 
                 // start of fusion operations
-                // static bool disable_fusion = (getenv("GGML_CUDA_DISABLE_FUSION") != nullptr);
-                static bool disable_fusion = true;
+                static bool disable_fusion = (getenv("GGML_CUDA_DISABLE_FUSION") != nullptr);
                 if (!disable_fusion) {
                     ggml_cuda_topk_moe_args args;
 
