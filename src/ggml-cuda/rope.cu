@@ -189,8 +189,14 @@ static __global__ void rope_multi(
     const int row_x     = row_dst % ne1;
     const int channel_x = row_dst / ne1;
 
-    const int idst = row_dst*ne0 + i0/2;
-    const int ix   = channel_x*s2 + row_x*s1 + i0/2;
+    int idst, ix;
+    if (is_imrope) {
+        idst = row_dst*ne0 + i0;
+        ix   = channel_x*s2 + row_x*s1 + i0;
+    } else {
+        idst = row_dst*ne0 + i0/2;
+        ix   = channel_x*s2 + row_x*s1 + i0/2;
+    }
 
     if (i0 >= n_dims) {
         dst[idst + i0/2 + 0] = x[ix + i0/2 + 0];
@@ -204,7 +210,6 @@ static __global__ void rope_multi(
     const int sector = (i0 / 2) % sect_dims;
 
     float theta_base = 0.0;
-    float omega = 0.0f;
     if (is_imrope) {
         // if (sector % 3 == 1 && sector < 3 * sections.v[1]) { // h
         //     theta_base = pos[channel_x + ne2 * 1]*powf(theta_scale, i0/2.0f);
@@ -216,37 +221,23 @@ static __global__ void rope_multi(
         //     theta_base = pos[channel_x + ne2 * 3]*powf(theta_scale, i0/2.0f);
         // }
         // if(threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0){
-        //     printf(" on is_imrope path\n");
+        //     printf(" on is_imrope path %d, %d, %d\n", sections.v[0], sections.v[1], sections.v[2]);
         // }
         if (sector < sections.v[0]) {
             theta_base = pos[channel_x]*powf(theta_scale, n_dims/2.0f*i0/2.0f/sections.v[0]);
-            omega = powf(theta_scale, n_dims/2.0f*i0/2.0f/sections.v[0]);
         }
         else if (sector >= sections.v[0] && sector < sec_w) {
             theta_base = pos[channel_x + ne2 * 1]*powf(theta_scale, n_dims/2.0f*(i0/2.0f-sections.v[0])/sections.v[1]);
-            omega = powf(theta_scale, n_dims/2.0f*(i0/2.0f-sections.v[0])/sections.v[1]);
         }
         else if (sector >= sec_w && sector < sec_w + sections.v[2]) {
             theta_base = pos[channel_x + ne2 * 2]*powf(theta_scale, n_dims/2.0f*(i0/2.0f-sec_w)/sections.v[2]);
-            omega = powf(theta_scale, n_dims/2.0f*(i0/2.0f-sec_w)/sections.v[2]);
         }
         else if (sector >= sec_w + sections.v[2]) {
             const int half_dim = sec_w + sections.v[2];
             const int half_dim_1 = sections.v[3];
             theta_base = pos[channel_x + ne2 * 3]*powf(theta_scale, n_dims/2.0f*(i0/2.0f-half_dim)/half_dim_1);
-            omega = powf(theta_scale, n_dims/2.0f*(i0/2.0f-half_dim)/half_dim_1);
         }
-        // if(threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0){
-        // if(blockIdx.x == 0 && blockIdx.y == 0){
-            // if(theta_base > 128.f){
-            //     printf(" theta %f, pos: %d, %d, %d \n ", theta_base, pos[channel_x], pos[channel_x+ ne2 * 1],pos[channel_x+ ne2 * 2]);
-            // }
-            // printf(" omega %f, thx %d, \n ", omega, threadIdx.y);
-        // }
     } else {
-        // if(threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0){
-        //     printf(" on non is_imrope path\n");
-        // }
         if (sector < sections.v[0]) {
             theta_base = pos[channel_x]*powf(theta_scale, i0/2.0f);
         }
@@ -274,11 +265,6 @@ static __global__ void rope_multi(
 
         dst[idst + 0]  = x0*cos_theta - x1*sin_theta;
         dst[idst + 1]  = x0*sin_theta + x1*cos_theta;
-
-        // if(threadIdx.y == 0 && blockIdx.x == 0 && blockIdx.y == 0){
-        //     printf("x0: %f, x1: %f, y0: %f , y1: %f, cos: %f, sin: %f theta_base: %f\n",
-        //          x0, x1, dst[idst + 0], dst[idst + 1], cos_theta, sin_theta, theta_base);
-        // }
     } else {
         const float x0 = x[ix + 0];
         const float x1 = x[ix + n_dims/2];

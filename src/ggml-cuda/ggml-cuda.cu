@@ -3869,18 +3869,6 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
 #endif  // NDEBUG
 
                 bool ok = ggml_cuda_compute_forward(*cuda_ctx, node);
-
-
-                const char *t_name = "txt_after_refiner";
-                if(strcmp(node->name, t_name) == 0){
-                    std::vector<float> fdata(ggml_nelements(node));
-                    ggml_backend_tensor_get(node, fdata.data(), 0, ggml_nbytes(node));
-                    printf("[");
-                    for(int k = 0; k < ggml_nelements(node); ++k){
-                        printf("%.2f, ", fdata[k]);
-                    }
-                    printf("]\n");
-                }
                 if (!ok) {
                     GGML_LOG_ERROR("%s: op not supported %s (%s)\n", __func__, node->name, ggml_op_name(node->op));
                 }
