@@ -3855,12 +3855,23 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                         continue;
                     }
 
-                    if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_ROPE, GGML_OP_PERMUTE, GGML_OP_CONT}, {})) {
-                        // printf("fused rope\n");
-                        ggml_cuda_op_rope_fused_permute(*cuda_ctx, node,  cgraph->nodes[i+2]);
-                        i += 2;
-                        continue;
-                    }
+                    // if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_ROPE, GGML_OP_PERMUTE, GGML_OP_CONT}, {})) {
+                    //     ggml_cuda_op_rope_fused_permute(*cuda_ctx, node,  cgraph->nodes[i+2]);
+                    //         // struct ggml_tensor *node1 =  cgraph->nodes[i+2];
+                    //         // // const char *t_name = "rope_cont_q";
+                    //         // const char *t_name = "rope_cont_k";
+                    //         // if(strcmp(node1->name, t_name) == 0){
+                    //         //     std::vector<float>  hdata(ggml_nelements(node1));
+                    //         //     ggml_backend_tensor_get(node1, hdata.data(), 0, ggml_nbytes(node1));
+                    //         //     printf("%lld, %lld, %lld [", node1->ne[0], node1->ne[1], node1->ne[2]);
+                    //         //     for(int k = 0; k < 100; ++k){
+                    //         //         printf("%f,", hdata[k]);
+                    //         //     }
+                    //         //     printf("]\n");
+                    //         // }
+                    //     i += 2;
+                    //     continue;
+                    // }
 
                     if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL}, {})) {
                         ggml_cuda_op_rms_norm_fused(*cuda_ctx, node, cgraph->nodes[i+1]);
@@ -3888,6 +3899,25 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
 #endif  // NDEBUG
 
                 bool ok = ggml_cuda_compute_forward(*cuda_ctx, node);
+                // printf("computed %s \n", node->name);
+                // const char *t_name = "rope_cont_q";
+                // const char *t_name = "rope_cont_k";
+                // const char *t_name = "txt_aft_refiner";
+                // const char *t_name = "x-middle-1";
+                // const char *t_name = "x-aft-attn-0";
+                // const char *t_name = "x-aft-flash-attn";
+                // const char *t_name = "q-in-bef-flash-attn";
+                // const char *t_name = "v-in-bef-flash-attn";
+                // // const char *t_name = "rope_reshape_q";
+                // if(strcmp(node->name, t_name) == 0){
+                //     std::vector<float>  hdata(ggml_nelements(node));
+                //     ggml_backend_tensor_get(node, hdata.data(), 0, ggml_nbytes(node));
+                //     printf("%s - %lld, %lld, %lld [", node->name, node->ne[0], node->ne[1], node->ne[2]);
+                //     for(int k = 0; k < 100; ++k){
+                //         printf("%f,", hdata[k]);
+                //     }
+                //     printf("]\n");
+                // }
                 if (!ok) {
                     GGML_LOG_ERROR("%s: op not supported %s (%s)\n", __func__, node->name, ggml_op_name(node->op));
                 }

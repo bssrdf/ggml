@@ -194,6 +194,9 @@ static __global__ void rope_multi(
     if (is_imrope) {
         if (permute) {
            idst = row_x*s2 + channel_x*s1 + i0;
+        //    if(threadIdx.y == 0 && blockIdx.x == 29 && blockIdx.y == 0){
+        //       printf(" permute %d, %d, %d, %d, %d\n", idst, s1, s2, row_x, channel_x);
+        //    }
         } else {
            idst = row_dst*ne0 + i0;
         }
@@ -419,7 +422,7 @@ static void rope_multi_cuda(
             attn_factor, corr_dims, theta_scale, freq_factors, sections, is_imrope, s1, s2, permute);
     } else {
         rope_multi<forward, true, T><<<block_nums, block_dims, 0, stream>>>(
-            x, dst, ne0, ne1, ne2, s1, s2, n_dims, pos, freq_scale, ext_factor,
+            x, dst, ne0, ne1, ne2, s01, s02, n_dims, pos, freq_scale, ext_factor,
             attn_factor, corr_dims, theta_scale, freq_factors, sections, is_imrope, s1, s2, permute);
     }
 }
@@ -477,7 +480,8 @@ void ggml_cuda_op_rope_impl(ggml_backend_cuda_context & ctx,
         set_rows_stride = set_rows->nb[1] / ggml_type_size(set_rows->type);
     }
 
-    size_t s1, s2;
+    size_t s1 = 0;
+    size_t s2 = 0;
 
     if (cont != nullptr) {
         GGML_ASSERT(forward);
@@ -491,6 +495,7 @@ void ggml_cuda_op_rope_impl(ggml_backend_cuda_context & ctx,
         permute_layout  = true;
         s1 = cont->nb[1] / ggml_type_size(cont->type);
         s2 = cont->nb[2] / ggml_type_size(cont->type);
+        // printf(" s1 s2: %d, %d \n", s1, s2);
     }
 
     cudaStream_t stream = ctx.stream();
@@ -508,6 +513,7 @@ void ggml_cuda_op_rope_impl(ggml_backend_cuda_context & ctx,
 
     const size_t s01 = src0->nb[1] / ggml_type_size(src0->type);
     const size_t s02 = src0->nb[2] / ggml_type_size(src0->type);
+    // printf(" s01 s02: %d, %d \n", s01, s02);
 
     //const int n_past     = ((int32_t *) dst->op_params)[0];
     const int n_dims     = ((int32_t *) dst->op_params)[1];
@@ -534,19 +540,29 @@ void ggml_cuda_op_rope_impl(ggml_backend_cuda_context & ctx,
 
     const bool is_neox = mode & GGML_ROPE_TYPE_NEOX;
     const bool is_mrope = mode & GGML_ROPE_TYPE_MROPE;
-    const bool is_imrope = mode == GGML_ROPE_TYPE_IMROPE;
+    bool is_imrope = mode == GGML_ROPE_TYPE_IMROPE;
     const bool is_vision = mode == GGML_ROPE_TYPE_VISION;
+    const bool is_imrope_perm = mode == GGML_ROPE_TYPE_IMROPE_PERM;
 
     if (is_mrope) {
         GGML_ASSERT(sections.v[0] > 0 || sections.v[1] > 0 || sections.v[2] > 0);
     }
 
     if (cont != nullptr) {
-         GGML_ASSERT(is_imrope);
+        GGML_ASSERT(is_imrope);
     }
 
     if (is_vision) {
         GGML_ASSERT(n_dims == ne00/2);
+    }
+
+    if(is_imrope_perm){
+        GGML_ASSERT(is_mrope);
+        GGML_ASSERT(!is_imrope);
+        is_imrope = true;
+        permute_layout = true;
+        s1 = dst->nb[1] / ggml_type_size(dst->type);
+        s2 = dst->nb[2] / ggml_type_size(dst->type);
     }
 
     const int32_t * pos = (const int32_t *) src1_d;
