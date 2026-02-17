@@ -4024,7 +4024,13 @@ static struct ggml_tensor * ggml_rope_impl(
         GGML_ASSERT(c->ne[0] >= n_dims / 2);
     }
 
-    struct ggml_tensor * result = inplace ? ggml_view_tensor(ctx, a) : ggml_dup_tensor(ctx, a);
+    bool is_imrope_perm = mode == GGML_ROPE_TYPE_IMROPE_PERM;
+
+    int64_t nep[4] = {a->ne[0], a->ne[2], a->ne[1], a->ne[3]};
+
+    struct ggml_tensor * result = inplace ? ggml_view_tensor(ctx, a) :
+        (is_imrope_perm ? ggml_new_tensor(ctx, a->type, 4, nep) : ggml_dup_tensor(ctx, a));
+
 
     int32_t params[15] = { /*n_past*/ 0, n_dims, mode, /*n_ctx*/ 0, n_ctx_orig };
     memcpy(params +  5, &freq_base,    sizeof(float));
