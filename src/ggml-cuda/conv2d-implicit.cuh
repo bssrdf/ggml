@@ -1,6 +1,8 @@
 #pragma once
 #include "common.cuh"
 
+namespace ggml_cuda { namespace conv2d_impl {
+
 typedef struct{
     unsigned int      n;                              //batch size
     unsigned int      c;                              //number if channels
@@ -361,6 +363,8 @@ __device__ __forceinline__ uint32_t cvta_to_shared_u32(const void *pointer) {
     return address;
 }
 
+} }
+
 template<typename T, const int BN, const int rowStrideA, const int layout,
          const bool vec_load, const int ksplit, const int PAD>
 __device__ __forceinline__ void loadFilter(const T * __restrict__ kernel,
@@ -371,7 +375,7 @@ __device__ __forceinline__ void loadFilter(const T * __restrict__ kernel,
                                            const unsigned int weightKOffset,
                                            const unsigned int start_k,
                                            const unsigned int end_k,
-                                           const param_t param){
+                                           const ggml_cuda::conv2d_impl::param_t param){
 
     const unsigned int weight_sts_addr = innerRowA + innerColA * (BN+PAD) * 4;
     const unsigned int kidx = start_k + innerColA * 4;
@@ -438,7 +442,7 @@ __device__ __forceinline__ void loadInput(const T * __restrict__ input,
                                                 const unsigned int PQ,
                                                 const unsigned int CHW,
                                                 const unsigned int inChannelOffset,
-                                                const param_t param) {
+                                                const ggml_cuda::conv2d_impl::param_t param) {
     const unsigned int input_sts_addr = innerRowA + innerColA * (BM+PAD) * 4;
     const unsigned int kidx = start_k + innerColA * 4;
 #pragma unroll
