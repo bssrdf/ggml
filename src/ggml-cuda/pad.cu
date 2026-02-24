@@ -1,9 +1,11 @@
+#include "convert.cuh"
 #include "pad.cuh"
-
+template <bool do_scale = false>
 static __global__ void pad_f32(const float * src, float * dst,
                                const int lp0, const int rp0, const int lp1, const int rp1,
                                const int lp2, const int rp2, const int lp3, const int rp3,
-                               const int ne0, const int ne1, const int ne2, const int ne3) {
+                               const int ne0, const int ne1, const int ne2, const int ne3,
+                               const float scale = 1.f, const float bias = 0.f) {
     // blockIdx.z: i3*ne2+i2
     // blockIdx.y: i1
     // blockIDx.x: i0 / CUDA_PAD_BLOCK_SIZE
@@ -31,17 +33,22 @@ static __global__ void pad_f32(const float * src, float * dst,
         const int64_t ne00 = ne0 - lp0 - rp0;
 
         const int64_t src_idx = i03*(ne00*ne01*ne02) + i02*(ne00*ne01) + i01*ne00 + i00;
-
-        dst[dst_idx] = src[src_idx];
+        if (do_scale) {
+           dst[dst_idx] = src[src_idx] * scale + bias;
+        } else {
+           dst[dst_idx] = src[src_idx];
+        }
     } else {
         dst[dst_idx] = 0.0f;
     }
 }
 
+template <bool do_scale = false>
 static __global__ void pad_f16(const half * src, half * dst,
                                const int lp0, const int rp0, const int lp1, const int rp1,
                                const int lp2, const int rp2, const int lp3, const int rp3,
-                               const int ne0, const int ne1, const int ne2, const int ne3) {
+                               const int ne0, const int ne1, const int ne2, const int ne3,
+                               const float scale = 1.f, const float bias = 0.f) {
     // blockIdx.z: i3*ne2+i2
     // blockIdx.y: i1
     // blockIDx.x: i0 / CUDA_PAD_BLOCK_SIZE
@@ -69,17 +76,22 @@ static __global__ void pad_f16(const half * src, half * dst,
         const int64_t ne00 = ne0 - lp0 - rp0;
 
         const int64_t src_idx = i03*(ne00*ne01*ne02) + i02*(ne00*ne01) + i01*ne00 + i00;
-
-        dst[dst_idx] = src[src_idx];
+        if (do_scale) {
+            dst[dst_idx] = ggml_cuda_cast<half>(ggml_cuda_cast<float>(src[src_idx]) * scale + bias);
+        } else {
+            dst[dst_idx] = src[src_idx];
+        }
     } else {
         dst[dst_idx] = (half)0.0f;
     }
 }
 
+template <bool do_scale = false>
 static __global__ void pad_bf16(const nv_bfloat16 * src, nv_bfloat16 * dst,
                                const int lp0, const int rp0, const int lp1, const int rp1,
                                const int lp2, const int rp2, const int lp3, const int rp3,
-                               const int ne0, const int ne1, const int ne2, const int ne3) {
+                               const int ne0, const int ne1, const int ne2, const int ne3,
+                               const float scale = 1.f, const float bias = 0.f) {
     // blockIdx.z: i3*ne2+i2
     // blockIdx.y: i1
     // blockIDx.x: i0 / CUDA_PAD_BLOCK_SIZE
@@ -107,38 +119,47 @@ static __global__ void pad_bf16(const nv_bfloat16 * src, nv_bfloat16 * dst,
         const int64_t ne00 = ne0 - lp0 - rp0;
 
         const int64_t src_idx = i03*(ne00*ne01*ne02) + i02*(ne00*ne01) + i01*ne00 + i00;
-
-        dst[dst_idx] = src[src_idx];
+        if (do_scale) {
+            dst[dst_idx] = ggml_cuda_cast<nv_bfloat16>(ggml_cuda_cast<float>(src[src_idx]) * scale + bias);
+        } else {
+            dst[dst_idx] = src[src_idx];
+        }
     } else {
         dst[dst_idx] = __float2bfloat16(0.0f);
     }
 }
 
+template <bool do_scale = false>
 static void pad_f32_cuda(const float * src, float * dst,
     const int lp0, const int rp0, const int lp1, const int rp1,
     const int lp2, const int rp2, const int lp3, const int rp3,
-    const int ne0, const int ne1, const int ne2, const int ne3, cudaStream_t stream) {
+    const int ne0, const int ne1, const int ne2, const int ne3, cudaStream_t stream,
+    const float scale = 1.f, const float bias = 0.f) {
     int num_blocks = (ne0 + CUDA_PAD_BLOCK_SIZE - 1) / CUDA_PAD_BLOCK_SIZE;
     dim3 gridDim(num_blocks, ne1, ne2*ne3);
-    pad_f32<<<gridDim, CUDA_PAD_BLOCK_SIZE, 0, stream>>>(src, dst, lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3, ne0, ne1, ne2, ne3);
+    pad_f32<do_scale><<<gridDim, CUDA_PAD_BLOCK_SIZE, 0, stream>>>(src, dst, lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3, ne0, ne1, ne2, ne3, scale, bias);
 }
 
+template <bool do_scale = false>
 static void pad_f16_cuda(const half * src, half * dst,
     const int lp0, const int rp0, const int lp1, const int rp1,
     const int lp2, const int rp2, const int lp3, const int rp3,
-    const int ne0, const int ne1, const int ne2, const int ne3, cudaStream_t stream) {
+    const int ne0, const int ne1, const int ne2, const int ne3, cudaStream_t stream,
+    const float scale = 1.f, const float bias = 0.f) {
     int num_blocks = (ne0 + CUDA_PAD_BLOCK_SIZE - 1) / CUDA_PAD_BLOCK_SIZE;
     dim3 gridDim(num_blocks, ne1, ne2*ne3);
-    pad_f16<<<gridDim, CUDA_PAD_BLOCK_SIZE, 0, stream>>>(src, dst, lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3, ne0, ne1, ne2, ne3);
+    pad_f16<do_scale><<<gridDim, CUDA_PAD_BLOCK_SIZE, 0, stream>>>(src, dst, lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3, ne0, ne1, ne2, ne3, scale, bias);
 }
 
+template <bool do_scale = false>
 static void pad_bf16_cuda(const nv_bfloat16 * src, nv_bfloat16 * dst,
     const int lp0, const int rp0, const int lp1, const int rp1,
     const int lp2, const int rp2, const int lp3, const int rp3,
-    const int ne0, const int ne1, const int ne2, const int ne3, cudaStream_t stream) {
+    const int ne0, const int ne1, const int ne2, const int ne3, cudaStream_t stream,
+    const float scale = 1.f, const float bias = 0.f) {
     int num_blocks = (ne0 + CUDA_PAD_BLOCK_SIZE - 1) / CUDA_PAD_BLOCK_SIZE;
     dim3 gridDim(num_blocks, ne1, ne2*ne3);
-    pad_bf16<<<gridDim, CUDA_PAD_BLOCK_SIZE, 0, stream>>>(src, dst, lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3, ne0, ne1, ne2, ne3);
+    pad_bf16<do_scale><<<gridDim, CUDA_PAD_BLOCK_SIZE, 0, stream>>>(src, dst, lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3, ne0, ne1, ne2, ne3, scale, bias);
 }
 
 void ggml_cuda_op_pad(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
@@ -171,4 +192,44 @@ void ggml_cuda_op_pad(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
         pad_f32_cuda(src0_d, dst_d,
                  lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3,
                  dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3], stream);
+}
+
+
+
+void ggml_cuda_op_pad_fused_scale(ggml_backend_cuda_context & ctx, ggml_tensor * dst, ggml_tensor * scale_tensor) {
+    const ggml_tensor * src0 = dst->src[0];
+    const float * src0_d = (const float *)src0->data;
+    // float * dst_d = (float *)dst->data;
+    float * dst_d = (float *)scale_tensor->data;
+    cudaStream_t stream = ctx.stream();
+
+    GGML_ASSERT(src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_BF16);
+    GGML_ASSERT(dst->type == GGML_TYPE_F32 || dst->type == GGML_TYPE_F16 || dst->type == GGML_TYPE_BF16);
+    GGML_ASSERT(ggml_is_contiguous(src0));
+
+    float scale;
+    float bias;
+    memcpy(&scale, (float *) scale_tensor->op_params + 0, sizeof(float));
+    memcpy(&bias,  (float *) scale_tensor->op_params + 1, sizeof(float));
+
+    const int32_t lp0 = ((const int32_t*)(dst->op_params))[0];
+    const int32_t rp0 = ((const int32_t*)(dst->op_params))[1];
+    const int32_t lp1 = ((const int32_t*)(dst->op_params))[2];
+    const int32_t rp1 = ((const int32_t*)(dst->op_params))[3];
+    const int32_t lp2 = ((const int32_t*)(dst->op_params))[4];
+    const int32_t rp2 = ((const int32_t*)(dst->op_params))[5];
+    const int32_t lp3 = ((const int32_t*)(dst->op_params))[6];
+    const int32_t rp3 = ((const int32_t*)(dst->op_params))[7];
+    if(dst->type == GGML_TYPE_F16)
+        pad_f16_cuda<true>((const half*) src0_d, (half *) dst_d,
+                 lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3,
+                 dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3], stream, scale, bias);
+    else if(dst->type == GGML_TYPE_BF16)
+        pad_bf16_cuda<true>((const nv_bfloat16*) src0_d, (nv_bfloat16 *) dst_d,
+                 lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3,
+                 dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3], stream, scale, bias);
+    else
+        pad_f32_cuda<true>(src0_d, dst_d,
+                 lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3,
+                 dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3], stream, scale, bias);
 }

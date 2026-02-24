@@ -3499,6 +3499,15 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph * cgraph, int node_idx, 
         return true;
     }
 
+    if (ops.size() == 2 && ops.begin()[0] == GGML_OP_PAD && ops.begin()[1] == GGML_OP_SCALE) {
+        const ggml_tensor *pad = cgraph->nodes[node_idx];
+        const ggml_tensor *scale  = cgraph->nodes[node_idx+1];
+        if (pad->type != scale->type)
+            return false;
+
+        return true;
+    }
+
     return false;
 }
 
@@ -3742,6 +3751,8 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                     }
 
                     if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL}, {})) {
+                        // printf("fused rms norm + mul: %s, %s (%zu, %zu, %zu, %zu)  \n", node->name, ggml_type_name(node->type),
+                        //     node->ne[0], node->ne[1],node->ne[2], node->ne[3]);
                         ggml_cuda_op_rms_norm_fused(*cuda_ctx, node, cgraph->nodes[i+1]);
                         i++;
                         continue;
@@ -3782,6 +3793,14 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                     if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_SCALE, GGML_OP_UNARY, GGML_OP_SCALE }, { GGML_UNARY_OP_TANH })) {
                         i += 2;
                         ggml_cuda_op_softcap(*cuda_ctx, cgraph->nodes[i], node);
+                        continue;
+                    }
+
+                    if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_PAD, GGML_OP_SCALE }, {})) {
+                        // printf("fused pad + scale: %s, %s (%zu, %zu, %zu, %zu)  \n", node->name, ggml_type_name(node->type),
+                        //     node->ne[0], node->ne[1],node->ne[2], node->ne[3]);
+                        ggml_cuda_op_pad_fused_scale(*cuda_ctx, node, cgraph->nodes[i+1]);
+                        i++;
                         continue;
                     }
                 }
