@@ -160,29 +160,30 @@ struct ggml_cgraph * build_graph_1(const test_model& model) {
     struct ggml_cgraph  * gf = ggml_new_graph(ctx0);
 
 
-    // recalculate for avoid fragmentation
-    // struct ggml_tensor* conv2d_res = ggml_conv_2d(ctx0, model.a, model.b, s0, s1, p0, p1, d0, d1);
-    // ggml_set_name(conv2d_res, "conv2d_res");
-    // ggml_build_forward_expand(gf, conv2d_res);
-    // int64_t *ne = conv2d_res->ne;
-    // printf("conv2d: (%zu, %zu, %zu, %zu) \n", ne[0], ne[1], ne[2], ne[3]);
+    struct ggml_tensor* a =  model.a;
+    struct ggml_tensor* b = ggml_view_4d(ctx0, a, a->ne[0]/3, a->ne[1], 1, 1, a->nb[1], a->nb[2], a->nb[3], (a->nb[0])*a->ne[0]/3);
+    struct ggml_tensor* b0 = ggml_cont(ctx0, b);
+    struct ggml_tensor* b1 = ggml_reshape_4d(ctx0, b0, 128, a->ne[0]/3/128, a->ne[1], 1);
+    struct ggml_tensor* c = ggml_rms_norm(ctx0, b1, 1.e-6f);
+    ggml_set_name(c, "cont_res");
+    ggml_build_forward_expand(gf, c);
 
+    struct ggml_tensor* d0 = ggml_view_4d(ctx0, a, 128, a->ne[0]/3/128, a->ne[1], 1, a->nb[0]*128, a->nb[1], a->nb[2], (a->nb[0])*a->ne[0]/3);
 
-    // struct ggml_tensor* wino_res = ggml_conv_2d_implicitgemm(ctx0, model.a, model.b, s0, s1, p0, p1, d0, d1);
-    struct ggml_tensor* wino_res = ggml_rms_norm(ctx0, model.a, 1.e-6f);
-    ggml_set_name(wino_res, "wino_res");
-    ggml_build_forward_expand(gf, wino_res);
+    struct ggml_tensor* d = ggml_rms_norm(ctx0, d0, 1.e-6f);
+    ggml_set_name(d, "view_res");
+    ggml_build_forward_expand(gf, d);
     // ne = wino_res->ne;
     // printf("wino: (%zu, %zu, %zu, %zu) \n", ne[0], ne[1], ne[2], ne[3]);
     ggml_free(ctx0);
     return gf;
 }
 
-std::vector<ggml_fp16_t> compute_graph(const test_model &, ggml_gallocr_t,
+std::vector<std::vector<ggml_fp16_t>> compute_graph(const test_model &, ggml_gallocr_t,
             build_graph_t, int, double *);
 
 
-std::vector<ggml_fp16_t> compute_graph(const test_model & model, ggml_gallocr_t allocr,
+std::vector<std::vector<ggml_fp16_t>> compute_graph(const test_model & model, ggml_gallocr_t allocr,
             build_graph_t build_graph, int iters, double *t) {
     struct ggml_cgraph * gf = build_graph(model);
 
@@ -213,21 +214,29 @@ std::vector<ggml_fp16_t> compute_graph(const test_model & model, ggml_gallocr_t 
 
     //ggml_graph_print(gf);
 
-    struct ggml_tensor *res = NULL;
+    struct ggml_tensor *res0 = NULL;
+    struct ggml_tensor *res1 = NULL;
 
     for(int i = 0; i < ggml_graph_n_nodes(gf); ++i) {
-        if(strcmp(ggml_get_name(ggml_graph_node(gf, i)), "wino_res") == 0) {
-            res = ggml_graph_node(gf, i);
-        } else if(strcmp(ggml_get_name(ggml_graph_node(gf, i)), "conv2d_res") == 0) {
-            res = ggml_graph_node(gf, i);
+        if(strcmp(ggml_get_name(ggml_graph_node(gf, i)), "cont_res") == 0) {
+            res0 = ggml_graph_node(gf, i);
+        } else if(strcmp(ggml_get_name(ggml_graph_node(gf, i)), "view_res") == 0) {
+            res1 = ggml_graph_node(gf, i);
         }
     }
 
-    std::vector<ggml_fp16_t> data(ggml_nelements(res));
-    ggml_backend_tensor_get(res, data.data(), 0, ggml_nbytes(res));
+    std::vector<std::vector<ggml_fp16_t>> results;
+
+    std::vector<ggml_fp16_t> data0(ggml_nelements(res0));
+    ggml_backend_tensor_get(res0, data0.data(), 0, ggml_nbytes(res0));
+    std::vector<ggml_fp16_t> data1(ggml_nelements(res1));
+    ggml_backend_tensor_get(res1, data1.data(), 0, ggml_nbytes(res1));
+
+    results.push_back(data0);
+    results.push_back(data1);
 
     *t = time_us/1000;
-    return data;
+    return results;
 
 }
 
@@ -259,19 +268,21 @@ int main(void)
     int iterations = 0;
 
     double run_time0;
-    std::vector<ggml_fp16_t> conv2d_data = compute_graph(model, allocr, build_graph_1, iterations, &run_time0);
-    std::vector<float>  f32_data(conv2d_data.size());
-    ggml_fp16_to_fp32_row(conv2d_data.data(), f32_data.data(), conv2d_data.size());
+   std::vector<std::vector<ggml_fp16_t>> data = compute_graph(model, allocr, build_graph_1, iterations, &run_time0);
+    std::vector<float>  f32_data0(data[0].size());
+    std::vector<float>  f32_data1(data[1].size());
+    ggml_fp16_to_fp32_row(data[0].data(), f32_data0.data(), data[0].size());
+    ggml_fp16_to_fp32_row(data[1].data(), f32_data1.data(), data[1].size());
     // int i = 2048;
     // for(int i = 0; i < ggml_nelements(wino_res); i++) {
     // for(int i = 0; i < 26*38; i++) {
-    for(int i = 0; i < conv2d_data.size(); i++) {
-        // float diff = fabs(im2col_data[i] - conv2d_data[i]);
-        // if(diff > 0.5) {
-                printf("(%7.3f, %d) \n",
-                f32_data[i], i);
+    for(int i = 0; i < f32_data0.size(); i++) {
+        float diff = fabs(f32_data0[i] - f32_data1[i]);
+        if(diff > 0.5) {
+                printf("(%f, %f, %d) \n",
+                f32_data0[i], f32_data1[i], i);
             // break;
-        // }
+        }
     }
 
     ggml_free(model.ctx);
