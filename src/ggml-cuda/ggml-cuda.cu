@@ -3920,7 +3920,8 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                 // const char *t_name = "node_3113"; // not same
                 // const char *t_name = "node_3024"; // not same
                 // const char *t_name = "node_3102"; // not same
-                // const char *t_name = "node_94"; // not same
+                // const char *t_name = "node_7673"; // not same
+                // const char *t_name = "ggml_runner_final_result_tensor";
                 // int disp_n = 128;
                 // bool ab = false, abi=false, all_zeros = false;
                 // if(node->type == GGML_TYPE_F16){
@@ -3949,7 +3950,8 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                 // // if(node->type == GGML_TYPE_F32){
                 // // if(false){
                 // // if(node->type == GGML_TYPE_F16){
-                //     ggml_tensor * src = node;
+                    // ggml_tensor * src = node;
+                    ggml_tensor * src = node->src[1];
                 //     printf(" %s, %s, %s, (%zu, %zu, %zu, %zu)\n", src->name,
                 //                ggml_type_name(src->type), ggml_op_name(src->op), src->ne[0], src->ne[1],
                 //             src->ne[2], src->ne[3]);
@@ -3958,66 +3960,119 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                 //     //             ggml_type_name(src->type), ggml_op_name(src->op), src->ne[0], src->ne[1],
                 //     //         src->ne[2], src->ne[3]);
                 //     // src = node;
-                //     int pos = -1;
-                //     // if(src->type == GGML_TYPE_F32){
+                    // int pos = -1;
+                    // if(src->type == GGML_TYPE_F32){
                 //     // if(src->type == GGML_TYPE_F16){
-                //     if(src->type == GGML_TYPE_BF16){
-                //         // std::vector<half> data(ggml_nelements(src));
-                //         std::vector<nv_bfloat16> data(ggml_nelements(src));
+                    // if(src->type == GGML_TYPE_BF16){
+                    //     printf(" %s, %s, %s, (%zu, %zu, %zu, %zu)\n", src->name,
+                    //            ggml_type_name(src->type), ggml_op_name(src->op), src->ne[0], src->ne[1],
+                    //         src->ne[2], src->ne[3]);
+                    //     // std::vector<half> data(ggml_nelements(src));
+                    //     std::vector<nv_bfloat16> databf(ggml_nelements(src));
+                    //     std::vector<float> dataf(ggml_nelements(src), 0.f);
+                    //     CUDA_CHECK(cudaStreamSynchronize(cuda_ctx->stream()));
+                    //     if(src->type == GGML_TYPE_BF16)
+                    //        ggml_backend_tensor_get(src, databf.data(), 0, ggml_nbytes(src));
+                    //     else if(src->type == GGML_TYPE_F32)
+                    //        ggml_backend_tensor_get(src, dataf.data(), 0, ggml_nbytes(src));
+                    //     // CUDA_CHECK(cudaDeviceSynchronize());
+                    //     printf("[");
+                    //     float vmin=1.e16f, vmax=-1.e16f;
+                    //     // int nt = data.size();
+                    //     for(int k = 0; k < ggml_nelements(src); k++) {
+                    //         // float val = __half2float(data[k]);
+
+                    //         float val = src->type == GGML_TYPE_BF16 ? __bfloat162float(databf[k]) : dataf[k];
+                    //         // float val = data[k];
+                    //         // if(k < disp_n)
+                    //         //     printf("%f,", val);
+                    //         if(isnan(val)){
+                    //            ab = true;
+                    //            pos = k;
+                    //            break;
+                    //         }
+                    //         if(isinf(val)){
+                    //            abi = true;
+                    //            pos = k;
+                    //            break;
+                    //         }
+                    //         vmin = min(vmin, val);
+                    //         vmax = max(vmax, val);
+                    //     }
+                    //     printf("] vmin,vmax %f, %f\n", vmin,vmax);
+                    //     if(fabs(vmin)< 1.e-10f && fabs(vmax) < 1.e-10f)
+                    //         all_zeros = true;
+                    //     // if(ab) abort();
+                    // }
+                //  }
+                //     if(ab || abi ){
+                //         // printf(" %s, %s, %s, (%zu, %zu, %zu, %zu)\n", src->name,
+                //         //        ggml_type_name(src->type), ggml_op_name(src->op), src->ne[0], src->ne[1],
+                //         //     src->ne[2], src->ne[3]);
+                //         src = node->src[0];
+                //         printf("src0 %s, %s, %s (%zu, %zu, %zu, %zu)\n", src->name,
+                //                 ggml_type_name(src->type), ggml_op_name(src->op), src->ne[0], src->ne[1],
+                //                  src->ne[2], src->ne[3]);
+                //         if(node->src[1]){
+                //             src = node->src[1];
+                //             printf("src1 %s, %s, %s (%zu, %zu, %zu, %zu)\n", src->name,
+                //                     ggml_type_name(src->type), ggml_op_name(src->op), src->ne[0], src->ne[1],
+                //                      src->ne[2], src->ne[3]);
+                //             std::vector<nv_bfloat16> data(ggml_nelements(src));
                 //         // std::vector<float> data(ggml_nelements(src), 0.f);
-                //         ggml_backend_tensor_get(src, data.data(), 0, ggml_nbytes(src));
-                //         // CUDA_CHECK(cudaStreamSynchronize(cuda_ctx->stream()));
-                //         CUDA_CHECK(cudaDeviceSynchronize());
-                //         printf("[");
-                //         float vmin=1.e16f, vmax=-1.e16f;
-                //         int nt = data.size();
-                //         for(int k = 0; k < nt; k++) {
-                //             // float val = __half2float(data[k]);
-                //             float val = __bfloat162float(data[k]);
-                //             // float val = data[k];
-                //             vmin = min(vmin, val);
-                //             vmax = max(vmax, val);
-                //             if(k < disp_n)
-                //                 printf("%f,", val);
-                //             if(isnan(val)){
-                //                ab = true;
-                //                pos = k;
-                //                break;
+                //             ggml_backend_tensor_get(src, data.data(), 0, ggml_nbytes(src));
+                //             printf("[");
+                //             float vmin=1.e16f, vmax=-1.e16f;
+                //             int nt = data.size();
+                //             int pos1 = -1;
+                //             bool ab1= false, abi1 = false;
+                //             for(int k = 0; k < nt; k++) {
+                //                 // float val = __half2float(data[k]);
+                //                 float val = __bfloat162float(data[k]);
+                //                 // float val = data[k];
+                //                 // if(k < disp_n)
+                //                 //     printf("%f,", val);
+                //                 if(isnan(val)){
+                //                 ab1 = true;
+                //                 pos1 = k;
+                //                 break;
+                //                 }
+                //                 if(isinf(val)){
+                //                 abi1 = true;
+                //                 pos1 = k;
+                //                 break;
+                //                 }
+                //                 vmin = min(vmin, val);
+                //                 vmax = max(vmax, val);
                 //             }
-                //             if(isinf(val)){
-                //                abi = true;
-                //                pos = k;
-                //                break;
-                //             }
+                //             printf("] vmin,vmax %f, %f\n", vmin,vmax);
+                //             if(ab1 || abi1)
+                //                 printf(" at %d inf or nan\n", pos1);
                 //         }
-                //         printf("] vmin,vmax %f, %f\n", vmin,vmax);
-                //         if(fabs(vmin)< 1.e-10f && fabs(vmax) < 1.e-10f)
-                //             all_zeros = true;
-                //         // if(ab) abort();
-                //     }
-                //  //}
-                //     if(ab || abi || all_zeros){
+                //         src = node;
                 //         if (ab)
                 //             printf(" is nan at %d \n", pos);
                 //         else if (abi)
                 //             printf(" is inf at %d \n", pos);
                 //         else
                 //             printf(" all data is zero \n");
-                //     if(pos != -1) {
-                //         std::vector<nv_bfloat16> data(ggml_nelements(src));
-                //         // std::vector<float> data(ggml_nelements(src));
-                //         ggml_backend_tensor_get(src, data.data(), 0, ggml_nbytes(src));
-                //         printf("[");
-                //         int nt = data.size();
-                //         for(int k = 0; k < nt; k++) {
-                //             // float val = __half2float(data[k]);
-                //             float val = __bfloat162float(data[k]);
-                //             // float val = data[k];
-                //             if(k > pos-100 && k < pos+100)
-                //                 printf("%f,", val);
+                //         if(pos != -1) {
+                //             std::vector<nv_bfloat16> data(ggml_nelements(src));
+                //             // std::vector<float> data(ggml_nelements(src));
+                //             ggml_backend_tensor_get(src, data.data(), 0, ggml_nbytes(src));
+                //             printf("[");
+                //             int nt = data.size();
+                //             for(int k = 0; k < nt; k++) {
+                //                 // float val = __half2float(data[k]);
+                //                 float val = __bfloat162float(data[k]);
+                //                 // float val = data[k];
+                //                 if(k > pos-100 && k < pos+100)
+                //                     printf("%f,", val);
+                //             }
+                //             printf("]\n");
                 //         }
-                //         printf("]\n");
-                //     }
+                //         abort();
+                //    }
 
 
                 if (!ok) {
@@ -4199,6 +4254,7 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
     }
 
     // printf("%s: C cuda graph on [%d, %d] \n", __func__, use_cuda_graph?1:0, cuda_graph_update_required?1:0);
+
 
     if (use_cuda_graph && cuda_graph_update_required) {
         // Start CUDA graph capture

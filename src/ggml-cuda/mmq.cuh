@@ -58,7 +58,8 @@ struct block_q8_1_mmq {
     // The exact data stored depends on the x data type.
     union {
         float d4[4];    // 1 32 bit scale per 32 values, stored as d0,d1,d2,d3
-        half2 ds4[4];   // 1 16 bit scale + 1 16 bit partial sum per 32 values, stored as d0,s0,d1,s1,d2,s2,d3,s3
+        // half2 ds4[4];   // 1 16 bit scale + 1 16 bit partial sum per 32 values, stored as d0,s0,d1,s1,d2,s2,d3,s3
+        nv_bfloat162 ds4[4];   // 1 16 bit scale + 1 16 bit partial sum per 32 values, stored as d0,s0,d1,s1,d2,s2,d3,s3
         half  d2s6[8];  // 1 16 bit scale per 64 values + 1 16 bit partial sum per 16 values for the first 96 values,
                         //     stored as d0,d1,s1,s2,s3,s4,s5
     };
@@ -886,7 +887,8 @@ static __device__ __forceinline__ void vec_dot_q8_0_q8_1_mma(
     const float * x_df = (const float *) x_qs + 2*MMQ_TILE_NE_K;
     const int   * y_qs = (const int   *) y + 4;
     const float * y_df = (const float *) y;
-    const half2 * y_ds = (const half2 *) y;
+    // const half2 * y_ds = (const half2 *) y;
+    const nv_bfloat162 * y_ds = (const nv_bfloat162 *) y;
 
     tile_A A[ntx][MMQ_TILE_NE_K/QI8_0];
     float dA[ntx][tile_C::ne/2][MMQ_TILE_NE_K/QI8_0];
@@ -931,6 +933,7 @@ static __device__ __forceinline__ void vec_dot_q8_0_q8_1_mma(
                 if (ds_layout == MMQ_Q8_1_DS_LAYOUT_D4) {
                     dB[l] =             y_df[j*MMQ_TILE_Y_K + k01/QI8_1];
                 } else {
+                    // dB[l] = __low2float(y_ds[j*MMQ_TILE_Y_K + k01/QI8_1]);
                     dB[l] = __low2float(y_ds[j*MMQ_TILE_Y_K + k01/QI8_1]);
                 }
             }
@@ -1049,7 +1052,8 @@ static __device__ __forceinline__ void vec_dot_q8_1_q8_1_mma(
     const int   * x_qs = (const int   *) x;
     const half2 * x_dm = (const half2 *) x_qs + 2*MMQ_TILE_NE_K;
     const int   * y_qs = (const int   *) y + 4;
-    const half2 * y_dm = (const half2 *) y;
+    // const half2 * y_dm = (const half2 *) y;
+    const nv_bfloat162 * y_dm = (const nv_bfloat162 *) y;
 
     tile_A   A[ntx][MMQ_TILE_NE_K/QI8_1];
     float2 dmA[ntx][tile_C::ne/2][MMQ_TILE_NE_K/QI8_1];
@@ -1091,7 +1095,8 @@ static __device__ __forceinline__ void vec_dot_q8_1_q8_1_mma(
             for (int l = 0; l < tile_C::ne/2; ++l) {
                 const int j = j0 + tile_C::get_j(l);
 
-                dsB[l] = __half22float2(y_dm[j*MMQ_TILE_Y_K + k01/QI8_1]);
+                // dsB[l] = __half22float2(y_dm[j*MMQ_TILE_Y_K + k01/QI8_1]);
+                dsB[l] = __bfloat1622float2(y_dm[j*MMQ_TILE_Y_K + k01/QI8_1]);
             }
 
 #pragma unroll
@@ -1109,6 +1114,7 @@ static __device__ __forceinline__ void vec_dot_q8_1_q8_1_mma(
     }
 #endif // defined(AMD_MFMA_AVAILABLE)
 }
+
 
 // Used for Q3_K, IQ2_S, and IQ2_XS
 template <int mmq_x, int mmq_y>
@@ -1488,7 +1494,8 @@ static __device__ __forceinline__ void vec_dot_q2_K_q8_1_mma(
     const int   * x_qs = (const int   *) x;
     const half2 * x_dm = (const half2 *) x_qs + MMQ_TILE_NE_K*2;
     const int   * y_qs = (const int   *) y + 4;
-    const half2 * y_ds = (const half2 *) y;
+    // const half2 * y_ds = (const half2 *) y;
+    const nv_bfloat162 * y_ds = (const nv_bfloat162 *) y;
 
     const int i0 = (threadIdx.y / ntx) * (ntx*tile_A::I);
 
@@ -1532,7 +1539,8 @@ static __device__ __forceinline__ void vec_dot_q2_K_q8_1_mma(
         for (int l = 0; l < tile_C::ne/2; ++l) {
             const int j = j0 + tile_C::get_j(l);
 
-            dB[l] = __half22float2(y_ds[j*MMQ_TILE_Y_K]);
+            // dB[l] = __half22float2(y_ds[j*MMQ_TILE_Y_K]);
+            dB[l] = __bfloat1622float2(y_ds[j*MMQ_TILE_Y_K]);
         }
 
 #pragma unroll
@@ -1578,7 +1586,8 @@ static __device__ __forceinline__ void vec_dot_q2_K_q8_1_mma(
             for (int l = 0; l < tile_C::ne/2; ++l) {
                 const int j = j0 + tile_C::get_j(l);
 
-                sB[l] = __half22float2(y_ds[j*MMQ_TILE_Y_K + (1 + k01/QI8_1)]);
+                // sB[l] = __half22float2(y_ds[j*MMQ_TILE_Y_K + (1 + k01/QI8_1)]);
+                sB[l] = __bfloat1622float2(y_ds[j*MMQ_TILE_Y_K + (1 + k01/QI8_1)]);
             }
 
 #pragma unroll
