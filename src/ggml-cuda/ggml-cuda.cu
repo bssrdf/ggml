@@ -2279,7 +2279,7 @@ static void ggml_cuda_op_mul_mat_fused_add(ggml_backend_cuda_context & ctx, ggml
     cudaDataType_t data_type_c = data_type_a;
     cudaDataType_t data_type_d = data_type_a;
 
-    const int64_t ne23 = ne12 * ne13;
+    // const int64_t ne23 = ne12 * ne13;
 
     // For cublasLt, we need to handle batches differently
     // Process each batch separately or use the strided batching feature
@@ -3951,7 +3951,7 @@ static void evaluate_and_capture_cuda_graph(ggml_backend_cuda_context * cuda_ctx
                 // // if(false){
                 // // if(node->type == GGML_TYPE_F16){
                     // ggml_tensor * src = node;
-                    ggml_tensor * src = node->src[1];
+                    // ggml_tensor * src = node->src[1];
                 //     printf(" %s, %s, %s, (%zu, %zu, %zu, %zu)\n", src->name,
                 //                ggml_type_name(src->type), ggml_op_name(src->op), src->ne[0], src->ne[1],
                 //             src->ne[2], src->ne[3]);
