@@ -1494,8 +1494,8 @@ static __device__ __forceinline__ void vec_dot_q2_K_q8_1_mma(
     const int   * x_qs = (const int   *) x;
     const half2 * x_dm = (const half2 *) x_qs + MMQ_TILE_NE_K*2;
     const int   * y_qs = (const int   *) y + 4;
-    // const half2 * y_ds = (const half2 *) y;
-    const nv_bfloat162 * y_ds = (const nv_bfloat162 *) y;
+    const half2 * y_ds = (const half2 *) y;
+    // const nv_bfloat162 * y_ds = (const nv_bfloat162 *) y;
 
     const int i0 = (threadIdx.y / ntx) * (ntx*tile_A::I);
 
@@ -1539,8 +1539,8 @@ static __device__ __forceinline__ void vec_dot_q2_K_q8_1_mma(
         for (int l = 0; l < tile_C::ne/2; ++l) {
             const int j = j0 + tile_C::get_j(l);
 
-            // dB[l] = __half22float2(y_ds[j*MMQ_TILE_Y_K]);
-            dB[l] = __bfloat1622float2(y_ds[j*MMQ_TILE_Y_K]);
+            dB[l] = __half22float2(y_ds[j*MMQ_TILE_Y_K]);
+            // dB[l] = __bfloat1622float2(y_ds[j*MMQ_TILE_Y_K]);
         }
 
 #pragma unroll
@@ -1586,8 +1586,8 @@ static __device__ __forceinline__ void vec_dot_q2_K_q8_1_mma(
             for (int l = 0; l < tile_C::ne/2; ++l) {
                 const int j = j0 + tile_C::get_j(l);
 
-                // sB[l] = __half22float2(y_ds[j*MMQ_TILE_Y_K + (1 + k01/QI8_1)]);
-                sB[l] = __bfloat1622float2(y_ds[j*MMQ_TILE_Y_K + (1 + k01/QI8_1)]);
+                sB[l] = __half22float2(y_ds[j*MMQ_TILE_Y_K + (1 + k01/QI8_1)]);
+                // sB[l] = __bfloat1622float2(y_ds[j*MMQ_TILE_Y_K + (1 + k01/QI8_1)]);
             }
 
 #pragma unroll
