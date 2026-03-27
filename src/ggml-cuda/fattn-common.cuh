@@ -905,6 +905,9 @@ void launch_fattn(
 
     const int ntiles_x = ((Q->ne[1] + ncols1 - 1) / ncols1);
     const int ntiles_total = ntiles_x * (Q->ne[2] / ncols2) * Q->ne[3];
+    const int gqa_ratio    = Q->ne[2] / K->ne[2];
+    const int ntiles_z_gqa = ((gqa_ratio + ncols2 - 1) / ncols2);
+    const int ntiles_dst   = ntiles_x * ntiles_z_gqa * K->ne[2] * Q->ne[3];
 
     // Optional optimization where the mask is scanned to determine whether part of the calculation can be skipped.
     // Only worth the overhead if there is at lease one FATTN_KQ_STRIDE x FATTN_KQ_STRIDE square to be skipped or
@@ -930,22 +933,41 @@ void launch_fattn(
     CUDA_CHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&max_blocks_per_sm, fattn_kernel, block_dim.x * block_dim.y * block_dim.z, nbytes_shared));
     int parallel_blocks = max_blocks_per_sm;
 
+    const int ntiles_KV = (K->ne[1] + KQ_row_granularity - 1) / KQ_row_granularity; // Max. number of parallel blocks limited by KV cache length.
+
     dim3 blocks_num;
     if (stream_k) {
         // For short contexts it can be faster to have the SMs work on whole tiles because this lets us skip the fixup.
         const int max_blocks = max_blocks_per_sm*nsm;
-        const int tiles_nwaves = (ntiles_total + max_blocks - 1) / max_blocks;
-        const int tiles_efficiency_percent = 100 * ntiles_total / (max_blocks*tiles_nwaves);
+        // const int tiles_nwaves = (ntiles_total + max_blocks - 1) / max_blocks;
+        const int tiles_nwaves = (ntiles_dst + max_blocks - 1) / max_blocks;
+        // const int tiles_efficiency_percent = 100 * ntiles_total / (max_blocks*tiles_nwaves);
+        const int tiles_efficiency_percent = 100 * ntiles_dst / (max_blocks*tiles_nwaves);
 
-        const int nblocks_stream_k = max_blocks;
+        // const int nblocks_stream_k = max_blocks;
+        int nblocks_stream_k = std::min(max_blocks, ntiles_KV*ntiles_dst);
 
         const bool use_stream_k = cc >= GGML_CUDA_CC_ADA_LOVELACE || tiles_efficiency_percent < 75;
 
-        blocks_num.x = use_stream_k ? nblocks_stream_k : ntiles_total;
+        //Todo: need to find a thresold based on tuning
+        constexpr int thr_blocks_stream_k = 16;
+
+        // try reducing the number of stream-k blocks as
+        // flash_attn_stream_k_fixup has a non-negligible overhead for large number of stream-k blocks
+        // make sure to reduce only when more than 1 block per SM is used
+        if(use_stream_k && nblocks_stream_k / ntiles_dst > thr_blocks_stream_k && max_blocks_per_sm > 1) {
+            nblocks_stream_k = nblocks_stream_k / 2;
+        }
+
+        // blocks_num.x = use_stream_k ? nblocks_stream_k : ntiles_total;
+        blocks_num.x = use_stream_k ? nblocks_stream_k : ntiles_dst;
         blocks_num.y = 1;
         blocks_num.z = 1;
 
-        dst_tmp_meta.alloc(blocks_num.x*ncols * (2*2 + DV) * sizeof(float));
+        // dst_tmp_meta.alloc(blocks_num.x*ncols * (2*2 + DV) * sizeof(float));
+        if (ntiles_dst % blocks_num.x != 0) { // Fixup is only needed if the SMs work on fractional tiles.
+            dst_tmp_meta.alloc((size_t(blocks_num.x) * ncols * (2 + DV/2)));
+        }
     } else {
         const int ntiles_KQ = (K->ne[1] + KQ_row_granularity - 1) / KQ_row_granularity; // Max. number of parallel blocks limited by tensor size.
 
@@ -1069,7 +1091,3 @@ void launch_fattn(
     }
     CUDA_CHECK(cudaGetLastError());
 }
-
-
-
-
